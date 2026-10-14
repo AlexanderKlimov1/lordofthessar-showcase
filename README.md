@@ -1,4 +1,4 @@
-# Stellar Dominion
+# Lord of Thessar
 
 Пошаговая стратегия в духе Master of Orion II: сервер на Spring Boot, клиент на
 React + Phaser, а рядом — мастерская приборов, которыми игра меряется и настраивается.
