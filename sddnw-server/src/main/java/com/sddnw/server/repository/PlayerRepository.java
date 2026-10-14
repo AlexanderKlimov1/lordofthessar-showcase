@@ -42,6 +42,11 @@ public interface PlayerRepository extends JpaRepository<PlayerEntity, UUID> {
      */
     List<PlayerEntity> findAllByGameIdOrderBySlotAsc(UUID gameId);
 
+    /** Партии, где у записи есть место, — для «вы уже играли вместе» (field-backlog, пункт 148). */
+    @org.springframework.data.jpa.repository.Query(
+            "select distinct p.game.id from PlayerEntity p where p.accountId = :accountId")
+    List<UUID> gameIdsOfAccount(@org.springframework.data.repository.query.Param("accountId") UUID accountId);
+
     /**
      * Империи партии — люди и ИИ, без чудищ (п. 11.1).
      * <p>
@@ -67,4 +72,24 @@ public interface PlayerRepository extends JpaRepository<PlayerEntity, UUID> {
     Optional<UUID> findIdByGameIdAndAccessToken(UUID gameId, String accessToken);
 
     Integer countByGameId(UUID gameId);
+
+    /**
+     * Записка к партии (field-backlog, пункт 110) — мимо версии строки: правится она в любую
+     * минуту, в том числе пока считается ход, и проверка версии роняла бы то запись записки, то
+     * сам ход. Записка ход не трогает, ход — записку.
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE PlayerEntity p SET p.note = :note WHERE p.id = :id")
+    int updateNote(@Param("id") UUID id, @Param("note") String note);
+
+    @Query("SELECT p.note FROM PlayerEntity p WHERE p.id = :id")
+    Optional<String> findNoteById(@Param("id") UUID id);
+
+    /**
+     * Кто из этих игроков играет гостевую партию (признак {@code rich_start}) — ей наука
+     * считается вдвое (GuestGameRules.RESEARCH_MULTIPLIER). Одной выборкой на весь набор:
+     * контекст колоний собирается каждый ход.
+     */
+    @Query("SELECT p.id FROM PlayerEntity p WHERE p.id IN :ids AND p.game.richStart = true")
+    List<UUID> findIdsInRichStartGames(@Param("ids") Collection<UUID> ids);
 }

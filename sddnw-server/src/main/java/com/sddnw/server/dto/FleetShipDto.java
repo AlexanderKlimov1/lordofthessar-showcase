@@ -38,6 +38,16 @@ public record FleetShipDto(
         List<String> specials,
         Boolean obsolete,
         String role,
-        Integer cargo
+        Integer cargo,
+        /**
+         * Прибавка дальности от дополнительных баков, процентов (0 — без баков) — field-backlog,
+         * пункт 206: окно отправки меряет дальность по ОТОБРАННЫМ кораблям, как и сервер
+         * ({@code FleetService.requireInRange} по уходящим), а не по всему флоту.
+         */
+        Integer rangePercent,
+        /** Звание экипажа (п. 8, CrewRules): 0 — новобранцы … 4 — сверхэлита. */
+        Integer crewLevel,
+        /** Прибавка звания к меткости и защите. */
+        Integer crewBonus
 ) {
 }

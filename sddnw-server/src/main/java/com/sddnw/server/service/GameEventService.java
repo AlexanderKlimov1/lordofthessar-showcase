@@ -174,7 +174,8 @@ public class GameEventService {
         List<TurnEventDto> events = report.events().stream()
                 .map(event -> event.key() == null
                         ? event
-                        : event.shown(messages.event(event.key(), named(event.args()))))
+                        : event.shown(messages.event(event.key(), named(event.args())),
+                                MilestoneService.success(event.key())))
                 .toList();
         return new TurnReportDto(report.turn(), events,
                 report.changedSystemIds(), report.changedPlanetIds());

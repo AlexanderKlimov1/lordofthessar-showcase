@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      Воронка новичка — field-backlog, пункт 2 (P0): где именно уходят пришедшие.
+
+      ЗАЧЕМ. Все гипотезы о том, что отталкивает новичка, без замера остаются мнением, а
+      ушедших PresenceService различает только в памяти и без истории. Здесь — след шагов:
+      экран, на котором человек был, ход партии, шаг обучения, последнее событие отчёта.
+      Включить его нужно ДО первого игрока, иначе первые и самые ценные данные пропадут.
+
+      ЖИВЁТ В ИСТОЧНИКЕ ИСТОРИИ, рядом с учётными записями: шаги переживают партию
+      (гостевую её могут удалить, а знать, на каком ходу ушли, нужно и после), и в режиме
+      балансового прогона игра уходит в память, а журнал — нет.
+
+      `visitor` — случайный номер браузера (localStorage), а не запись: до входа записи нет
+      вовсе, а первый вопрос воронки — сколько людей ушли с экрана входа, не нажав ничего.
+      Личных данных строка не несёт: ни адреса, ни почты, ни имени.
+
+      Внешнего ключа на `account` нет по той же причине, что и у шаблонов стройки
+      (миграция 079): строки записи убираются явной уборкой в `AccountService.deleteByAdmin`.
+    -->
+    <changeSet id="097-funnel-step" author="sddnw">
+        <createTable tableName="funnel_step">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="visitor" type="varchar(40)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid"/>
+            <column name="role" type="varchar(16)"/>
+            <column name="step" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid"/>
+            <column name="turn" type="int"/>
+            <column name="detail" type="varchar(255)"/>
+            <column name="created_at" type="timestamptz">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="funnel_step" indexName="idx_funnel_step_visitor">
+            <column name="visitor"/>
+            <column name="created_at"/>
+        </createIndex>
+        <createIndex tableName="funnel_step" indexName="idx_funnel_step_created">
+            <column name="created_at"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

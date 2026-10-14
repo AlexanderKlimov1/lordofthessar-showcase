@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Послужной список лидера (field-backlog, пункт 140): бои его флота и срок губернатора —
+        ход и население системы на начало срока. Прошлых боёв запись не знает: у всех ноль.
+    -->
+    <changeSet id="111-leader-record" author="sddnw">
+        <addColumn tableName="player_leader">
+            <column name="battles_won" type="int" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="battles_lost" type="int" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="term_start_turn" type="int"/>
+            <column name="term_start_population" type="int"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Сравнение с собой прошлым (field-backlog, пункт 115): мощь своей империи на 50-м, 100-м и
+        150-м ходу и в конце партии. У записанных раньше партий пусто — сравнивать их не с чем.
+    -->
+    <changeSet id="114-game-record-might" author="sddnw">
+        <addColumn tableName="game_record">
+            <column name="might_50" type="int"/>
+            <column name="might_100" type="int"/>
+            <column name="might_150" type="int"/>
+            <column name="might_end" type="int"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

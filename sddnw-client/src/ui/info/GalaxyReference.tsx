@@ -2,10 +2,12 @@ import { useState, type ReactNode } from 'react';
 
 import { gameApi, GameApiError } from '../../api/client';
 import { readRevealGalaxy, writeRevealGalaxy } from '../../state/settings';
+import { readAccount } from '../../state/session';
 import { selectSelf, useGameStore } from '../../state/gameStore';
 import { t, tf } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { VeteranRules } from './VeteranRules';
 
 /**
  * Справочник по галактике — своя страница окна «Инфо», не из оригинала.
@@ -21,7 +23,7 @@ export function GalaxyReference() {
   return (
     <div>
       <EmpireSummary />
-      <RevealGalaxyOption />
+      {readAccount()?.account.role === 'ADMIN' ? <RevealGalaxyOption /> : null}
 
       <div className="grid gap-8 text-xs leading-relaxed text-ink-soft lg:grid-cols-2">
         <section>
@@ -38,6 +40,8 @@ export function GalaxyReference() {
           <p className="mt-2">
             {t('reference.galaxy.range')}
           </p>
+          {/* Цвет звезды — подсказка о планетах (пункт 132), одной строкой, как в справочнике оригинала. */}
+          <p className="mt-2">{t('reference.galaxy.starColor')}</p>
         </section>
 
         <section>
@@ -71,6 +75,8 @@ export function GalaxyReference() {
           </ul>
         </section>
       </div>
+      {/* Что иначе, чем в оригинале (field-backlog, пункт 69): все отступления списком. */}
+      <VeteranRules />
     </div>
   );
 }

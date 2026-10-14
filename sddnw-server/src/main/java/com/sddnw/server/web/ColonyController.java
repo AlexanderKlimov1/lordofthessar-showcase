@@ -3,6 +3,7 @@ package com.sddnw.server.web;
 import com.sddnw.server.dto.ColonizeRequest;
 import com.sddnw.server.dto.InvadeRequest;
 import com.sddnw.server.dto.InvasionResultDto;
+import com.sddnw.server.dto.TemplateLaidDto;
 import com.sddnw.server.dto.MoveQueueRequest;
 import com.sddnw.server.dto.PlanetDto;
 import com.sddnw.server.dto.StarSystemDto;
@@ -95,7 +96,7 @@ public class ColonyController {
      * взять ЕГО шаблон. Шаблон принадлежит записи, а не партии.
      */
     @PostMapping("/queue/template")
-    public PlanetDto enqueueTemplate(@PathVariable UUID gameId,
+    public TemplateLaidDto enqueueTemplate(@PathVariable UUID gameId,
                                      @PathVariable UUID planetId,
                                      @Valid @RequestBody EnqueueTemplateRequest request,
                                      @AccountToken String accountToken) {

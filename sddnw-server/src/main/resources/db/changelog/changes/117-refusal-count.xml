@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Частые отказы игроков — field-backlog, пункт 77: ключ отказа, сколько раз и когда
+        последний. Ни игрока, ни партии: нужен ответ «где спотыкаются», а не «кто».
+    -->
+    <changeSet id="117-refusal-count" author="sddnw">
+        <createTable tableName="refusal_count">
+            <column name="message_key" type="varchar(120)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="refusals" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+</databaseChangeLog>

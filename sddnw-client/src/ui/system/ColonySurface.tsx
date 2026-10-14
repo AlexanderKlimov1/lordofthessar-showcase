@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import type { ColonyProject } from '../../api/types';
 import { climateColor, surfaceImage } from './planetVisuals';
+import { justTouched } from '../touch';
 import {
-  BuildingDefs, BuildingSprite, ColonyCentreSprite, MINEFIELD, OrbitalSprite,
+  BuildingDefs, BuildingSprite, CAPITOL, ColonyCentreSprite, MINEFIELD, OrbitalSprite,
   colonyCentreLevel, isOrbital, isShield, onGround,
 } from './buildingArt';
 
@@ -202,6 +203,13 @@ export function ColonySurface({
   ].sort((p, q) => p.place.y - q.place.y);
 
   const handlers = (building: ColonyProject) => ({
+    // Касание (field-backlog, пункт 60): правого щелчка у пальца нет, и касание открывает то
+    // же окошко постройки — название, описание, продажа и отмена.
+    onClick: (event: React.MouseEvent) => {
+      if (own && justTouched()) {
+        onSell(building, { x: event.clientX, y: event.clientY });
+      }
+    },
     onMouseEnter: () => onHover(building),
     onMouseLeave: () => onHover(null),
     onContextMenu: (event: React.MouseEvent) => {
@@ -244,8 +252,7 @@ export function ColonySurface({
       ))}
 
       {minefield ? (
-        <g {...handlers(minefield)}>
-          <title>{minefield.name}</title>
+        <g {...handlers(minefield)} data-tip={minefield.name}>
           {Array.from({ length: 18 }).map((_, i) => (
             <g key={i} transform={`translate(${60 + i * 50} ${78 + ((i * 37) % 44)})`}>
               <circle r={3} fill="#5d584f" />
@@ -256,8 +263,7 @@ export function ColonySurface({
       ) : null}
 
       {station ? (
-        <g transform="translate(770 104)" {...handlers(station)}>
-          <title>{station.name}</title>
+        <g transform="translate(770 104)" {...handlers(station)} data-tip={station.name}>
           <OrbitalSprite level={stationLevel} />
         </g>
       ) : null}
@@ -300,19 +306,18 @@ export function ColonySurface({
            opacity={haze(place.y)} className="cs-hit"
            onMouseEnter={() => { onHover(null); onHoverCentre(true); }}
            onMouseLeave={() => onHoverCentre(false)}>
-          <ColonyCentreSprite level={colonyCentreLevel(population)} />
+          <ColonyCentreSprite level={colonyCentreLevel(population)}
+                              capitol={buildings.some((building) => building.code === CAPITOL)} />
         </g>
       ) : (
         <g key={building!.code} transform={`translate(${place.x} ${place.y}) scale(${place.scale})`}
-           opacity={haze(place.y)} {...handlers(building!)}>
-          <title>{building!.name}</title>
+           opacity={haze(place.y)} {...handlers(building!)} data-tip={building!.name}>
           <BuildingSprite code={building!.code} />
         </g>
       )))}
 
       {shield.map((building, i) => (
-        <g key={building.code} {...handlers(building)}>
-          <title>{building.name}</title>
+        <g key={building.code} {...handlers(building)} data-tip={building.name}>
           <path d={`M40,${H} A${460 - i * 20},${250 - i * 16} 0 0 1 ${W - 40},${H}`}
                 fill={building.code === 'planetary-barrier-shield' ? '#7fe0ff' : '#9ec9ff'}
                 fillOpacity={building.code === 'planetary-barrier-shield' ? 0.1 : 0.06}

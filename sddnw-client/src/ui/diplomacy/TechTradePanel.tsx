@@ -5,6 +5,7 @@ import { useGameStore } from '../../state/gameStore';
 import { t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { ACCENTS, figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Обмен технологиями и подарки — п. 15, самое ходовое в дипломатии MOO II.
@@ -75,7 +76,7 @@ export function TechTradePanel({
 
   useT();
   if (error) {
-    return <p className="mt-2 text-11 text-danger">{error}</p>;
+    return <ActionError className="mt-2 text-11" message={error} />;
   }
   if (!trade) {
     return <p className="mt-2 text-11 text-ink-faint">{t('trade.loading')}</p>;
@@ -156,7 +157,11 @@ export function TechTradePanel({
         <button
           type="button"
           className="link disabled:cursor-not-allowed disabled:text-ink-off"
-          disabled={busy || !(Number(credits) > 0)}
+          // Дарить больше казны нельзя (`diplomacy.giftNoCredits`): `max` у поля набор не
+          // останавливает, поэтому гаснет сама кнопка — пункт 76.
+          disabled={busy || !(Number(credits) > 0) || Number(credits) > (self?.credits ?? 0)}
+          title={Number(credits) > (self?.credits ?? 0)
+            ? t('build.buy.noCredits', { n: Number(credits), have: self?.credits ?? 0 }) : undefined}
           onClick={() => onAct('GIFT_CREDITS', { credits: Number(credits) })}
         >
           {t('trade.gift')}

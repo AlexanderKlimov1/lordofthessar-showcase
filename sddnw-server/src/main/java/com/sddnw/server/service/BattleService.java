@@ -90,7 +90,30 @@ public class BattleService {
 
         Map<UUID, PlayerEntity> players = players(gameId);
         TacticalBattleService.BattleView view = battles.act(player, battleId, request, players);
+        closeIfFinished(view, game, players);
+        return battles.toDto(view, player, players, systemName(gameId, battle));
+    }
 
+    /**
+     * Ходы ИИ и чудищ, с которых начался бой, — п. 8: экран зовёт это, открывшись не на
+     * своём ходу ({@link TacticalBattleService#playOpponents}). Чудище быстрее фрегата и бьёт
+     * первым, как в оригинале.
+     */
+    @Transactional
+    public BattleDto playOpponents(UUID gameId, UUID battleId, String accessToken) {
+        GameEntity game = gameAccess.requireRunningGame(gameId);
+        PlayerEntity player = gameAccess.requirePlayer(game, accessToken);
+        SpaceBattleEntity battle = battles.require(battleId);
+        requireParticipant(battle, player);
+
+        Map<UUID, PlayerEntity> players = players(gameId);
+        TacticalBattleService.BattleView view = battles.playOpponents(battleId, players);
+        closeIfFinished(view, game, players);
+        return battles.toDto(view, player, players, systemName(gameId, battle));
+    }
+
+    private void closeIfFinished(TacticalBattleService.BattleView view, GameEntity game,
+                                 Map<UUID, PlayerEntity> players) {
         if (view.battle().getState() == BattleState.FINISHED) {
             // Бой с чудищем отчитывается не встрече, а СИСТЕМЕ: сторожа там либо больше
             // нет, либо он остался раненым — п. 11.1. Встречи у такого боя не бывает
@@ -101,8 +124,6 @@ public class BattleService {
                 encounters.closeByBattle(view.battle(), players, game.getTurn());
             }
         }
-
-        return battles.toDto(view, player, players, systemName(gameId, battle));
     }
 
     private void requireParticipant(SpaceBattleEntity battle, PlayerEntity player) {

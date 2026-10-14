@@ -230,6 +230,39 @@ public record RaceEffects(
      * отдельного вида «особенность без числа» заводить не пришлось, а ноль и отсутствие
      * значат одно и то же.
      */
+    /** Строй не знает морали — п. 10.1: объединение и галактическое единство. */
+    public Boolean noMorale() {
+        return has(RaceEffectType.NO_MORALE);
+    }
+
+    /** Мораль колонии без казарм — п. 10.1: диктатура, феодализм и конфедерация. */
+    public Integer moraleWithoutBarracks() {
+        return amount(RaceEffectType.MORALE_WITHOUT_BARRACKS);
+    }
+
+    /** Мораль колонии с казармами — п. 10.1: Империум. */
+    public Integer moraleWithBarracks() {
+        return amount(RaceEffectType.MORALE_WITH_BARRACKS);
+    }
+
+    /** Прибавка к морали от псионики — п. 10.1: феодализм, диктатура и их развитые строи. */
+    public Integer psionicsMorale() {
+        return amount(RaceEffectType.PSIONICS_MORALE);
+    }
+
+    /** Мораль колоний империи, потерявшей столицу, — п. 10.1. */
+    public Integer capitolLossMorale() {
+        return amount(RaceEffectType.CAPITOL_LOSS_MORALE);
+    }
+
+    /**
+     * Есть ли у строя столица — п. 10.1: «a Unification empire has no Capitol». Строй без
+     * морали — тот же самый объединённый, и признак у них один.
+     */
+    public Boolean hasCapitol() {
+        return !Boolean.TRUE.equals(noMorale());
+    }
+
     private Boolean has(RaceEffectType type) {
         return amount(type) > 0;
     }

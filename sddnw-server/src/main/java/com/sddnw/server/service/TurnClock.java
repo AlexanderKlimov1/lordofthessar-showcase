@@ -24,17 +24,32 @@ public class TurnClock {
 
     private final PlayerRepository playerRepository;
     private final GameService gameService;
+    private final com.sddnw.server.repository.GameRepository gameRepository;
+    private final GameMods gameMods;
 
-    public TurnClock(PlayerRepository playerRepository, GameService gameService) {
+    public TurnClock(PlayerRepository playerRepository, GameService gameService,
+                     com.sddnw.server.repository.GameRepository gameRepository, GameMods gameMods) {
+        this.gameRepository = gameRepository;
+        this.gameMods = gameMods;
         this.playerRepository = playerRepository;
         this.gameService = gameService;
     }
 
     @Scheduled(initialDelay = 5_000, fixedDelay = 5_000)
     public void tick() {
+        // Столы подбора, чей срок ожидания вышел, — field-backlog, пункт 65.
+        for (UUID gameId : gameRepository.findAutoStartDue(java.time.OffsetDateTime.now())) {
+            try {
+                gameService.autoStart(gameId);
+            } catch (RuntimeException e) {
+                log.warn("Подбор: стол {} не стартовал: {}", gameId, e.toString());
+            }
+        }
         for (UUID gameId : playerRepository.findGameIdsWithSomebodyWaiting()) {
             try {
-                gameService.tick(gameId);
+                // Партия на своих справочниках (пункт 42) считается в своей отметке — как и запрос к ней.
+                ModScope.run(Boolean.TRUE.equals(gameMods.modded(gameId)) ? gameId : null,
+                        () -> gameService.tick(gameId));
             } catch (RuntimeException e) {
                 log.warn("Часы хода: партия {} не посчиталась: {}", gameId, e.toString());
             }

@@ -78,11 +78,20 @@ public record ShipComponent(
 
     /** Место компонента на этом корпусе — с поправкой на размер, если она нужна. */
     public Integer spaceOn(ShipHull hull) {
-        return slot.scalesWithHull() ? space * hull.systemFactor() : space;
+        return Boolean.TRUE.equals(scalesWithHull()) ? space * hull.systemFactor() : space;
+    }
+
+    /**
+     * Растёт ли место и цена компонента с корпусом — по гнезду ({@link ShipComponentSlot#scalesWithHull}), кроме
+     * отсеков истребителей: в MOO II это ОРУЖЕЙНОЕ гнездо (таблица оружия патча 1.50: перехватчики 30 клеток,
+     * бомбардировщики 60, тяжёлые 80), и с корпусом оно не растёт, как и ствол (14.10.2026).
+     */
+    public Boolean scalesWithHull() {
+        return slot.scalesWithHull() && amount(ShipEffectType.FIGHTER_BAY) <= 0;
     }
 
     /** Цена компонента на этом корпусе — по тому же правилу, что и место. */
     public Integer costOn(ShipHull hull) {
-        return slot.scalesWithHull() ? cost * hull.systemFactor() : cost;
+        return Boolean.TRUE.equals(scalesWithHull()) ? cost * hull.systemFactor() : cost;
     }
 }

@@ -14,11 +14,42 @@ import java.util.UUID;
 
 public interface GameRepository extends JpaRepository<GameEntity, UUID> {
 
+    /** Партии, которые можно смотреть со стороны, — field-backlog, пункт 59. */
+    List<GameEntity> findAllBySpectatorsTrueAndStatusIn(java.util.Collection<GameStatus> statuses);
+
+    /** Сколько партий недели начато — галактика недели, пункт 146. */
+    long countByWeeklyWeek(Integer weeklyWeek);
+
     /**
      * Партии с таким названием — их спрашивает только демонстрационный бой (п. 8): свою
      * прошлую партию он находит по имени и убирает, чтобы они не копились.
      */
     List<GameEntity> findAllByName(String name);
+
+    /**
+     * Пометить партию «под наблюдением администратора» — field-backlog, пункт 197. Запросом,
+     * а не правкой сущности: версию строки он не трогает и с концом хода не спорит.
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE GameEntity g SET g.adminWatched = TRUE WHERE g.id = :id AND g.adminWatched = FALSE")
+    int markAdminWatched(UUID id);
+
+    /**
+     * Код приглашения — field-backlog, пункт 15: ставится один раз и мимо версии строки, чтобы
+     * просьба о ссылке не спорила с концом хода за замок партии.
+     */
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE GameEntity g SET g.inviteCode = :code WHERE g.id = :id AND g.inviteCode IS NULL")
+    int setInviteCode(UUID id, String code);
+
+    java.util.Optional<GameEntity> findByInviteCode(String inviteCode);
+
+    /**
+     * Ход партии одним числом — счёт действий (field-backlog, пункт 13) спрашивает его до замка
+     * партии, а сущность, прочитанная до замка, роняла бы запись самого действия на проверке версии.
+     */
+    @Query("SELECT g.turn FROM GameEntity g WHERE g.id = :id")
+    Integer findTurnById(UUID id);
 
     /**
      * Список партий страницей: их в базе накапливаются сотни, а показать нужно последние.
@@ -27,6 +58,14 @@ public interface GameRepository extends JpaRepository<GameEntity, UUID> {
     List<GameEntity> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
     List<GameEntity> findAllByStatusOrderByCreatedAtDesc(GameStatus status, Pageable pageable);
+
+    /** Столы подбора в лобби — field-backlog, пункт 65: старшие первыми, их и наполняют. */
+    List<GameEntity> findAllByStatusAndAutoStartAtNotNullOrderByCreatedAtAsc(GameStatus status);
+
+    /** Чей срок ожидания вышел — их обходят часы ({@code TurnClock}). */
+    @Query("select g.id from GameEntity g where g.status = com.sddnw.server.domain.enums.GameStatus.LOBBY"
+            + " and g.autoStartAt is not null and g.autoStartAt <= :now")
+    List<UUID> findAutoStartDue(@org.springframework.data.repository.query.Param("now") java.time.OffsetDateTime now);
 
     @Query("""
             SELECT g FROM GameEntity g

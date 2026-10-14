@@ -148,3 +148,45 @@ export function isBlocked(design: RaceDesign | null, traits: string[], option: R
     (chosen) => option.excludes.includes(chosen) || Boolean(byCode.get(chosen)?.excludes.includes(option.code)),
   );
 }
+
+/** Что сдвинулось у собранной расы между двумя справочниками — field-backlog, пункт 97. */
+export interface PriceDrift {
+  /** Стороны, чья цена изменилась: имя, было, стало. */
+  prices: { name: string; from: number; to: number }[];
+  /** Стороны, которых в справочнике больше нет, — по имени из прежнего. */
+  removed: string[];
+  /** Бюджет и потолок анти-выбора, если сдвинулись. */
+  budget?: { from: number; to: number };
+  antiBudget?: { from: number; to: number };
+}
+
+/**
+ * Сравнить прежний справочник рас с новым ровно по собранным сторонам — пункт 97: правка цен
+ * балансировкой не ломает собранное МОЛЧА. Пусто (`null`) — для этой сборки не изменилось
+ * ничего, и говорить не о чем.
+ */
+export function priceDrift(before: RaceDesign | null, after: RaceDesign, traits: string[]): PriceDrift | null {
+  if (!before) {
+    return null;
+  }
+  const find = (design: RaceDesign, code: string) =>
+    design.groups.flatMap((group) => group.options).find((option) => option.code === code);
+  const drift: PriceDrift = { prices: [], removed: [] };
+  for (const code of traits) {
+    const was = find(before, code);
+    const now = find(after, code);
+    if (!now) {
+      drift.removed.push(was?.name ?? code);
+    } else if (was && was.picks !== now.picks) {
+      drift.prices.push({ name: now.name, from: was.picks, to: now.picks });
+    }
+  }
+  if (before.picks !== after.picks) {
+    drift.budget = { from: before.picks, to: after.picks };
+  }
+  if (before.antiPicks !== after.antiPicks) {
+    drift.antiBudget = { from: before.antiPicks, to: after.antiPicks };
+  }
+  const nothing = !drift.prices.length && !drift.removed.length && !drift.budget && !drift.antiBudget;
+  return nothing ? null : drift;
+}

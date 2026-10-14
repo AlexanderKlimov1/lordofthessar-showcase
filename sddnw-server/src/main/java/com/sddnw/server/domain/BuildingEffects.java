@@ -145,6 +145,41 @@ public record BuildingEffects(
         return amount(BuildingEffectType.POLLUTION_TOLERANCE_PERCENT);
     }
 
+    /** Прибавка к морали от зданий колонии — п. 10.1: голосимулятор и Купол Элизия. */
+    public Integer moralePercent() {
+        return amount(BuildingEffectType.MORALE_PERCENT);
+    }
+
+    /** Колония держит гарнизон — п. 10.1: казармы морской пехоты или бронеказармы. */
+    public Boolean barracks() {
+        return amount(BuildingEffectType.BARRACKS) > 0;
+    }
+
+    /** На колонии стоит столица империи — п. 10.1. */
+    public Boolean capitol() {
+        return amount(BuildingEffectType.CAPITOL) > 0;
+    }
+
+    /** На колонии стоит центр управления чужими — п. 10.1, п. 12. */
+    public Boolean alienManagement() {
+        return amount(BuildingEffectType.ALIEN_MANAGEMENT) > 0;
+    }
+
+    /** Роботизированных заводов на колонии — п. 10: их производство зависит от недр и пачкает. */
+    public Integer roboticFactories() {
+        return amount(BuildingEffectType.ROBOTIC_FACTORY);
+    }
+
+    /** Еда фермера на безжизненном климате — п. 9: биоморфные грибы. */
+    public Integer foodOnLifeless() {
+        return amount(BuildingEffectType.FOOD_ON_LIFELESS);
+    }
+
+    /** Подготовка разведки от технологий в единицах MOO II — п. 13. */
+    public Integer espionageTraining() {
+        return amount(BuildingEffectType.ESPIONAGE_TRAINING);
+    }
+
     /** Грязи у колонии нет вовсе — п. 10: свалка в ядре или неприхотливая раса (п. 7). */
     public Boolean pollutionFree() {
         return amount(BuildingEffectType.POLLUTION_NONE) > 0;

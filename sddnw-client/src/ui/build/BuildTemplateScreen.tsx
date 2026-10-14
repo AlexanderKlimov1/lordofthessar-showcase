@@ -5,6 +5,7 @@ import { useModalEscape } from '../useModalEscape';
 import { t, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { ACCENTS, figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Шаблоны стройки — п. 10, миграция 079: порядок развития, который закладывают колониям
@@ -28,9 +29,13 @@ import { ACCENTS, figureLabelClass } from '../accent';
  * до партии, где никакой колонии нет вовсе. Поэтому сбыточность шаблона здесь не
  * проверяется — несбыточное отсеется при закладке, и это сказано на самом экране.
  */
-export function BuildTemplateScreen({ onClose }: { onClose: () => void }) {
+export function BuildTemplateScreen({ onClose, embedded = false }: {
+  onClose: () => void;
+  /** Раздел «Порядки стройки» личного кабинета: без своей рамки, заголовка и Esc — их держит кабинет. */
+  embedded?: boolean;
+}) {
   useT();
-  useModalEscape(true, onClose);
+  useModalEscape(!embedded, onClose);
   const [buildings, setBuildings] = useState<BuildingRef[]>([]);
 
   const [templates, setTemplates] = useState<BuildTemplate[] | null>(null);
@@ -111,16 +116,19 @@ export function BuildTemplateScreen({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col gap-3 overflow-y-auto bg-space-950 p-4">
-      <div className="flex items-baseline justify-between border-b border-space-700 pb-2">
-        <h2 className="panel-title text-22">{t('template.title')}</h2>
-        <button type="button" className="link text-20" onClick={onClose}>
-          {t('common.close')} (Esc)
-        </button>
-      </div>
+    <div className={embedded ? 'flex h-full flex-col gap-3'
+      : 'absolute inset-0 z-50 flex flex-col gap-3 overflow-y-auto bg-space-950 p-4'}>
+      {embedded ? null : (
+        <div className="flex items-baseline justify-between border-b border-space-700 pb-2">
+          <h2 className="panel-title text-22">{t('template.title')}</h2>
+          <button type="button" className="link text-20" onClick={onClose}>
+            {t('common.close')} (Esc)
+          </button>
+        </div>
+      )}
 
       <p className="text-19 leading-relaxed text-ink-faint">{t('template.hint')}</p>
-      {error ? <p className="text-19 text-danger">{error}</p> : null}
+      {error ? <ActionError className="text-19" message={error} /> : null}
 
       <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] gap-3">
         {/* Слева — сами шаблоны, разложенные по стадии развития. */}

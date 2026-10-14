@@ -1,6 +1,7 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { WeaponKindCode } from '../../api/types';
-import { CELL } from './battleVisuals';
+import { playShot } from '../../audio/battleSfx';
+import { CELL, MISSILE_SCALE } from './battleVisuals';
 
 /**
  * Выстрел на поле боя — п. 8: видно, кто в кого стреляет и чем.
@@ -24,6 +25,8 @@ const LIFETIME_MS: Record<WeaponKindCode, number> = {
   BEAM: 420,
   PROJECTILE: 520,
   MISSILE: 760,
+  // Бомба по кораблям не стреляет (пункт 25); срок нужен только для полноты таблицы.
+  BOMB: 760,
 };
 
 /** Цвет выстрела: у своих голубой, у чужих красный — как и сами корабли. */
@@ -49,6 +52,110 @@ export interface Shot {
    * одного залпа расходятся веером, а не летят одна в другой.
    */
   spread?: number;
+  /**
+   * Не выстрел, а действие (п. 8): тяговый луч или абордаж — рисуются своими картинками.
+   */
+  effect?: 'TRACTOR' | 'BOARD';
+  /**
+   * Сколько ракет сбито этим выстрелом (пункт 30): у перехвата на месте залпа рвутся ракеты —
+   * по взрыву на каждую, а не общая вспышка попадания. Ноль — перехват промахнулся.
+   */
+  downed?: number;
+}
+
+/** Сколько держится тяговый луч и летят капсулы абордажа, миллисекунды. */
+const ACTION_MS = 900;
+
+/**
+ * Тяговый луч (п. 8): бирюзовая полоса от корабля к цели, по которой бегут кольца — луч
+ * тянет, а не бьёт, поэтому без вспышки попадания.
+ */
+function Tractor({ shot, from, to }: { shot: Shot; from: { x: number; y: number }; to: { x: number; y: number } }) {
+  const style = { animation: `sddnw-tractor ${ACTION_MS}ms ${shot.delayMs}ms ease-in-out both` };
+  return (
+    <g style={style}>
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="#5eead4" strokeWidth={6} opacity={0.18}
+        strokeLinecap="round" />
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="#99f6e4" strokeWidth={1.5}
+        strokeDasharray="3 7" strokeLinecap="round"
+        style={{ animation: `sddnw-tractor-flow ${ACTION_MS}ms ${shot.delayMs}ms linear both` }} />
+      <circle cx={to.x} cy={to.y} r={CELL * 0.36} fill="none" stroke="#5eead4" strokeWidth={1.5} opacity={0.7} />
+    </g>
+  );
+}
+
+/**
+ * Абордаж и рейд (п. 8): три капсулы пехоты летят к цели, а на ней — исход: удался
+ * (корабль взят или разгромлен) — вспышка цвета абордажников, отбили — гаснущий красный дымок.
+ */
+function Boarding({ shot, from, to }: { shot: Shot; from: { x: number; y: number }; to: { x: number; y: number } }) {
+  const arrive = shot.delayMs + ACTION_MS * 0.7;
+  const flash = {
+    animation: `sddnw-impact ${IMPACT_MS * 2}ms ${arrive}ms ease-out both`,
+    transformBox: 'fill-box' as const,
+    transformOrigin: 'center',
+  };
+  return (
+    <g>
+      {[-1, 0, 1].map((lane) => (
+        <rect key={lane} x={from.x - 3} y={from.y - 2 + lane * 5} width={6} height={4} rx={1.5}
+          fill="#e2e8f0" stroke={shot.color} strokeWidth={0.8}
+          style={{
+            animation: `sddnw-projectile ${ACTION_MS * 0.7}ms ${shot.delayMs + (lane + 1) * 60}ms ease-in forwards`,
+            ['--fly-x' as string]: `${to.x - from.x}px`,
+            ['--fly-y' as string]: `${to.y - from.y - lane * 5}px`,
+          }} />
+      ))}
+      {shot.hit ? (
+        <circle cx={to.x} cy={to.y} r={CELL * 0.5} fill="none" stroke={shot.color} strokeWidth={3} style={flash} />
+      ) : (
+        <circle cx={to.x} cy={to.y} r={CELL * 0.3} fill="#f87171" opacity={0.5} style={flash} />
+      )}
+    </g>
+  );
+}
+
+/** Сколько горит взрыв сбитой ракеты, миллисекунды. */
+const BURST_MS = 520;
+
+/**
+ * Взрыв сбитых ракет — пункт 30, просьба хозяина проекта: уничтожение ракеты должно быть
+ * видно. Оранжевый шар с разлетающимися искрами — по одному на ракету, чуть вразнобой, чтобы
+ * «сбито три» читалось тремя взрывами, а не одной вспышкой. Место искр — от идентификатора,
+ * а не от случая: сцена перерисовывается на каждое движение мыши.
+ */
+function MissileBurst({ x, y, count, startMs, seed }: {
+  x: number; y: number; count: number; startMs: number; seed: string;
+}) {
+  return (
+    <g>
+      {Array.from({ length: Math.min(6, count) }, (_, index) => {
+        const dx = (jitter(seed, index * 3) - 0.5) * CELL * 0.6;
+        const dy = (jitter(seed, index * 3 + 1) - 0.5) * CELL * 0.6;
+        const delay = startMs + index * 90;
+        const style = {
+          animation: `sddnw-impact ${BURST_MS}ms ${delay}ms ease-out both`,
+          transformBox: 'fill-box' as const,
+          transformOrigin: 'center',
+        };
+        return (
+          <g key={index}>
+            <circle cx={x + dx} cy={y + dy} r={CELL * 0.3} fill="#ff8a1f" opacity={0.75} style={style} />
+            <circle cx={x + dx} cy={y + dy} r={CELL * 0.12} fill="#fff3c4" style={style} />
+            {[0, 1, 2, 3, 4].map((spark) => {
+              const angle = jitter(seed, index * 7 + spark) * Math.PI * 2;
+              const reach = CELL * (0.25 + jitter(seed, index * 11 + spark) * 0.25);
+              return (
+                <line key={spark} x1={x + dx} y1={y + dy}
+                  x2={x + dx + Math.cos(angle) * reach} y2={y + dy + Math.sin(angle) * reach}
+                  stroke="#ffd27a" strokeWidth={1.2} strokeLinecap="round" style={style} />
+              );
+            })}
+          </g>
+        );
+      })}
+    </g>
+  );
 }
 
 /** Сколько горит вспышка попадания, миллисекунды. */
@@ -197,10 +304,25 @@ function Beam({
 }
 
 export function ShotEffect({ shot, onDone }: { shot: Shot; onDone: () => void }) {
+  /*
+    Звук выстрела — один раз на выстрел, с теми же сроками, что и рисунок. Отметка в ссылке, а
+    не просто эффект: строгий режим разработки зовёт эффект дважды, и залп звучал бы эхом.
+  */
+  const sounded = useRef(false);
+  useEffect(() => {
+    if (sounded.current) {
+      return;
+    }
+    sounded.current = true;
+    playShot({ ...shot, arrivalMs: arrivalMs(shot) });
+  }, [shot]);
+
   useEffect(() => {
     // Выстрел уходит с поля, когда догорела и вспышка попадания, а не когда долетел.
     const heat = shot.kind === 'BEAM' ? shot.delayMs + 60 + BEAM_HEAT_MS : 0;
-    const done = Math.max(LIFETIME_MS[shot.kind] + shot.delayMs, arrivalMs(shot) + IMPACT_MS, heat) + 120;
+    const burst = (shot.downed ?? 0) > 0 ? arrivalMs(shot) + BURST_MS + 90 * Math.min(6, shot.downed ?? 0)
+      : shot.effect ? shot.delayMs + ACTION_MS + IMPACT_MS * 2 : 0;
+    const done = Math.max(LIFETIME_MS[shot.kind] + shot.delayMs, arrivalMs(shot) + IMPACT_MS, heat, burst) + 120;
     const timer = window.setTimeout(onDone, done);
     return () => window.clearTimeout(timer);
   }, [shot, onDone]);
@@ -209,7 +331,16 @@ export function ShotEffect({ shot, onDone }: { shot: Shot; onDone: () => void })
   const to = { x: shot.toX * CELL + CELL / 2, y: shot.toY * CELL + CELL / 2 };
   const opacity = shot.hit || shot.leg ? 1 : 0.45;
   const life = LIFETIME_MS[shot.kind];
-  const impact = shot.hit ? <Impact x={to.x} y={to.y} color={shot.color} startMs={arrivalMs(shot)} /> : null;
+  const impact = (shot.downed ?? 0) > 0
+    ? <MissileBurst x={to.x} y={to.y} count={shot.downed ?? 0} startMs={arrivalMs(shot)} seed={shot.id} />
+    : shot.hit ? <Impact x={to.x} y={to.y} color={shot.color} startMs={arrivalMs(shot)} /> : null;
+
+  if (shot.effect === 'TRACTOR') {
+    return <Tractor shot={shot} from={from} to={to} />;
+  }
+  if (shot.effect === 'BOARD') {
+    return <Boarding shot={shot} from={from} to={to} />;
+  }
 
   if (shot.kind === 'BEAM') {
     return <Beam shot={shot} from={from} to={to} opacity={opacity} life={life} impact={impact} />;
@@ -277,14 +408,17 @@ export function ShotEffect({ shot, onDone }: { shot: Shot; onDone: () => void })
       <g opacity={opacity} visibility="hidden">
         <set attributeName="visibility" to="visible" begin={`${shot.delayMs}ms`} fill="freeze" />
         {/*
-          Ракета вдвое крупнее прежней: в клетке 44 точки девятиточечное тело терялось, и
-          пуск было не отличить от снаряда.
+          Ракета мельче самого мелкого корабля (MISSILE_SCALE, 03.10.2026): в полный размер
+          тело с огнём сопла было длиннее фрегата. Огонь сопла оставлен крупным — по нему
+          пуск и отличают от снаряда.
         */}
-        <circle cx={-12} cy={0} r={6} fill="#ffb347" opacity={0.55} />
-        <circle cx={-10} cy={0} r={3} fill="#fff1b8" />
-        <polygon points="-8,-5 -4,-2.6 -4,2.6 -8,5" fill="#8d877c" />
-        <rect x={-8} y={-2.8} width={17} height={5.6} rx={2.6} fill="#d6d0c2" stroke="#4c4841" strokeWidth={0.6} />
-        <polygon points="9,-2.8 15,0 9,2.8" fill={shot.color} />
+        <g transform={`scale(${MISSILE_SCALE})`}>
+          <circle cx={-12} cy={0} r={6} fill="#ffb347" opacity={0.55} />
+          <circle cx={-10} cy={0} r={3} fill="#fff1b8" />
+          <polygon points="-8,-5 -4,-2.6 -4,2.6 -8,5" fill="#8d877c" />
+          <rect x={-8} y={-2.8} width={17} height={5.6} rx={2.6} fill="#d6d0c2" stroke="#4c4841" strokeWidth={0.6} />
+          <polygon points="9,-2.8 15,0 9,2.8" fill={shot.color} />
+        </g>
         <animateMotion
           dur={`${life}ms`}
           begin={`${shot.delayMs}ms`}

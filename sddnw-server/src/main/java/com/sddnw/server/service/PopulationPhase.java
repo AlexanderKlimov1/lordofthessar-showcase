@@ -95,6 +95,20 @@ public class PopulationPhase implements TurnPhase {
                         context.systemOf(planet), planet.getId());
             }
         }
+        autoJobs(context);
+    }
+
+    /**
+     * «Жители сами» — field-backlog, пункт 91: после роста колонии с этим признаком переставляют
+     * жителей по правилу ({@link ColonyService#applyAutoJobs}). Каждый ход, а не только при росте:
+     * еду меняют и постройки, и мораль, и смена хозяина подданных.
+     */
+    private void autoJobs(TurnContext context) {
+        for (PlanetEntity planet : context.colonies()) {
+            if (Boolean.TRUE.equals(planet.getAutoJobs()) && planet.getPopulation() > 0) {
+                colonyService.applyAutoJobs(planet, context.colonyContext());
+            }
+        }
     }
 
     /** Больше вместимости колония не растёт, ниже одного жителя не падает. */

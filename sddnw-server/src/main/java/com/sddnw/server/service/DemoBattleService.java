@@ -99,9 +99,9 @@ public class DemoBattleService {
             new Recipe("demo.ship.terra", "battleship", "fusion-drive", "tritanium-armor",
                     null, "optronic-computer", "phasor", 4),
             new Recipe("demo.ship.dawn", "cruiser", "fusion-drive", "titanium-armor",
-                    "class-i-shield", "electronic-computer", "phasor", 4),
+                    "class-i-shield", "electronic-computer", "phasor", 4, null, "anti-missile-rockets"),
             new Recipe("demo.ship.thunder", "cruiser", "ion-drive", "titanium-armor",
-                    null, "electronic-computer", "neutron-blaster", 4),
+                    null, "electronic-computer", "neutron-blaster", 4, null, "tractor-beam"),
             new Recipe("demo.ship.swift", "destroyer", "ion-drive", "titanium-armor",
                     null, "electronic-computer", "fusion-beam", 4),
             new Recipe("demo.ship.needle", "frigate", "ion-drive", "titanium-armor",
@@ -117,7 +117,7 @@ public class DemoBattleService {
      */
     private static final List<Recipe> RIGHT = List.of(
             new Recipe("demo.ship.mrrag", "battleship", "ion-drive", "tritanium-armor",
-                    null, "electronic-computer", "plasma-cannon", 3),
+                    null, "electronic-computer", "plasma-cannon", 3, null, "assault-shuttles"),
             new Recipe("demo.ship.talon", "cruiser", "fusion-drive", "tritanium-armor",
                     "class-i-shield", "optronic-computer", "graviton-beam", 4),
             new Recipe("demo.ship.fang", "cruiser", "ion-drive", "titanium-armor",
@@ -178,11 +178,22 @@ public class DemoBattleService {
                            * ближняя оборона (пункт 30): правый строй бьёт ракетами, и без
                            * защитника перехват ракет в полёте игроку было бы не увидеть.
                            */
-                          String modification) {
+                          String modification,
+                          /**
+                           * Особый модуль или пусто. Ради него в демонстрации есть
+                           * противоракеты (пункт 30): их выстрел по залпу в полёте виден
+                           * только тогда, когда они стоят хоть на одном корабле.
+                           */
+                          String special) {
 
         Recipe(String name, String hull, String engine, String armour, String shield,
                String computer, String weapon, int weapons) {
-            this(name, hull, engine, armour, shield, computer, weapon, weapons, null);
+            this(name, hull, engine, armour, shield, computer, weapon, weapons, null, null);
+        }
+
+        Recipe(String name, String hull, String engine, String armour, String shield,
+               String computer, String weapon, int weapons, String modification) {
+            this(name, hull, engine, armour, shield, computer, weapon, weapons, modification, null);
         }
     }
 
@@ -256,8 +267,8 @@ public class DemoBattleService {
         Map<UUID, PlayerEntity> players = players(demo.game().getId());
         return new DemoBattleDto(
                 toDto(battles.view(demo.battle().getId()), demo.battle(), players),
-                demo.left().getName(),
-                demo.right().getName(),
+                messages.empire(demo.left().getName()),
+                messages.empire(demo.right().getName()),
                 demo.leftPower(),
                 demo.rightPower(),
                 ADVANTAGE_PERCENT);
@@ -412,7 +423,8 @@ public class DemoBattleService {
     private int maxWeapons(Recipe recipe) {
         ShipHull hull = shipCatalog.hull(recipe.hull());
         int used = 0;
-        for (String code : new String[]{recipe.engine(), recipe.armour(), recipe.shield(), recipe.computer()}) {
+        for (String code : new String[]{recipe.engine(), recipe.armour(), recipe.shield(), recipe.computer(),
+                recipe.special()}) {
             if (code != null) {
                 used += shipCatalog.component(code).spaceOn(hull);
             }
@@ -443,7 +455,8 @@ public class DemoBattleService {
 
     private List<ShipDesignRules.Item> items(Recipe recipe, int weapons) {
         List<ShipDesignRules.Item> items = new ArrayList<>();
-        for (String code : new String[]{recipe.engine(), recipe.armour(), recipe.shield(), recipe.computer()}) {
+        for (String code : new String[]{recipe.engine(), recipe.armour(), recipe.shield(), recipe.computer(),
+                recipe.special()}) {
             if (code != null) {
                 items.add(new ShipDesignRules.Item(shipCatalog.component(code), 1));
             }

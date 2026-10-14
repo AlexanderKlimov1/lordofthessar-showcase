@@ -64,6 +64,16 @@ public enum ScannerTech {
      * корабля заменяют друг друга, а не суммируются. Ноль означает, что сканеров нет
      * вовсе: тогда о чужом присутствии известно только из разведанных систем.
      */
+    /**
+     * Дальность с поправкой на особенность галактики — field-backlog, пункт 94: в «тёмной
+     * галактике» сканеры видят вдвое ближе. Весь туман войны считается от этой дальности, поэтому
+     * особенность действует разом на карту, предупреждения об угрозах и глаза ИИ.
+     */
+    public static Integer bestRange(Set<String> technologies, String galaxyFeature) {
+        int range = bestRange(technologies);
+        return GalaxyFeature.is(galaxyFeature, GalaxyFeature.DARK) ? range / 2 : range;
+    }
+
     public static Integer bestRange(Set<String> technologies) {
         return Arrays.stream(values())
                 .filter(scanner -> technologies.contains(scanner.getCode()))

@@ -118,7 +118,7 @@ public class ThreatWarningService {
             List<FleetEntity> ownFleets = fleetRepository.findAllByOwnerPlayerId(human.getId());
             List<StarSystemEntity> posts = watchPosts(ownSystems, ownFleets, human, systems);
             Integer scanRange = ScannerTech.bestRange(context.colonyContext().technologiesByOwner()
-                    .getOrDefault(human.getId(), Set.of()));
+                    .getOrDefault(human.getId(), Set.of()), context.game().getGalaxyFeature());
             Boolean omniscient = Boolean.TRUE.equals(
                     races.getOrDefault(human.getId(), RaceEffects.NONE).omniscient());
 

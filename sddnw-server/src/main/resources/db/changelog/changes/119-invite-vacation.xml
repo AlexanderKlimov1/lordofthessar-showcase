@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Приглашение по ссылке (field-backlog, пункты 15 и 61): код у партии и отметка «пришёл по
+        приглашению» у игрока. Отпуск в сетевой партии (пункт 177): до какого мига империю ведёт ИИ.
+    -->
+    <changeSet id="119-invite-vacation" author="sddnw">
+        <addColumn tableName="game">
+            <column name="invite_code" type="varchar(16)"/>
+        </addColumn>
+        <addUniqueConstraint tableName="game" columnNames="invite_code" constraintName="uq_game_invite_code"/>
+        <addColumn tableName="player">
+            <column name="vacation_until" type="timestamp with time zone"/>
+            <column name="invited" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

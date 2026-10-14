@@ -1,11 +1,14 @@
-import { useState } from 'react';
-import type { Race, RaceTrait } from '../../api/types';
+import { useEffect, useState } from 'react';
+import type { Race, RaceTemplate, RaceTrait } from '../../api/types';
 import { useGameStore } from '../../state/gameStore';
 import { useModalEscape } from '../useModalEscape';
-import { t, useT } from '../../i18n';
+import { t, useT, type Key } from '../../i18n';
+import { gameApi } from '../../api/client';
+import { readAccount } from '../../state/session';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
 import { CustomRaceEmblem, RaceEmblem } from './RaceEmblem';
+import { hoverOnly, previewFirst } from '../touch';
 import { RacePortrait } from './RacePortrait';
 
 /**
@@ -35,15 +38,30 @@ import { RacePortrait } from './RacePortrait';
  * игрой: Земляне — деньги, наука и дипломатия, Фелиры — сильнейший залп и богатый мир.
  * Коды, а не имена: имена переводятся, коды лежат в справочнике.
  */
-const FIRST_GAME = new Set(['HUMANS', 'MRRSHAN']);
+/*
+  Первый выбор — из трёх, а не из четырнадцати (field-backlog, пункт 121): новичку три расы с
+  фразой «за что играть» — рост, наука, война. Все три без единой слабости, а стоит каждая, как и
+  всякая готовая раса MOO II 1.50, ровно 10 очков, так что «для начала» не значит «слабая».
+  Ничего не прячется — меняется порядок.
+*/
+const STARTERS: { code: string; role: 'growth' | 'science' | 'war' }[] = [
+  { code: 'TRILARIAN', role: 'growth' },
+  { code: 'HUMANS', role: 'science' },
+  { code: 'MRRSHAN', role: 'war' },
+];
+const FIRST_GAME = new Set(STARTERS.map((starter) => starter.code));
 
 export function RaceSelectScreen({
   title,
   escapeActive,
   onPick,
   onCustom,
+  onEdit,
+  onOwn,
   onClose,
 }: {
+  /** Своя раса из записи — пункты 26 и 176: конструктор с её сторонами и ценами на миг сохранения. */
+  onOwn?: (template: RaceTemplate) => void;
   /** Заголовок: экран открывается и на создание партии, и на вход в чужую. */
   title: string;
   /**
@@ -56,12 +74,43 @@ export function RaceSelectScreen({
   /** Выбрана готовая раса: в партию игрок войдёт с её набором сторон. */
   onPick: (race: Race) => void;
   onCustom: () => void;
+  /** Изменить эту расу — пункт 123: конструктор с её набором сторон. */
+  onEdit?: (race: Race) => void;
   onClose: () => void;
 }) {
   const races = useGameStore((state) => state.races);
   const design = useGameStore((state) => state.raceDesign);
   /** На какую клетку смотрит игрок; `custom` — клетка своей расы. */
   const [looking, setLooking] = useState<string | null>(null);
+  /*
+    Новичок — меньше одной доигранной партии (пункт 121): у гостя истории нет вовсе, у записи
+    она приходит с сервера. Пока не пришла — экран как для всех: порядок не прыгает у ветерана.
+  */
+  const [novice, setNovice] = useState(false);
+  useEffect(() => {
+    const session = readAccount();
+    if (!session) {
+      return;
+    }
+    if (session.account.role === 'GUEST') {
+      setNovice(true);
+      return;
+    }
+    gameApi.gameHistory().then((history) => setNovice(history.played === 0)).catch(() => undefined);
+  }, []);
+  const starters = novice
+    ? STARTERS.map((starter) => ({ ...starter, race: races.find((race) => race.code === starter.code) }))
+        .filter((starter) => starter.race !== undefined)
+    : [];
+  const rest = races.filter((race) => !starters.some((starter) => starter.code === race.code));
+  // Свои расы записи (пункты 26 и 176): строкой над сеткой — их немного, и они «мои».
+  const [own, setOwn] = useState<RaceTemplate[]>([]);
+  useEffect(() => {
+    if (onOwn && readAccount()) {
+      gameApi.raceTemplates().then(setOwn).catch(() => setOwn([]));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useModalEscape(escapeActive, onClose);
   useT();
@@ -89,8 +138,57 @@ export function RaceSelectScreen({
           Сетка портретов. Семь клеток в ряду: тринадцать рас и своя раса ложатся двумя
           ровными рядами, а на узком окне сетка сама становится теснее.
         */}
+        {onOwn && own.length > 0 ? (
+          <div className="mb-[3%]">
+            <p className="mb-1 text-13 uppercase tracking-[0.2em] text-accent">{t('race.select.own')}</p>
+            <ul className="flex flex-wrap gap-2">
+              {own.map((template) => {
+                const moved = template.free === undefined || template.savedFree === undefined
+                  || template.free === template.savedFree ? null
+                  : template.free > template.savedFree ? 'good' : 'danger';
+                return (
+                  <li key={template.id}>
+                    <button type="button"
+                            className={'border px-3 py-1 text-14 hover:bg-space-800 '
+                              + (template.refusal ? 'border-warn/60 text-warn'
+                                : moved === 'good' ? 'border-good/60 text-good'
+                                  : moved === 'danger' ? 'border-danger/60 text-danger'
+                                    : 'border-space-600 text-ink-bright')}
+                            title={template.refusal ?? undefined}
+                            onClick={() => onOwn(template)}>
+                      {template.refusal ? '⚠ ' : moved === 'good' ? '▲ ' : moved === 'danger' ? '▼ ' : ''}{template.name}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
+        {starters.length > 0 ? (
+          <>
+            <p className="mb-1 text-13 uppercase tracking-[0.2em] text-accent">{t('race.select.starters')}</p>
+            <ul className="mb-[3%] grid grid-cols-3 gap-[3%]">
+              {starters.map((starter) => (
+                <li key={starter.code}>
+                  <RaceCell
+                    name={starter.race!.name}
+                    colour={starter.race!.color}
+                    looking={looking === starter.code}
+                    onLook={() => setLooking(starter.code)}
+                    onPick={() => onPick(starter.race!)}
+                  >
+                    <RacePortrait code={starter.code} alt={starter.race!.name}
+                                  fallback={<RaceEmblem colour={starter.race!.color} order={races.indexOf(starter.race!)} />} />
+                  </RaceCell>
+                  <p className="mt-1 text-center text-14 text-lamp">{t(`race.select.starter.${starter.role}` as Key)}</p>
+                </li>
+              ))}
+            </ul>
+            <p className="mb-1 text-13 uppercase tracking-[0.2em] text-ink-dim">{t('race.select.allRaces')}</p>
+          </>
+        ) : null}
         <ul className="grid grid-cols-4 gap-[2%] sm:grid-cols-5 lg:grid-cols-7">
-          {races.map((race, order) => (
+          {rest.map((race) => ({ race, order: races.indexOf(race) })).map(({ race, order }) => (
             <li key={race.code} className="relative">
               {FIRST_GAME.has(race.code) ? (
                 <span className="pointer-events-none absolute left-1 top-1 z-10 bg-space-950/85 px-1 text-16 text-good"
@@ -124,6 +222,11 @@ export function RaceSelectScreen({
                 <CustomRaceEmblem />
               </span>
             </RaceCell>
+            {/*
+              Конструктор — не в первой партии (field-backlog, пункт 29): клетка не запрещена, но и не
+              зовёт — 53 стороны с ценами до первого хода это пиковая нагрузка в худший миг.
+            */}
+            {novice ? <p className="mt-1 text-center text-12 text-ink-faint">{t('race.custom.later')}</p> : null}
           </li>
         </ul>
 
@@ -131,7 +234,7 @@ export function RaceSelectScreen({
           Полоса сведений: та раса, на которую смотрит игрок. Высота у неё постоянная —
           иначе сетка портретов прыгала бы вверх-вниз при каждом движении мыши.
         */}
-        <div className="mt-[3%] h-[7.5rem] border border-space-700 bg-space-950/60 p-3">
+        <div className="mt-[3%] h-[10.5rem] overflow-hidden border border-space-700 bg-space-950/60 p-3">
           {looking === null ? (
             <p className="text-13 text-ink-faint">{t('race.select.lookHint')} {t('race.select.firstGame.hint')}</p>
           ) : shown ? (
@@ -139,7 +242,15 @@ export function RaceSelectScreen({
               <div className="flex items-baseline gap-3">
                 <span className="uppercase tracking-[0.2em] text-ink-bright">{shown.name}</span>
                 <span className="text-12 text-ink-dim">{shown.description}</span>
+                {/* Своя раса от готовой — пункт 123: два-три изменения вместо 53 решений. */}
+                {onEdit ? (
+                  <button type="button" className="link ml-auto shrink-0 text-13" onClick={() => onEdit(shown)}>
+                    {t('race.select.edit')}
+                  </button>
+                ) : null}
               </div>
+              {/* Предыстория — откуда раса и чего хочет (пункт 43): мир фактами, а не роликом. */}
+              {shown.lore ? <p className="mt-1 text-12 italic leading-snug text-ink-soft">{shown.lore}</p> : null}
               <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-13">
                 {shownTraits.map((trait) => (
                   <li key={trait.code} className="flex items-baseline gap-1">
@@ -200,9 +311,10 @@ function RaceCell({
     <button
       type="button"
       className="block w-full text-left"
-      onClick={onPick}
-      onMouseEnter={onLook}
-      onFocus={onLook}
+      // Касание (пункт 60): первое показывает стороны расы в полосе, второе берёт её.
+      onClick={() => previewFirst(looking, onLook, onPick)}
+      onMouseEnter={hoverOnly(onLook)}
+      onFocus={hoverOnly(onLook)}
     >
       <span
         className={

@@ -12,6 +12,8 @@ import com.sddnw.server.repository.EmpireActivityRepository;
 import com.sddnw.server.repository.PlanetBuildingRepository;
 import com.sddnw.server.repository.EmpireHistoryRepository;
 import com.sddnw.server.repository.PlayerRepository;
+import com.sddnw.server.repository.PlayerTechnologyRepository;
+import com.sddnw.server.domain.entity.PlayerTechnologyEntity;
 import com.sddnw.server.repository.StarSystemRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -53,6 +55,7 @@ public class BalanceTelemetryService {
     private final RaceTraitCatalog raceTraits;
     private final EmpireMightRules mightRules;
     private final PlanetBuildingRepository buildingRepository;
+    private final PlayerTechnologyRepository technologyRepository;
 
     public BalanceTelemetryService(GameAccess gameAccess,
                                    PlayerRepository playerRepository,
@@ -61,7 +64,8 @@ public class BalanceTelemetryService {
                                    EmpireActivityRepository activityRepository,
                                    RaceTraitCatalog raceTraits,
                                    EmpireMightRules mightRules,
-                                   PlanetBuildingRepository buildingRepository) {
+                                   PlanetBuildingRepository buildingRepository,
+                                   PlayerTechnologyRepository technologyRepository) {
         this.gameAccess = gameAccess;
         this.playerRepository = playerRepository;
         this.starSystemRepository = starSystemRepository;
@@ -70,6 +74,7 @@ public class BalanceTelemetryService {
         this.raceTraits = raceTraits;
         this.mightRules = mightRules;
         this.buildingRepository = buildingRepository;
+        this.technologyRepository = technologyRepository;
     }
 
     /**
@@ -98,10 +103,15 @@ public class BalanceTelemetryService {
         // Чем империи пользовались — п. 6 плана, «ИИ не измеряет». Счётчик один на всё:
         // бои считаются там же, где происходят, и «авто» наравне с тактическим боем.
         Map<UUID, Map<String, Integer>> used = new HashMap<>();
+        Map<UUID, Map<String, Integer>> firstTurn = new HashMap<>();
         for (EmpireActivityEntity row : activityRepository
                 .findAllByGameIdOrderByPlayerIdAscCodeAsc(gameId)) {
             used.computeIfAbsent(row.getPlayerId(), id -> new LinkedHashMap<>())
                     .put(row.getCode(), row.getTimes());
+            if (row.getFirstTurn() != null) {
+                firstTurn.computeIfAbsent(row.getPlayerId(), id -> new LinkedHashMap<>())
+                        .put(row.getCode(), row.getFirstTurn());
+            }
         }
 
         Map<UUID, List<EmpireHistoryEntity>> historyByPlayer = new HashMap<>();
@@ -109,11 +119,25 @@ public class BalanceTelemetryService {
             historyByPlayer.computeIfAbsent(row.getPlayerId(), id -> new ArrayList<>()).add(row);
         }
 
+        // Изученное с ходом — дебют империи (пункт 92). Порядок — ход, раздел, уровень, технология:
+        // разбор идёт по нему сверху вниз, и в двух прогонах одной партии он обязан совпадать.
+        Map<UUID, List<BalanceTelemetryDto.ResearchedDto>> researchedByPlayer = new HashMap<>();
+        technologyRepository.findAllByPlayerIdIn(players.stream().map(PlayerEntity::getId).toList()).stream()
+                .sorted(Comparator.comparing(PlayerTechnologyEntity::getAcquiredTurn)
+                        .thenComparing(PlayerTechnologyEntity::getCategoryCode)
+                        .thenComparing(PlayerTechnologyEntity::getLevelOrder)
+                        .thenComparing(PlayerTechnologyEntity::getOptionCode))
+                .forEach(row -> researchedByPlayer.computeIfAbsent(row.getPlayerId(), id -> new ArrayList<>())
+                        .add(new BalanceTelemetryDto.ResearchedDto(row.getAcquiredTurn(), row.getCategoryCode(),
+                                row.getLevelOrder(), row.getOptionCode())));
+
         List<BalanceTelemetryDto.EmpireTelemetryDto> empires = new ArrayList<>(players.size());
         for (PlayerEntity player : players) {
             empires.add(empire(player, players, planets, systemById,
                     used.getOrDefault(player.getId(), Map.of()),
-                    historyByPlayer.getOrDefault(player.getId(), List.of())));
+                    historyByPlayer.getOrDefault(player.getId(), List.of()),
+                    researchedByPlayer.getOrDefault(player.getId(), List.of()),
+                    firstTurn.getOrDefault(player.getId(), Map.of())));
         }
 
         PlayerEntity winner = players.stream()
@@ -174,7 +198,9 @@ public class BalanceTelemetryService {
                                                           List<PlanetEntity> planets,
                                                           Map<UUID, StarSystemEntity> systems,
                                                           Map<String, Integer> used,
-                                                          List<EmpireHistoryEntity> history) {
+                                                          List<EmpireHistoryEntity> history,
+                                                          List<BalanceTelemetryDto.ResearchedDto> researched,
+                                                          Map<String, Integer> firstTurn) {
         StarSystemEntity home = systems.get(player.getHomeSystemId());
         PlanetEntity homeworld = planets.stream()
                 .filter(planet -> Boolean.TRUE.equals(planet.getHomeworld()))
@@ -217,7 +243,12 @@ public class BalanceTelemetryService {
                 nearbyPlanets(home, planets, systems),
                 nearestRival(home, player, players, systems),
                 used,
-                rows);
+                rows,
+                researched,
+                firstTurn,
+                // Уровень игры империи (пункт 9) — по нему tools/difficulty_check.py сравнивает уровни.
+                player.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.HUMAN ? null
+                        : com.sddnw.server.domain.enums.AiSkill.of(player.getAiSkill()).name());
     }
 
     /**

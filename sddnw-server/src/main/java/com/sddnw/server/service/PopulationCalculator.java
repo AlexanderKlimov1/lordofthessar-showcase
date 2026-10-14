@@ -28,10 +28,10 @@ public class PopulationCalculator {
      * Очков исследований с одного учёного за ход — базовая выработка MOO II без
      * расовых бонусов, зданий и правительства.
      */
-    private static final int RESEARCH_POINTS_PER_SCIENTIST = 3;
+    public static final int RESEARCH_POINTS_PER_SCIENTIST = 3;
 
     /** Единиц еды, которые съедает один житель за ход. */
-    private static final int FOOD_PER_COLONIST = 1;
+    public static final int FOOD_PER_COLONIST = 1;
 
     /**
      * Множитель формулы прироста MOO II. Прирост считается в тысячах жителей, поэтому
@@ -56,10 +56,10 @@ public class PopulationCalculator {
     private static final int UNITS_PER_CREDIT = 2;
 
     /** Кредитов за недостающую единицу производства, когда стройка сделана наполовину. */
-    private static final int BUY_RATE_HALF_BUILT = 2;
+    public static final int BUY_RATE_HALF_BUILT = 2;
 
     /** То же, пока половины нет: спешка вдвое дороже — п. 10. */
-    private static final int BUY_RATE_FRESH = 4;
+    public static final int BUY_RATE_FRESH = 4;
 
     /**
      * Во сколько раз продажа постройки дешевле её цены — п. 10.
@@ -68,7 +68,7 @@ public class PopulationCalculator {
      * и у излишков, но величина своя — цена здания считается в единицах производства, а
      * не в них же за ход, и путать эти два правила не стоит.
      */
-    private static final int SELL_DIVISOR = 2;
+    public static final int SELL_DIVISOR = 2;
 
     /**
      * Сколько еды увозит один грузовой корабль за ход — п. 4.1.1.
@@ -87,7 +87,7 @@ public class PopulationCalculator {
     private static final int FREIGHTERS_PER_POPULATION = 1;
 
     /** Кредитов налога с одного жителя за ход. */
-    private static final int TAX_PER_COLONIST = 1;
+    public static final int TAX_PER_COLONIST = 1;
 
     /** Коды медицинских технологий в дереве — п. 9. */
     public static final String UNIVERSAL_ANTIDOTE = "universal-antidote";
@@ -199,7 +199,24 @@ public class PopulationCalculator {
                               BuildingEffects effects) {
         return percent((minerals.getProductionPerWorker() + effects.productionPerWorker()) * workers,
                 effects.productionPercent())
-                + cleanProduction(population, effects);
+                + cleanProduction(population, effects)
+                + roboticFactory(minerals) * effects.roboticFactories();
+    }
+
+    /**
+     * Производство роботизированного завода на этих недрах — п. 10, число MOO II: «5 PP for
+     * Ultra Poor; 8 PP for Poor; 10 PP for Abundant; 15 PP for Rich; 20 PP for Ultra Rich».
+     * Рабочих заводу не нужно, но, в отличие от прочих твёрдых прибавок, он ПАЧКАЕТ: в
+     * {@link #cleanProduction} это производство не входит.
+     */
+    public Integer roboticFactory(MineralRichness minerals) {
+        return switch (minerals) {
+            case ULTRA_POOR -> 5;
+            case POOR -> 8;
+            case AVERAGE -> 10;
+            case RICH -> 15;
+            case ULTRA_RICH -> 20;
+        };
     }
 
     /**
@@ -353,7 +370,14 @@ public class PopulationCalculator {
      * <p>
      * Новые жители сначала идут в фермеры, пока колония не кормит себя, остальные —
      * в рабочие. Убыль снимается с самого многочисленного занятия, чтобы просадка
-     * распределялась равномерно.
+     * распределялась равномерно, — <b>но фермеров не меньше, чем нужно оставшимся</b>
+     * (или чем поставил игрок, если он держал их меньше): зеркало правила прибыли.
+     * <p>
+     * Без этой оговорки сытая колония голодала от любой убыли: фермеры у неё и есть самое
+     * многочисленное занятие, и землетрясение снимало двоих из пяти. Голод уносил ещё
+     * одного — снова фермера, при равенстве он первый, — и колония человека скатывалась
+     * в голодную спираль (ИИ расставляет жителей сам и этого не замечал). Найдено
+     * 03.10.2026: родной мир прогона за полсотни ходов сох с десяти жителей до семи.
      */
     public PopulationJobs absorb(PlanetClimate climate, Integer population, PopulationJobs jobs) {
         int delta = population - jobs.total();
@@ -370,12 +394,18 @@ public class PopulationCalculator {
         }
 
         int[] counts = {jobs.farmers(), jobs.workers(), jobs.scientists()};
+        int farmersKept = Math.min(jobs.farmers(), farmersToFeed(climate, population));
         for (int i = 0; i < -delta; i++) {
-            int largest = 0;
-            for (int job = 1; job < counts.length; job++) {
-                if (counts[job] > counts[largest]) {
+            int largest = -1;
+            for (int job = 0; job < counts.length; job++) {
+                boolean spare = job == 0 ? counts[0] > farmersKept : counts[job] > 0;
+                if (spare && (largest < 0 || counts[job] > counts[largest])) {
                     largest = job;
                 }
+            }
+            // Снять больше некого, кроме нужных фермеров: колония меньше, чем им нужно кормить.
+            if (largest < 0) {
+                largest = 0;
             }
             counts[largest] = Math.max(0, counts[largest] - 1);
         }

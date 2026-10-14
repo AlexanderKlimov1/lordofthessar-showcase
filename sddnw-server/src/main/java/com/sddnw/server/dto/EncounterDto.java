@@ -33,6 +33,22 @@ public record EncounterDto(
         Integer yourInitiative,
         Integer opponentInitiative,
         UUID battleId,
-        String outcome
+        String outcome,
+        /**
+         * Встреча у беззащитной колонии флота с бомбами — пункт 25: решение «бомбить или
+         * уйти», как диалог оригинала «Select Combat at …: BOMBARD / CANCEL».
+         */
+        Boolean bombard,
+        /**
+         * Прогноз встречи — field-backlog, пункты 84 и 153: своя сила (флот и платформы обороны
+         * своих колоний системы) — всегда точно.
+         */
+        Integer yourPower,
+        /** Сила соперника — только когда все технологии на его кораблях увидены; пусто — не видна. */
+        Integer opponentPower,
+        /** Исход словами: LIKELY_WIN, UNCLEAR, LIKELY_LOSS или UNKNOWN ({@code EncounterForecastRules}). */
+        String forecast,
+        /** Сколько технологий на кораблях соперника ещё не увидено — то, что прогноз назвал неизвестным. */
+        Integer unseenTechnologies
 ) {
 }

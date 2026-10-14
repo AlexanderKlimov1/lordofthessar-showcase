@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        09.10.2026, field-backlog: срок итога по могуществу партией (пункт 24), тихая галактика
+        (пункт 186), досрочный итог при огромном отрыве (пункт 80) и ход решённости в записи
+        балансового прогона (пункт 155).
+    -->
+    <changeSet id="141-evening-quiet-decided" author="sddnw">
+        <addColumn tableName="game">
+            <column name="might_turn" type="integer"/>
+            <column name="peaceful_ai" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="might_lead_player_id" type="uuid"/>
+            <column name="might_lead_since_turn" type="integer"/>
+        </addColumn>
+        <addColumn tableName="balance_run">
+            <column name="decided_percent" type="integer"/>
+            <column name="tail_turns" type="integer"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

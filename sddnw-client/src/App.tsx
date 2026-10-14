@@ -1,18 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMachine } from '@xstate/react';
 import type { Council } from './api/types';
-import { gameApi } from './api/client';
+import { gameApi, setFaultGame } from './api/client';
 import { appMachine } from './state/appMachine';
 import { useGameStore } from './state/gameStore';
 import { PhaserGame } from './game/PhaserGame';
+import { StarHoverCard } from './ui/StarHoverCard';
 import { MainMenu } from './ui/MainMenu';
 import { Lobby } from './ui/Lobby';
 import { Hud } from './ui/Hud';
 import { GalaxyHotkeys } from './ui/GalaxyHotkeys';
 import { LoadGameDialog } from './ui/LoadGameDialog';
-import { PreferencesScreen } from './ui/preferences/PreferencesScreen';
+import { MentorScreen } from './ui/mentor/MentorScreen';
+import { ProfileScreen, type Section as ProfileSection } from './ui/profile/ProfileScreen';
 import { ResearchScreen } from './ui/research/ResearchScreen';
 import { asksForNextTarget } from './ui/research/researchRules';
+import { opensItself } from './state/windows';
+import { markSceneSeen, sceneSeen } from './state/scenes';
+import { StewardDialog } from './ui/away/StewardDialog';
+import { ProposalsDialog } from './ui/diplomacy/ProposalsDialog';
+import { ArtifactChoiceDialog } from './ui/story/ArtifactChoiceDialog';
+import { TurnNotifier } from './ui/notify/TurnNotifier';
+import { SignalToast } from './ui/signals/SignalToast';
+import { SessionSummary } from './ui/away/SessionSummary';
+import { endSession, recordReport, sessionOf } from './state/sessionLog';
 import { AudienceScreen } from './ui/diplomacy/AudienceScreen';
 import { PlanetsScreen } from './ui/planets/PlanetsScreen';
 import { LeadersScreen } from './ui/leaders/LeadersScreen';
@@ -27,6 +38,8 @@ import { FleetTargetingHint } from './ui/FleetTargetingHint';
 import { FleetOperationsScreen } from './ui/fleet/FleetOperationsScreen';
 import { FleetInFlightWindow } from './ui/fleet/FleetInFlightWindow';
 import { FleetLandingDialog } from './ui/fleet/FleetLandingDialog';
+import { ColonizeOfferMenu } from './ui/fleet/ColonizeOfferMenu';
+import { MutationDialog } from './ui/race/MutationDialog';
 import { canColonizeHere } from './ui/fleet/fleetShips';
 import { readRevealGalaxy } from './state/settings';
 import { TurnResults, exploredSystemId, worthShowing } from './ui/TurnResults';
@@ -35,12 +48,27 @@ import { ColoniesScreen } from './ui/colonies/ColoniesScreen';
 import { ColonyScreen } from './ui/system/ColonyScreen';
 import { SystemScreen } from './ui/system/SystemScreen';
 import { CouncilScreen } from './ui/council/CouncilScreen';
+import { EndingScreen } from './ui/ending/EndingScreen';
+import { AwaySummary, awayToShow } from './ui/away/AwaySummary';
 import { TechStolenScene, stolenTechnology, type Theft } from './ui/espionage/TechStolenScene';
 import { StoryScene } from './ui/story/StoryScene';
 import { storiesOf } from './ui/story/storyEvents';
+import { splitInfoWindows, type Deferred } from './ui/windowChain';
+import { DeferredWindowsBar } from './ui/DeferredWindowsBar';
 import { Splash } from './ui/Splash';
 import { AuthScreen } from './ui/auth/AuthScreen';
+import { GuestRegisterDialog } from './ui/auth/GuestRegisterDialog';
+import { ProblemReportDialog } from './ui/feedback/ProblemReportDialog';
+import { NoticesDialog, useNoticesBusy } from './ui/NoticesDialog';
+import { nextGameFromEnding, readAccount } from './state/session';
+import { EveningIntro, inviteTonight } from './ui/brand/EveningIntro';
 import { useT } from './i18n';
+import { useMusicMood } from './audio/music';
+import { funnelStep } from './state/funnel';
+import { pendingInvite } from './state/invite';
+import { InviteDialog } from './ui/invite/InviteDialog';
+import { RaceLinkDialog } from './ui/race/RaceLinkDialog';
+import { pendingRaceLink } from './state/raceLink';
 
 /**
  * Корневой экран.
@@ -71,12 +99,37 @@ export function App() {
     снятую до боя.
   */
   const [exploredPendingId, setExploredPendingId] = useState<string | null>(null);
+  // Окна для сведения, отложенные полоской над картой (field-backlog, пункт 14).
+  const [deferredWindows, setDeferredWindows] = useState<Deferred[]>([]);
   /*
     Выборы Высшего совета — п. 3. Сцена показывается по горячим следам хода, на котором
     совет собрался: голосование уже посчитано и записано на сервере, а экран просит его
     отдельным запросом — в карте его нет и быть не может.
   */
   const [council, setCouncil] = useState<Council | null>(null);
+  /** Совет уже видели целиком — открыть сразу итогом (пункт 163). */
+  const [councilBrief, setCouncilBrief] = useState(false);
+  /*
+    Сцена конца партии — field-backlog, пункт 33: открывается сама, когда в итогах хода есть
+    VICTORY, и ещё раз из меню «Игра». Держится идентификатор партии: сцена сама спрашивает
+    итоги у сервера.
+  */
+  const [endingGameId, setEndingGameId] = useState<string | null>(null);
+  /*
+    Признавший поражение в партии с людьми (пункт 81) из неё выходит: партия идёт дальше без
+    него, и закрытая сцена конца ведёт в меню, а не обратно на карту чужой теперь империи.
+  */
+  const [leaveAfterEnding, setLeaveAfterEnding] = useState(false);
+  /*
+    Сводка «пока вас не было» — field-backlog, пункт 108: решается один раз на вход в партию,
+    по времени последнего действия своей империи. Закрытая — не возвращается до следующей
+    отлучки (`awayToShow` помнит показанную).
+  */
+  const [awayClosed, setAwayClosed] = useState<string | null>(null);
+  // Сводка сеанса перед выходом из партии — пункт 35; пока она открыта, выход ждёт её.
+  const [sessionEnd, setSessionEnd] = useState(false);
+  // Сводка ждёт окна объявлений: окна за входом — по одному (пункт 108).
+  const noticesBusy = useNoticesBusy();
   /*
     Открытый совет, который ждёт голоса ЭТОГО игрока — п. 3. Бюллетень можно отложить
     («решить позже») или потерять перезагрузкой страницы, а совет всё равно подведёт итог в
@@ -89,6 +142,7 @@ export function App() {
   */
   const [theft, setTheft] = useState<Theft | null>(null);
   const setOpenedSystem = useGameStore((store) => store.setOpenedSystem);
+  const setSettlerFleet = useGameStore((store) => store.setSettlerFleet);
   const encounters = useGameStore((store) => store.encounters);
   const battle = useGameStore((store) => store.battle);
   const setBattle = useGameStore((store) => store.setBattle);
@@ -103,6 +157,8 @@ export function App() {
   const stories = useGameStore((store) => store.stories);
   const pushStories = useGameStore((store) => store.pushStories);
   const shiftStory = useGameStore((store) => store.shiftStory);
+  const setLobby = useGameStore((store) => store.setLobby);
+  const setError = useGameStore((store) => store.setError);
   const players = useGameStore((store) => store.players);
   const flightFleetId = flightFleet?.fleetId ?? null;
   const setFlightFleet = useGameStore((store) => store.setFlightFleet);
@@ -133,7 +189,14 @@ export function App() {
    * (`z-10`), и экран, нарисованный из неё, уходил бы под правую панель — номер слоя
    * считается внутри своего слоя, а не поперёк всех.
    */
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  // Раздел, на котором открыт личный кабинет из меню «Игра»; `null` — закрыт.
+  const [preferencesOpen, setPreferencesOpen] = useState<ProfileSection | null>(null);
+  /** Окно регистрации гостя из меню «Игра» — field-backlog, пункт 1. */
+  const [registerOpen, setRegisterOpen] = useState(false);
+  /** Окно «Сообщить о проблеме» из меню «Игра» — field-backlog, пункт 157. */
+  const [reportOpen, setReportOpen] = useState(false);
+  /** Заставка вечера — раз в вечер, до всего прочего (`EveningIntro`). */
+  const [evening, setEvening] = useState(inviteTonight);
 
   /**
    * Открыт ли список сохранений — п. 3. Зовут его из меню «Игра», а рисуется он ЗДЕСЬ, и
@@ -141,6 +204,11 @@ export function App() {
    * из неё, уходило под правую панель, хотя у самого стоит `z-50`.
    */
   const [loadOpen, setLoadOpen] = useState(false);
+  // Империи учеников — наставник, пункт 184; зовёт меню «Игра».
+  const [mentorOpen, setMentorOpen] = useState(false);
+  /** Непринятое приглашение в партию друга (пункт 15): окно над меню, пока не принято или не отклонено. */
+  const [inviteCode, setInviteCode] = useState<string | null>(() => pendingInvite());
+  const [linkedRace, setLinkedRace] = useState(() => pendingRaceLink());
 
   /*
     Долетевший или погибший флот закрывает своё окно «флот в пути» и забывает, что оно было
@@ -154,6 +222,39 @@ export function App() {
       setFlightFleet(null);
     }
   }, [flightFleetId, fleet, setFlightFleet]);
+
+  /*
+    ВОРОНКА НОВИЧКА — field-backlog, пункт 2: экран, ход партии и итоги хода уходят в
+    журнал шагами. Последний шаг посетителя и есть место ухода, поэтому пишется всё, что
+    меняет «где человек сейчас», и ничего сверх: шаги шлются без ожидания и отказов.
+    Экран — верхнее состояние машины экранов (вход, меню, окно новой игры, партия).
+  */
+  const screen = typeof state.value === 'string' ? state.value : Object.keys(state.value)[0];
+  useEffect(() => {
+    funnelStep(`screen.${screen.toLowerCase()}`, { gameId: game?.id, turn: game?.turn });
+    // Ход и партия здесь подпись, а не повод: шаг пишется на смену экрана.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
+  useEffect(() => {
+    if (game?.id && game.status === 'IN_PROGRESS') {
+      funnelStep('game.turn', { gameId: game.id, turn: game.turn });
+    }
+  }, [game?.id, game?.status, game?.turn]);
+  // Сбой сервера называет ход последнего автосохранения ЭТОЙ партии — field-backlog, пункт 156.
+  useEffect(() => {
+    setFaultGame(game?.id ?? null);
+  }, [game?.id]);
+  useEffect(() => {
+    if (turnReport && game?.id) {
+      // Коды событий без повторов — «что случилось перед уходом» без текста на языке игрока.
+      const codes = [...new Set(turnReport.events.map((event) => event.code))].join(',');
+      funnelStep('turn.report', { gameId: game.id, turn: turnReport.turn, detail: codes });
+      // Сеанс копит отчёты ходов к сводке при выходе (field-backlog, пункт 35).
+      recordReport(game.id, turnReport, (map?.systems ?? []).flatMap((system) => system.planets)
+        .filter((planet) => planet.colony && planet.ownerPlayerId === credentials?.playerId).length);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turnReport?.turn]);
 
   /*
     Бой мог начать соперник: тактическая сцена живёт на сервере, и вторая сторона узнаёт
@@ -284,6 +385,25 @@ export function App() {
 
   const { t } = useT();
 
+  /*
+    Настроение музыки следует за сценой: бой и совет — свои, вся прочая партия — карта, а
+    всё до партии — меню. Решается здесь, потому что только здесь видно, какое окно сверху.
+  */
+  useMusicMood(
+    !state.matches('inGame') ? 'menu'
+      : activeBattle || battle ? 'battle'
+        : council ? 'council'
+          : 'galaxy',
+  );
+
+  /*
+    Заставка вечера стоит ПЕРЕД любым экраном, но машину экранов не держит: подключение и вход
+    идут за ней своим ходом, и закрывшему её игроку ждать уже нечего.
+  */
+  if (evening) {
+    return <EveningIntro onDone={() => setEvening(false)} />;
+  }
+
   if (state.matches('connecting')) {
     return <Splash title={t('splash.connecting')} hint={t('splash.connecting.hint')} />;
   }
@@ -309,17 +429,22 @@ export function App() {
     return <AuthScreen onAuthorized={() => send({ type: 'AUTHORIZED' })} />;
   }
 
-  if (state.matches('restoring')) {
+  // Поиск своей последней партии (пункт 194) — та же заставка, что и возврат в партию: для
+  // игрока это одно и то же «возвращаемся».
+  if (state.matches('restoring') || state.matches('resuming')) {
     return <Splash title={t('splash.restoring')} hint={t('splash.restoring.hint')} />;
   }
 
   if (state.matches('menu')) {
     return (
+      <>
       <MainMenu
         onCreate={(payload) => send({ type: 'CREATE_GAME', ...payload })}
         onJoin={(payload) => send({ type: 'JOIN_GAME', ...payload })}
+        onQuickMatch={(playerName) => send({ type: 'QUICK_MATCH', playerName })}
+        onRematch={(gameId) => send({ type: 'REMATCH', gameId })}
         onRefresh={() => send({ type: 'REFRESH_GAMES' })}
-        onLoadSave={(saveId) => send({ type: 'LOAD_SAVE', saveId })}
+        onLoadSave={(saveId, file) => send({ type: 'LOAD_SAVE', saveId, file })}
         onRejoin={(gameId) => send({ type: 'REJOIN_GAME', gameId })}
         onSignOut={() => send({ type: 'SIGN_OUT' })}
         // Ввод прошлой попытки: сюда возвращает и неудачное создание партии, и выход
@@ -336,8 +461,33 @@ export function App() {
           wardenholdVictory: state.context.wardenholdVictory,
           mightVictory: state.context.mightVictory,
           turnSeconds: state.context.turnSeconds,
+          spectators: state.context.spectators,
+          inviteOnly: state.context.inviteOnly,
+          mightTurn: state.context.mightTurn,
+          peacefulAi: state.context.peacefulAi,
+          galaxyFeature: state.context.galaxyFeature,
+          aiSkill: state.context.aiSkill,
         }}
       />
+      {/* Объявления об изменениях (field-backlog, пункт 161) — в меню и в партии. */}
+      <NoticesDialog signedIn={readAccount() !== null} />
+      {/*
+        Приглашение в партию друга (пункты 15 и 61): пришедший по ссылке после входа видит, куда
+        его позвали, и входит одним нажатием — дальше тем же путём, что возврат в свою партию.
+      */}
+      {inviteCode ? (
+        <InviteDialog
+          code={inviteCode}
+          onJoined={(gameId) => {
+            setInviteCode(null);
+            send({ type: 'REJOIN_GAME', gameId });
+          }}
+          onClose={() => setInviteCode(null)}
+        />
+      ) : null}
+      {/* «Сыграй моей расой» — пункт 17: раса друга по ссылке, после приглашения, если оно есть. */}
+      {linkedRace && !inviteCode ? <RaceLinkDialog race={linkedRace} onClose={() => setLinkedRace(null)} /> : null}
+      </>
     );
   }
 
@@ -345,7 +495,7 @@ export function App() {
     return <Splash title={t('splash.creating')} />;
   }
 
-  if (state.matches('joiningGame')) {
+  if (state.matches('joiningGame') || state.matches('quickMatching') || state.matches('rematching')) {
     return <Splash title={t('splash.joining')} />;
   }
 
@@ -389,32 +539,78 @@ export function App() {
   */
   // Планета сцены колонии — из карты: по ней рисуется снимок (backlog-promo, пункт 10).
   const shownStory = stories[0];
-  const storyPlanet = shownStory?.kind === 'colony' && shownStory.planetId
+  const storyPlanet = (shownStory?.kind === 'colony' || shownStory?.kind === 'find') && shownStory.planetId
     ? map?.systems.flatMap((system) => system.planets).find((one) => one.id === shownStory.planetId)
     : undefined;
+
+  // Открыть окно для сведения — сразу после итогов или кнопкой полоски «отложено» (пункт 14).
+  const openDeferred = (one: Deferred) => {
+    if (one.kind === 'story') {
+      pushStories([one.story]);
+    } else if (one.kind === 'theft') {
+      setTheft(one.theft);
+    } else {
+      setExploredPendingId(one.systemId);
+    }
+  };
 
   const closeResults = (turn: number) => {
     setSeenResultsTurn(turn);
 
     // Экран разведанной системы откроется сам, когда закроется всё, что идёт впереди
     // него, — бой с чудищем в первую очередь (см. эффект выше).
+    // Окна, которые открываются сами, игрок вправе приглушить (field-backlog, пункт 164):
+    // строка итогов остаётся, а открыть систему, науку и сцены можно обычным путём.
+    // Окна ДЛЯ СВЕДЕНИЯ (сцены, кража, разведанная система) собираются кандидатами: само откроется
+    // одно, прочие встанут полоской «отложено» (field-backlog, пункт 14). Решения — наука, совет,
+    // бой — открываются как прежде.
+    const candidates: Deferred[] = [];
     const exploredId = exploredSystemId(turnReport);
-    if (exploredId && !openedSystem) {
-      setExploredPendingId(exploredId);
+    if (exploredId && !openedSystem && opensItself('explored')) {
+      candidates.push({ kind: 'explored', systemId: exploredId,
+        name: map?.systems.find((system) => system.id === exploredId)?.name ?? '' });
     }
 
-    if (asksForNextTarget(researchTree, research, turnReport)) {
+    if (asksForNextTarget(researchTree, research, turnReport) && opensItself('research')) {
       setOverlay('research');
     }
 
     // Кража технологии — п. 13: сцена говорит, ЧТО именно принёс агент; по названию
     // технологии этого не вспомнить, а искать её в дереве после каждой кражи — плохой обмен.
-    setTheft(stolenTechnology(turnReport));
+    // Первая кража — сценой, дальше — строкой итогов с «показать сцену» (field-backlog, пункт 163).
+    const stolen = opensItself('theft') ? stolenTechnology(turnReport) : null;
+    setTheft(null);
+    if (stolen && !sceneSeen('theft')) {
+      candidates.push({ kind: 'theft', theft: stolen });
+    }
+    if (stolen) {
+      markSceneSeen('theft');
+    }
 
     // Редкие события — сценой, а не строкой (backlog-promo, пункт 10): посол со знакомством
     // или войной, отнятая или отбитая колония, наследие Стражей. Встают в очередь за советом
     // и кражей и показываются по одной.
-    pushStories(storiesOf(turnReport, players, credentials?.playerId));
+    if (opensItself('stories')) {
+      // Посол — сценой в первый раз (знакомство и война порознь), дальше — строкой итогов с
+      // «показать сцену» (пункт 163). Колония, наследие и находки остаются сценой всегда.
+      const fresh = storiesOf(turnReport, players, credentials?.playerId).filter((story) =>
+        (story.kind !== 'contact' && story.kind !== 'war') || !sceneSeen(story.kind));
+      fresh.forEach((story) => {
+        if (story.kind === 'contact' || story.kind === 'war') {
+          markSceneSeen(story.kind);
+        }
+        candidates.push({ kind: 'story', story });
+      });
+    }
+    const chain = splitInfoWindows(candidates);
+    chain.open.forEach(openDeferred);
+    setDeferredWindows(chain.deferred);
+
+    // Партия кончилась — сцена конца встаёт ПОСЛЕДНЕЙ в очередь окон: совет, который её
+    // решил, рассказывает о себе первым (field-backlog, пункт 33).
+    if (turnReport?.events.some((event) => event.code === 'VICTORY') && game) {
+      setEndingGameId(game.id);
+    }
 
     // Совет собрался — это главная новость хода, и о ней рассказывают сценой, а не
     // строкой отчёта (п. 3).
@@ -422,7 +618,14 @@ export function App() {
       gameApi
         .getCouncil(game.id, credentials.accessToken)
         .then((session) => {
-          setCouncil(session ?? null);
+          // Приглушённая сцена совета (пункт 164) всё же открывается, когда в ней есть решение —
+          // отказ подчиниться; голос ждёт напоминанием над картой (`ballot`).
+          setCouncil(opensItself('council') || session?.canRefuse ? session ?? null : null);
+          // Первый совет — голоса по одному, дальше — сразу итог (пункт 163).
+          setCouncilBrief(sceneSeen('council'));
+          if (session && !session.open) {
+            markSceneSeen('council');
+          }
           setBallot(awaitsMyVote(session) ? session : null);
         })
         // Молча: о самом голосовании игрок уже прочёл в итогах хода, и отказ в сцене —
@@ -438,6 +641,9 @@ export function App() {
     колония и всё остальное окно открывают.
   */
   const resultsOpen = resultsPending;
+  const selfLastAction = players.find((player) => player.id === credentials?.playerId)?.lastActionAt;
+  const awayShown = game?.status === 'IN_PROGRESS' && selfLastAction && awayClosed !== selfLastAction
+    && awayToShow(game.id, selfLastAction) ? selfLastAction : null;
   // Встреча, где ход решать этому игроку: остальные ждут соперника и окна не требуют.
   const myEncounter = encounters.find((encounter) => encounter.yourTurn) ?? null;
   /*
@@ -460,10 +666,29 @@ export function App() {
   return (
     <div className="relative h-full w-full overflow-hidden">
       <PhaserGame />
+      {/* Неразведанная звезда под курсором — что известно и как узнать (field-backlog, пункт 133). */}
+      <StarHoverCard />
       <Hud
-        onLeave={() => send({ type: 'LEAVE' })}
+        onLeave={() => {
+          // За сеанс прошёл хоть один ход — сперва сводка, потом выход (пункт 35).
+          if (sessionOf(game?.id) && game?.status === 'IN_PROGRESS') {
+            setSessionEnd(true);
+            return;
+          }
+          endSession();
+          send({ type: 'LEAVE' });
+        }}
         onLoad={() => setLoadOpen(true)}
-        onPreferences={() => setPreferencesOpen(true)}
+        onStudents={() => setMentorOpen(true)}
+        onPreferences={(section) => setPreferencesOpen(section ?? 'account')}
+        onRegister={() => setRegisterOpen(true)}
+        onReport={() => setReportOpen(true)}
+        onEnding={() => game && setEndingGameId(game.id)}
+        onConceded={(details) => {
+          setLobby(details.game, details.players);
+          setLeaveAfterEnding(details.game.status !== 'FINISHED');
+          setEndingGameId(details.game.id);
+        }}
       />
       <SidePanel
         onEndTurn={() => send({ type: 'END_TURN' })}
@@ -475,6 +700,10 @@ export function App() {
         условию, то есть жил бы и на входе, и в меню, и в лобби, а этот компонент попросту не
         существует, пока карта не открыта. Рисовать ему нечего.
       */}
+      {/* Зов браузера в сетевой партии, пока вкладка не на виду, — пункт 22. */}
+      <TurnNotifier />
+      {/* Пришедший короткий знак — строкой над картой, пункт 183. */}
+      <SignalToast />
       <GalaxyHotkeys
         endingTurn={state.matches({ inGame: 'endingTurn' })}
         onEndTurn={() => send({ type: 'END_TURN' })}
@@ -495,6 +724,17 @@ export function App() {
         а нажатое поверх итогов оно открывало бы вторую модалку под первой — и Esc закрывал
         бы не то окно.
       */}
+      {/* Отложенные окна для сведения — пункт 14: открываются кнопкой, когда игроку удобно. */}
+      {deferredWindows.length > 0 && !resultsOpen && !council && !theft && stories.length === 0 && !openedSystem ? (
+        <DeferredWindowsBar
+          items={deferredWindows}
+          onOpen={(one) => {
+            setDeferredWindows((list) => list.filter((other) => other !== one));
+            openDeferred(one);
+          }}
+          onDismiss={() => setDeferredWindows([])}
+        />
+      ) : null}
       {ballot && !council && !resultsOpen ? (
         <button
           type="button"
@@ -507,6 +747,7 @@ export function App() {
       {council ? (
         <CouncilScreen
           council={council}
+          brief={councilBrief}
           onClose={() => setCouncil(null)}
           onVoted={(session) => setBallot(awaitsMyVote(session) ? session : null)}
         />
@@ -516,10 +757,86 @@ export function App() {
         <StoryScene
           story={stories[0]}
           planet={storyPlanet}
+          // Поражение — не конец (пункт 8): гостю, у которого отняли родной мир, — новая гостевая
+          // партия одной кнопкой. Родной мир узнаётся по системе: флаг родного мира захват снимает.
+          onNewGuestGame={readAccount()?.account.role === 'GUEST' && shownStory?.kind === 'colony'
+            && shownStory.captured && !shownStory.attacker
+            && map?.systems.find((system) => system.planets.some((one) => one.id === shownStory.planetId))?.id
+              === players.find((player) => player.id === credentials?.playerId)?.homeSystemId
+            ? () => {
+              shiftStory();
+              nextGameFromEnding(true);
+              send({ type: 'LEAVE' });
+            }
+            : undefined}
           tree={researchTree}
           onClose={shiftStory}
         />
+      ) : awayShown && !resultsOpen && !endingGameId && !noticesBusy ? (
+        <AwaySummary lastActionAt={awayShown} onClose={() => setAwayClosed(awayShown)} />
+      ) : endingGameId && !resultsOpen ? (
+        <EndingScreen
+          gameId={endingGameId}
+          onClose={() => {
+            setEndingGameId(null);
+            if (leaveAfterEnding) {
+              setLeaveAfterEnding(false);
+              send({ type: 'LEAVE' });
+            }
+          }}
+          onRematch={() => {
+            // Тем же составом — пункт 149: из партии в меню, а оттуда в лобби новой.
+            const finished = endingGameId;
+            setEndingGameId(null);
+            setLeaveAfterEnding(false);
+            send({ type: 'LEAVE' });
+            send({ type: 'REMATCH', gameId: finished });
+          }}
+          onNextGame={() => {
+            setEndingGameId(null);
+            setLeaveAfterEnding(false);
+            nextGameFromEnding(readAccount()?.account.role === 'GUEST');
+            send({ type: 'LEAVE' });
+          }}
+          onPlayOn={game && credentials && game.id === endingGameId && game.status === 'FINISHED'
+            && ['WARDENHOLD', 'COUNCIL', 'MIGHT'].includes(game.victoryKind ?? '')
+            ? () => {
+              // «Играть дальше» — пункт 131: партия снова идёт, а победа остаётся записанной.
+              gameApi.playOn(game.id, credentials.accessToken)
+                .then((details) => {
+                  setLobby(details.game, details.players);
+                  setEndingGameId(null);
+                  setLeaveAfterEnding(false);
+                })
+                .catch((failure: Error) => setError(failure.message));
+            }
+            : undefined}
+        />
       ) : null}
+      {sessionEnd ? (
+        <SessionSummary
+          onClose={() => {
+            setSessionEnd(false);
+            endSession();
+            send({ type: 'LEAVE' });
+          }}
+        />
+      ) : null}
+      {/* Что ИИ сделал за вас — пункт 112: после прочих окон хода, по одному. */}
+      <StewardDialog
+        blocked={resultsOpen || !!council || !!theft || stories.length > 0 || !!awayShown
+          || !!endingGameId || noticesBusy}
+      />
+      {/* Наследие ушедших на выбор — БП 34: после прочих окон хода. */}
+      <ArtifactChoiceDialog
+        blocked={resultsOpen || !!council || !!theft || stories.length > 0 || !!awayShown
+          || !!endingGameId || noticesBusy}
+      />
+      {/* Предложения, ждущие ответа человека, — пункт 182: после прочих окон хода. */}
+      <ProposalsDialog
+        blocked={resultsOpen || !!council || !!theft || stories.length > 0 || !!awayShown
+          || !!endingGameId || noticesBusy}
+      />
       <SystemScreen />
       {/* Экран колонии ложится поверх экрана системы и списка колоний — п. 4.1. */}
       <ColonyScreen />
@@ -543,7 +860,48 @@ export function App() {
         Иначе два модальных окна спорили бы за Esc — см. useModalEscape.
       */}
       {resultsOpen && turnReport ? (
-        <TurnResults report={turnReport} onClose={() => closeResults(turnReport.turn)} />
+        <TurnResults
+          report={turnReport}
+          onClose={() => closeResults(turnReport.turn)}
+          onReplay={(scene) => {
+            // «Показать сцену» (пункт 163): итоги закрываются как обычно, сцена встаёт следом.
+            closeResults(turnReport.turn);
+            if (scene.kind === 'story') {
+              pushStories([scene.story]);
+            } else if (scene.kind === 'theft') {
+              setTheft(stolenTechnology(turnReport));
+            } else if (game && credentials) {
+              gameApi.getCouncil(game.id, credentials.accessToken).then((session) => {
+                setCouncilBrief(false);
+                setCouncil(session ?? null);
+              }).catch(() => undefined);
+            }
+          }}
+        />
+      ) : null}
+      {/*
+        Прилёт колониального корабля — меню «Колонизировать планету / Отмена» (12.10.2026,
+        решение хозяина проекта): первый пункт открывает экран системы, и колонию основывает
+        щелчок по свободной планете (`settlerFleetId`, `SystemScreen`). Систему открываем
+        после выбора ожидания: открытие системы его не снимает, а закрытие — снимает. Стоит
+        в разметке РАНЬШЕ окна встречи: встреча флотов требует решения, и при равном слое
+        выше лежит тот, кто позже, — меню ждёт под ней.
+      */}
+      {landing?.offer && landingFleet && landingSystem && !resultsOpen && !activeBattle ? (
+        <ColonizeOfferMenu
+          systemName={landingSystem.name ?? t('fleetOps.unexploredStar')}
+          onClose={() => setLanding(null)}
+          onColonize={() => {
+            setLanding(null);
+            setOpenedSystem(landingSystem);
+            setSettlerFleet(landingFleet.id);
+          }}
+        />
+      ) : null}
+      {/* Эволюционная мутация (п. 7): очки ждут ответа своего игрока — окно после итогов и боёв. */}
+      {!resultsOpen && !battle && !activeBattle && !myEncounter
+        && (players.find((player) => player.id === credentials?.playerId)?.mutationPicks ?? 0) > 0 ? (
+        <MutationDialog onDone={() => undefined} />
       ) : null}
       {!resultsOpen && !battle && !activeBattle && myEncounter ? (
         <EncounterDialog key={myEncounter.id} encounter={myEncounter} />
@@ -588,7 +946,7 @@ export function App() {
             : undefined}
         />
       ) : null}
-      {landing && landingFleet && landingSystem && game && credentials && !resultsOpen && !activeBattle ? (
+      {landing && !landing.offer && landingFleet && landingSystem && game && credentials && !resultsOpen && !activeBattle ? (
         <FleetLandingDialog
           fleet={landingFleet}
           system={landingSystem}
@@ -612,7 +970,11 @@ export function App() {
           }}
         />
       ) : null}
-      {orderedFleet && fleetOrder ? (
+      {/*
+        Окно подтверждения — только приказу, отданному мимо окна флота (с клавиатуры): при
+        открытом окне отбор кораблей и отправка живут в нём самом, как в оригинале.
+      */}
+      {orderedFleet && fleetOrder && fleetOrder.fleetId !== flyingFleet?.id ? (
         <FleetDialog
           fleet={orderedFleet}
           targetSystemId={fleetOrder.targetSystemId}
@@ -624,7 +986,16 @@ export function App() {
         Настройки игрока — п. 11.1: раскладка горячих клавиш. Экран поверх всего, потому
         что он модальный, и ОДИН на оба входа — из меню «Игра» и из главного меню.
       */}
-      {preferencesOpen ? <PreferencesScreen onClose={() => setPreferencesOpen(false)} /> : null}
+      {preferencesOpen ? <ProfileScreen initial={preferencesOpen} onClose={() => setPreferencesOpen(null)} /> : null}
+      {registerOpen ? <GuestRegisterDialog onClose={() => setRegisterOpen(false)} /> : null}
+      {/* Объявления об изменениях — один раз за открытие страницы, когда игрок уже вошёл (пункт 161). */}
+      <NoticesDialog signedIn={readAccount() !== null} />
+      {reportOpen ? (
+        <ProblemReportDialog gameId={game?.id} turn={game?.turn} screen="game"
+                             onClose={() => setReportOpen(false)} />
+      ) : null}
+
+      {mentorOpen ? <MentorScreen onClose={() => setMentorOpen(false)} /> : null}
 
       {/* Список сохранений — п. 3: окно поверх карты, как и всё прочее модальное. */}
       {loadOpen ? (
@@ -632,6 +1003,10 @@ export function App() {
           onLoad={(saveId) => {
             setLoadOpen(false);
             send({ type: 'LOAD_SAVE', saveId });
+          }}
+          onImport={(content) => {
+            setLoadOpen(false);
+            send({ type: 'LOAD_SAVE', saveId: '', file: content });
           }}
           onClose={() => setLoadOpen(false)}
         />

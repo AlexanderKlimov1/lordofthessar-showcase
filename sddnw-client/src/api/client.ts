@@ -1,4 +1,8 @@
+import { beginAction, endAction } from '../state/pending';
 import type {
+  LiveStats,
+  MutationOption,
+  ModSet,
   Account,
   AccountSession,
   AccountSummary,
@@ -9,8 +13,19 @@ import type {
   GameDetails,
   GameEvent,
   GameSave,
+  RefusalCount,
+  InvitePreview,
+  FeedbackLiked,
+  GameFeedback,
+  VictoryClaim,
+  ProblemReport,
+  FounderPage,
+  Notice,
+  ProblemAnswer,
+  ProblemAnswerKind,
   BuildingRef,
   BuildTemplate,
+  GameEnding,
   GameSummary,
   EndTurnResult,
   TurnReport,
@@ -21,6 +36,12 @@ import type {
   PlanetSizeRef,
   PlayerResearch,
   DiplomacyActionCode,
+  ArtifactChoice,
+  ShipTemplate,
+  RaceTemplate,
+  Advice,
+  DiplomacyProposals,
+  GameSignal,
   DiplomacyRelation,
   EmpireInfo,
   Encounter,
@@ -32,6 +53,8 @@ import type {
   Fleet,
   FleetGroup,
   SaveShipDesignPayload,
+  StewardDecision,
+  VictoryProgress,
   ShipCatalog,
   ShipDesign,
   InvasionResult,
@@ -45,6 +68,13 @@ import type {
   RegistrationChallenge,
   SaveRaceTraitCostsPayload,
   ResearchTree,
+  RulesBook,
+  GameHistory,
+  AiSkillInfo,
+  DifficultySuggestion,
+  OpenBalance,
+  PastSelf,
+  EndingMoment,
   StarSystem,
   BalanceCombination,
   BalanceRun,
@@ -52,8 +82,16 @@ import type {
   BalanceRunPayload,
   Council,
   ColonistJob,
+  NotifySettingsState,
+  SpectatableGame,
+  SpectatorFrame,
+  WeeklyGalaxy,
+  TurnUndo,
+  MentorView,
+  MapMark,
 } from './types';
 import { locale, t } from '../i18n';
+import { recordFault } from '../state/faults';
 
 /**
  * Базовый адрес игрового сервера.
@@ -110,7 +148,141 @@ function account(): HeadersInit {
   return accountToken ? { 'X-Account-Token': accountToken } : {};
 }
 
+/**
+ * Партия, в которой сейчас игрок, — для честного сообщения о сбое (field-backlog, пункт 156):
+ * по ней ищется последнее автосохранение. Ставит её `App`, когда партия меняется.
+ */
+let faultGameId: string | null = null;
+
+export function setFaultGame(gameId: string | null): void {
+  faultGameId = gameId;
+}
+
+/**
+ * Ход последнего автосохранения текущей партии — из списка сохранений, а не догадкой
+ * (field-backlog, пункт 156). Спрашивается простым `fetch`, мимо `request`: сбой этого
+ * вопроса не должен порождать второго сообщения о сбое. Нет партии, нет связи, нет
+ * автосохранения — пусто, и сообщение говорит без номера хода.
+ */
+async function lastAutosaveTurn(): Promise<number | null> {
+  if (!faultGameId) {
+    return null;
+  }
+  try {
+    const answer = await fetch(`${API_BASE}/api/saves`, { headers: { ...account() } });
+    if (!answer.ok) {
+      return null;
+    }
+    const saves = (await answer.json()) as GameSave[];
+    const turns = saves.filter((save) => save.gameId === faultGameId && save.auto).map((save) => save.turn);
+    return turns.length > 0 ? Math.max(...turns) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Сбой — не отказ (field-backlog, пункт 156). «Ошибка запроса: 500» читается как «игра
+ * сломана, и сыгранное, может быть, пропало», поэтому сбой сервера и обрыв связи названы
+ * словами и с выходом: что случилось, что с партией и что делать. Отказы по правилам
+ * (4xx с ключом словаря) остаются как есть — это не сбой; 502 тоже — им сервер говорит,
+ * что не ушло письмо, и объясняет это сам.
+ */
+const SERVER_FAULTS = new Set([500, 503, 504]);
+
+async function faultMessage(offline: boolean): Promise<string> {
+  const turn = await lastAutosaveTurn();
+  if (offline) {
+    return turn === null ? t('app.unreachable') : t('fault.offline', { turn });
+  }
+  return turn === null ? t('fault.server.noSave') : t('fault.server', { turn });
+}
+
+/**
+ * Слушатель удавшихся изменяющих запросов — замер «от открытия до первого действия»
+ * (field-backlog, пункт 195, `state/firstAction.ts`). Здесь только крючок: клиент API не
+ * знает о воронке, а воронка сама зовёт клиент API — прямой вызов замкнул бы модули в кольцо.
+ */
+let actionListener: ((method: string, path: string) => void) | null = null;
+
+export const setActionListener = (listener: (method: string, path: string) => void): void => {
+  actionListener = listener;
+};
+
+/**
+ * Когда последний раз удался изменяющий запрос (мс) — field-backlog, пункт 127: любое такое
+ * действие отмечает игрока присутствующим, и предупреждение «через минуту вашей империей
+ * займётся ИИ» после него гаснет, не дожидаясь нового срока с сервера.
+ */
+let lastMutation = 0;
+
+export const lastMutationAt = (): number => lastMutation;
+
+/**
+ * Каждое изменяющее действие — со знаком «идёт» (field-backlog, пункт 73): счётчик в одном
+ * месте, а не в каждом экране. Конец хода и отметка присутствия не в счёт: у первого своё «идёт»
+ * на кнопке хода, вторая уходит сама, без нажатия.
+ */
+/**
+ * Одинаковые чтения — одним запросом (12.10.2026, замер конца хода: после хода клиент слал
+ * 27 запросов, и прогресс к победе уходил четыре раза, советник — три, «отмена» и бои — по два).
+ * У браузера к одному серверу шесть соединений, и повторы стояли в очереди перед нужным:
+ * ответ в 30 мс растягивался до 300. Поэтому GET с тем же адресом и пропуском, пока первый ещё
+ * в пути или ответил меньше {@link READ_REUSE_MS} назад, получает тот же ответ.
+ *
+ * Свежесть не страдает: любое изменяющее действие и любое событие партии (`forgetReads`)
+ * сбрасывает память целиком — устаревшим ответ может быть только на те доли секунды, когда
+ * сервер и так ничего не менял. Сбой не запоминается: повтор спросит сервер заново.
+ */
+const READ_REUSE_MS = 500;
+const reads = new Map<string, { at: number; promise: Promise<unknown> }>();
+
+export const forgetReads = (): void => {
+  reads.clear();
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = init?.method ?? 'GET';
+  if (method === 'GET' && init?.body === undefined) {
+    const key = `${locale()} ${path} ${JSON.stringify(init?.headers ?? {})}`;
+    const now = Date.now();
+    const known = reads.get(key);
+    if (known && now - known.at < READ_REUSE_MS) {
+      return known.promise as Promise<T>;
+    }
+    const promise = send<T>(path, init);
+    reads.set(key, { at: now, promise });
+    promise.then(
+      () => {
+        const entry = reads.get(key);
+        if (entry && entry.promise === promise) {
+          // Свежесть считается от ответа, а не от вопроса: долгий запрос не должен отдать
+          // ответ, который устарел, ещё пока шёл.
+          entry.at = Date.now();
+        }
+      },
+      () => {
+        if (reads.get(key)?.promise === promise) {
+          reads.delete(key);
+        }
+      },
+    );
+    return promise;
+  }
+  forgetReads();
+  const counted = method !== 'GET' && !path.endsWith('/turn/end') && !path.endsWith('/presence');
+  if (!counted) {
+    return send<T>(path, init);
+  }
+  beginAction();
+  try {
+    return await send<T>(path, init);
+  } finally {
+    endAction();
+  }
+}
+
+async function send<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
@@ -123,7 +295,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch {
-    throw new GameApiError(0, t('app.unreachable'));
+    recordFault('request', `${init?.method ?? 'GET'} ${path} — нет связи`);
+    throw new GameApiError(0, await faultMessage(true));
+  }
+
+  const method = init?.method ?? 'GET';
+  if (method !== 'GET') {
+    // Чтения, начатые, пока шло изменение, могли застать прежнее состояние.
+    forgetReads();
+  }
+  if (response.ok && method !== 'GET') {
+    lastMutation = Date.now();
+  }
+  if (response.ok && method !== 'GET' && actionListener) {
+    try {
+      actionListener(method, path);
+    } catch {
+      // замер не должен мешать игре ни на миг
+    }
   }
 
   if (response.status === 204) {
@@ -131,14 +320,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const text = await response.text();
-  const body = text ? JSON.parse(text) : null;
+  let body: unknown = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    // Ответ не JSON — так отвечает прокси перед упавшим сервером; это сбой, а не ответ игры.
+    body = null;
+  }
 
   if (!response.ok) {
     const error = body as ApiError | null;
     const retryAfter = Number(response.headers.get('Retry-After'));
+    recordFault('request', `${init?.method ?? 'GET'} ${path} → ${response.status} ${error?.message ?? ''}`);
     throw new GameApiError(
       response.status,
-      error?.message ?? t('error.request', { status: response.status }),
+      SERVER_FAULTS.has(response.status)
+        ? await faultMessage(false)
+        : error?.message ?? t('error.request', { status: response.status }),
       error?.details ?? [],
       Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
     );
@@ -213,6 +411,9 @@ export const gameApi = {
 
   listBalanceRuns: () =>
     request<BalanceRun[]>('/api/balance/runs', { headers: account() }),
+
+  /** Баланс рас в открытую — пункты 70 и 101: администратору, модератору и основателю. */
+  openBalance: () => request<OpenBalance>('/api/balance/open', { headers: account() }),
 
   /** Один прогон целиком — со снимком цен и приговорами. */
   balanceRun: (runId: string) =>
@@ -308,6 +509,14 @@ export const gameApi = {
    * освобождается сама. Сыгранное при этом остаётся: запись ни на что в партии не
    * ссылается.
    */
+  /** Назначить или снять модератора — администратором (08.10.2026). */
+  changeAccountRole: (accountId: string, role: 'PLAYER' | 'MODERATOR') =>
+    request<AccountSummary>(`/api/auth/accounts/${accountId}/role`, {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ role }),
+    }),
+
   deleteAccountByAdmin: (accountId: string) =>
     request<void>(`/api/auth/accounts/${accountId}`, {
       method: 'DELETE',
@@ -327,6 +536,26 @@ export const gameApi = {
     }),
 
   /** Подтверждение почты по ссылке из письма: в ответ приходит готовый пропуск — п. 3.1. */
+  /** Попросить ссылку сброса пароля — backlog-promo, пункт 45; ответ один, есть запись или нет. */
+  requestPasswordReset: (email: string) =>
+    request<{ notice: string }>('/api/auth/reset/request', { method: 'POST', body: JSON.stringify({ email }) }),
+
+  /** Новый пароль по ссылке из письма — пункт 45; отвечает новым пропуском. */
+  resetPassword: (token: string, newPassword: string) =>
+    request<AccountSession>('/api/auth/reset', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
+
+  /** Сменить пароль из настроек — пункт 45. */
+  changePassword: (password: string, newPassword: string) =>
+    request<void>('/api/auth/password', { method: 'POST', headers: account(), body: JSON.stringify({ password, newPassword }) }),
+
+  /** Сменить почту — пункт 45: новая станет логином после ссылки из письма на неё. */
+  changeEmail: (password: string, email: string) =>
+    request<RegisterResult>('/api/auth/email', { method: 'POST', headers: account(), body: JSON.stringify({ password, email }) }),
+
+  /** Удалить свою запись — пункт 45. */
+  deleteMyAccount: (password: string) =>
+    request<void>('/api/auth/delete', { method: 'POST', headers: account(), body: JSON.stringify({ password }) }),
+
   confirmAccount: (token: string) =>
     request<AccountSession>(`/api/auth/confirm?token=${encodeURIComponent(token)}`, {
       method: 'POST',
@@ -337,6 +566,117 @@ export const gameApi = {
    * В ответ — обычный пропуск; партию гостю назначает сервер (`GuestGameRules`).
    */
   guestAccount: () => request<AccountSession>('/api/auth/guest', { method: 'POST' }),
+
+  /**
+   * Гость регистрируется, не теряя партий, — field-backlog, пункт 1: та же запись получает
+   * почту и пароль, а игроком становится по ссылке из письма. До ссылки гость играет как
+   * играл: его пропуск не гаснет.
+   */
+  upgradeGuest: (
+    email: string,
+    name: string,
+    password: string,
+    challengeId?: string,
+    challengeAnswer?: string,
+  ) =>
+    request<RegisterResult>('/api/auth/guest/register', {
+      method: 'POST',
+      headers: account(),
+      body: JSON.stringify({ email, name, password, challengeId, challengeAnswer }),
+    }),
+
+  /**
+   * Шаг воронки новичка — field-backlog, пункт 2. Пропуск записи уходит, если он есть:
+   * первый шаг случается до всякого входа.
+   */
+  /**
+   * Сообщение о проблеме — field-backlog, пункт 157: строка игрока и то, что клиент собрал
+   * сам (партия, ход, экран, версия, последние сбои).
+   */
+  reportProblem: (body: {
+    text: string;
+    gameId?: string;
+    turn?: number;
+    clientVersion?: string;
+    screen?: string;
+    context?: string;
+  }) => request<void>('/api/problems', { method: 'POST', headers: account(), body: JSON.stringify(body) }),
+
+  /** Объявления об изменениях, которых запись ещё не видела, — field-backlog, пункт 161. */
+  unseenNotices: () => request<Notice[]>('/api/notices', { headers: account() }),
+
+  /** Запись прочитала объявления: больше их не показывать ни здесь, ни на другой машине. */
+  markNoticesSeen: () => request<void>('/api/notices/seen', { method: 'POST', headers: account() }),
+
+  /** Номер версии игры — field-backlog, пункт 159: в главном меню и в сообщении о проблеме. */
+  release: () => request<{ version: string }>('/api/notices/release'),
+
+  /** Весь список «что нового», свежее сверху, — по ссылке с номером версии. */
+  allNotices: () => request<Notice[]>('/api/notices/all'),
+
+  /** Ответы хозяина на свои сообщения о проблемах, которых вошедший ещё не видел, — пункт 158. */
+  problemAnswers: () => request<ProblemAnswer[]>('/api/problems/answers', { headers: account() }),
+
+  /** Ответы прочитаны: одна строка, один раз. */
+  markProblemAnswersSeen: () =>
+    request<void>('/api/problems/answers/seen', { method: 'POST', headers: account() }),
+
+  /** Ответить написавшему — только администратору: исправлено в версии или «не будем» с причиной. */
+  answerProblem: (reportId: string, body: { kind: ProblemAnswerKind; version?: string; text?: string }) =>
+    request<ProblemReport>(`/api/problems/${reportId}/answer`, {
+      method: 'POST',
+      headers: account(),
+      body: JSON.stringify(body),
+    }),
+
+  /** Сообщения о проблемах — только администратору; свежие сверху. */
+  listProblems: () => request<ProblemReport[]>('/api/problems', { headers: account() }),
+
+  /** Спросить ли отзыв об этой партии — field-backlog, пункт 46: не чаще раза в три партии. */
+  feedbackAsk: (gameId: string) =>
+    request<{ ask: boolean }>(`/api/feedback/ask?gameId=${gameId}`, { headers: account() }),
+
+  /** Отзыв после партии (пункты 46 и 187); без оценки — отказ, он тоже запоминается. */
+  sendFeedback: (body: { gameId: string; rating?: number; liked?: FeedbackLiked; comment?: string }) =>
+    request<{ saved: boolean }>('/api/feedback', {
+      method: 'POST',
+      headers: account(),
+      body: JSON.stringify(body),
+    }),
+
+  /** Отзывы после партий — только администратору. */
+  listFeedback: () => request<GameFeedback[]>('/api/feedback', { headers: account() }),
+
+  /** Частые отказы живым игрокам (field-backlog, пункт 77) — только администратору. */
+  listRefusals: () => request<RefusalCount[]>('/api/refusals', { headers: account() }),
+
+  /** Сколько сообщений ждут разбора — число у ссылки в меню хозяина. */
+  pendingProblems: () => request<number>('/api/problems/pending', { headers: account() }),
+
+  resolveProblem: (reportId: string, resolved: boolean) =>
+    request<ProblemReport>(`/api/problems/${reportId}/resolve?resolved=${resolved}`, {
+      method: 'POST',
+      headers: account(),
+    }),
+
+  /**
+   * Страница пакета основателя. Пропуск необязателен: без входа её тоже читают, а с пропуском
+   * администратора приходит и неопубликованный черновик. Пусто — страницы для читателя нет
+   * (не опубликована): это не сбой, и ссылки на неё в меню просто не будет.
+   */
+  founderPage: () => request<FounderPage | undefined>('/api/founders', { headers: account() }),
+
+  /** Сохранить страницу основателя целиком — только администратору. */
+  saveFounderPage: (page: FounderPage) =>
+    request<FounderPage>('/api/founders', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify(page),
+    }),
+
+  funnelStep: (body: { visitor: string; step: string; gameId?: string; turn?: number; detail?: string }) =>
+    // keepalive: шаг, отправленный при закрытии вкладки, обязан дойти — он и есть место ухода.
+    request<void>('/api/funnel', { method: 'POST', headers: account(), body: JSON.stringify(body), keepalive: true }),
 
   /** Вход по логину или почте — п. 3.1. */
   loginAccount: (login: string, password: string) =>
@@ -379,6 +719,14 @@ export const gameApi = {
       body: JSON.stringify({ textScale: value }),
     }),
 
+  /** Запомнить громкость музыки и эффектов — обе ступени разом, как и стоят переключатели. */
+  saveSound: (musicVolume: number, sfxVolume: number) =>
+    request<Account>('/api/auth/sound', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ musicVolume, sfxVolume }),
+    }),
+
   /**
    * Запомнить раскладку горячих клавиш — п. 11.1.
    *
@@ -391,6 +739,44 @@ export const gameApi = {
       method: 'PUT',
       headers: account(),
       body: JSON.stringify({ hotkeys: value }),
+    }),
+
+  /**
+   * Запомнить подсказки — field-backlog, пункты 30 и 130: нужны ли подсказки новичку и какие
+   * отклонены насовсем. Уходят целиком; пустой список — «вернуть все».
+   */
+  saveHints: (noviceHints: boolean, dismissedHints: string[]) =>
+    request<Account>('/api/auth/hints', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ noviceHints, dismissedHints }),
+    }),
+
+  /**
+   * Окна, которые не открываются сами, — field-backlog, пункт 164. Уходят целиком; пустой
+   * список — «открывать все».
+   */
+  saveQuietWindows: (quietWindows: string[]) =>
+    request<Account>('/api/auth/windows', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ quietWindows }),
+    }),
+
+  /** Знаки знамён у хозяев на карте — field-backlog, пункт 202. */
+  saveGlyphs: (bannerGlyphs: boolean) =>
+    request<Account>('/api/auth/glyphs', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ bannerGlyphs }),
+    }),
+
+  /** Меньше движения — field-backlog, пункт 170: `null` — как в системе. */
+  saveMotion: (reduceMotion: boolean | undefined) =>
+    request<Account>('/api/auth/motion', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ reduceMotion: reduceMotion ?? null }),
     }),
 
   /** Список игр, видимых всем, кто видит IP сервера — п. 3.1. */
@@ -415,11 +801,52 @@ export const gameApi = {
     raceCode?: string,
     // Знамя — цвет империи, п. 3.2; пусто — знамя расы или первое свободное.
     banner?: string,
+    // Своя раса из кабинета — пункт 99.
+    raceTemplateId?: string,
   ) =>
     request<JoinedGame>(`/api/games/${gameId}/join`, {
       method: 'POST',
       headers: account(),
-      body: JSON.stringify({ playerName, homeStarName, raceName, raceTraits, raceCode, banner }),
+      body: JSON.stringify({ playerName, homeStarName, raceName, raceTraits, raceCode, banner, raceTemplateId }),
+    }),
+
+  /** Свои в лобби — пункт 148: открытая партия → сколько партий сыграно вместе с её участниками. */
+  playedTogether: () => request<Record<string, number>>('/api/games/together', { headers: account() }),
+
+  /**
+   * «Сыграть с людьми» — field-backlog, пункт 65: место за ближайшим столом подбора или новый стол;
+   * он стартует сам, когда за ним двое людей.
+   */
+  quickMatch: (playerName: string) =>
+    request<JoinedGame>('/api/games/quick-match', {
+      method: 'POST',
+      headers: account(),
+      body: JSON.stringify({ playerName }),
+    }),
+
+  /** Код приглашения своей партии — field-backlog, пункт 15; заводится при первой просьбе. */
+  inviteCode: (gameId: string, accessToken: string) =>
+    request<{ code: string }>(`/api/games/${gameId}/invite`, { headers: auth(accessToken) }),
+
+  /** Что ждёт пришедшего по приглашению — без входа тоже. */
+  invitePreview: (code: string) =>
+    request<InvitePreview>(`/api/invites/${encodeURIComponent(code)}`),
+
+  /** Войти по приглашению — гостю тоже (пункт 61). */
+  joinInvite: (code: string, playerName: string, empirePlayerId?: string) =>
+    request<JoinedGame>(`/api/invites/${encodeURIComponent(code)}/join`, {
+      method: 'POST',
+      headers: account(),
+      // Какую империю ИИ взять — пункт 66; пусто — ту, что предлагает приглашение.
+      body: JSON.stringify({ playerName, empirePlayerId }),
+    }),
+
+  /** Отпуск в сетевой партии — field-backlog, пункт 177; ноль дней — вернуться сейчас. */
+  vacation: (gameId: string, accessToken: string, days: number) =>
+    request<GameDetails>(`/api/games/${gameId}/vacation`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken, days }),
     }),
 
   /** Старт игры: свободные слоты добираются ИИ-игроками до восьми — п. 3.2. */
@@ -459,13 +886,15 @@ export const gameApi = {
       `${API_BASE}/api/games/${gameId}/events?accessToken=${accessToken}`,
     );
     const handler = (message: MessageEvent<string>) => {
+      // Событие партии значит, что на сервере что-то сменилось без нашего запроса.
+      forgetReads();
       try {
         onEvent(JSON.parse(message.data) as GameEvent);
       } catch {
         // Битое сообщение — не повод ронять подписку: следующее придёт целым.
       }
     };
-    for (const type of ['SUBSCRIBED', 'PLAYER_READY', 'TURN_ADVANCED', 'GAME_STARTED', 'PLAYER_JOINED']) {
+    for (const type of ['SUBSCRIBED', 'PLAYER_READY', 'TURN_ADVANCED', 'GAME_STARTED', 'PLAYER_JOINED', 'TURN_PHASE']) {
       source.addEventListener(type, handler as EventListener);
     }
     return () => source.close();
@@ -664,6 +1093,46 @@ export const gameApi = {
       body: JSON.stringify({ accessToken, targetPlayerId, action, treaty, ...deal }),
     }),
 
+  /** Наследие ушедших, ждущее выбора, — backlog-promo, пункт 34. */
+  getArtifactChoices: (gameId: string, accessToken: string) =>
+    request<ArtifactChoice[]>(`/api/games/${gameId}/artifacts`, { headers: auth(accessToken) }),
+
+  /** Взять выбранные технологии наследия — пункт 34. */
+  pickArtifacts: (gameId: string, accessToken: string, choiceId: string, codes: string[]) =>
+    request<unknown>(`/api/games/${gameId}/artifacts/${choiceId}`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken, codes }),
+    }),
+
+  /** Последние короткие знаки — field-backlog, пункт 183: вам, всем и ваши. */
+  getSignals: (gameId: string, accessToken: string) =>
+    request<GameSignal[]>(`/api/games/${gameId}/signals`, { headers: auth(accessToken) }),
+
+  /** Отправить готовую реплику одному человеку или всем — пункт 183. */
+  sendSignal: (gameId: string, accessToken: string, code: string, toPlayerId?: string) =>
+    request<GameSignal[]>(`/api/games/${gameId}/signals`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken, code, toPlayerId }),
+    }),
+
+  /** Сыграть снова тем же составом — пункт 149: завести новую партию или войти в заведённую. */
+  rematch: (gameId: string) =>
+    request<JoinedGame>(`/api/games/${gameId}/rematch`, { method: 'POST', headers: account() }),
+
+  /** Предложения, ждущие итога, — field-backlog, пункт 182. */
+  getProposals: (gameId: string, accessToken: string) =>
+    request<DiplomacyProposals>(`/api/games/${gameId}/diplomacy/proposals`, { headers: auth(accessToken) }),
+
+  /** Принять или отклонить предложение — пункт 182; исполнится в конце хода. */
+  answerProposal: (gameId: string, accessToken: string, proposalId: string, accept: boolean) =>
+    request<DiplomacyProposals>(`/api/games/${gameId}/diplomacy/proposals/${proposalId}`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken, accept }),
+    }),
+
   /** Что можно обменять с этой империей — п. 15: чем поделиться и что попросить. */
   getTradeableTechnologies: (gameId: string, accessToken: string, otherPlayerId: string) =>
     request<TechTrade>(
@@ -797,6 +1266,16 @@ export const gameApi = {
       body: JSON.stringify(payload),
     }),
 
+  /**
+   * Ходы ИИ и чудищ, стоящих в очереди раньше игрока, — п. 8: бой может начаться с их хода
+   * (чудище быстрее фрегата). Если очередь у человека, сервер не делает ничего.
+   */
+  playBattleOpponents: (gameId: string, battleId: string, accessToken: string) =>
+    request<Battle>(`/api/games/${gameId}/battles/${battleId}/opponents`, {
+      method: 'POST',
+      headers: auth(accessToken),
+    }),
+
   /** Корпуса и компоненты, доступные империи — п. 8. */
   getShipCatalog: (gameId: string, accessToken: string) =>
     request<ShipCatalog>(`/api/games/${gameId}/ship-designs/catalog`, { headers: auth(accessToken) }),
@@ -921,7 +1400,7 @@ export const gameApi = {
     gameId: string,
     encounterId: string,
     accessToken: string,
-    decision: 'ATTACK' | 'IGNORE',
+    decision: 'ATTACK' | 'IGNORE' | 'BOMBARD',
     auto = true,
   ) =>
     request<Encounter>(`/api/games/${gameId}/encounters/${encounterId}`, {
@@ -958,7 +1437,7 @@ export const gameApi = {
    * знает об одной кнопке, не гасит вторую.
    */
   setBuildMode: (gameId: string, planetId: string, accessToken: string,
-                 mode: { repeatBuild?: boolean; autoBuild?: boolean }) =>
+                 mode: { repeatBuild?: boolean; autoBuild?: boolean; autoJobs?: boolean }) =>
     request<Planet>(`/api/games/${gameId}/planets/${planetId}/build-mode`, {
       method: 'POST',
       headers: auth(accessToken),
@@ -986,7 +1465,9 @@ export const gameApi = {
    * том порядке, в каком записано; остальное пропускается.
    */
   enqueueTemplate: (gameId: string, planetId: string, accessToken: string, templateId: string) =>
-    request<Planet>(`/api/games/${gameId}/planets/${planetId}/queue/template`, {
+    // Пропущенное — с причиной словами (field-backlog, пункт 97): молча пропущенное читается
+    // как поломка шаблона.
+    request<{ planet: Planet; skipped: { name: string; reason: string }[] }>(`/api/games/${gameId}/planets/${planetId}/queue/template`, {
       method: 'POST',
       headers: { ...auth(accessToken), ...account() },
       body: JSON.stringify({ accessToken, templateId }),
@@ -1017,6 +1498,187 @@ export const gameApi = {
    */
   myGames: () => request<GameSummary[]>('/api/games/mine', { headers: account() }),
 
+  /** Сравнение с собой прошлым — field-backlog, пункт 115; пусто — сравнивать не с чем. */
+  pastSelf: (gameId: string, accessToken: string) =>
+    request<PastSelf | undefined>(`/api/games/${gameId}/past-self`, { headers: auth(accessToken) }),
+
+  /** История своих партий — field-backlog, пункт 18. */
+  gameHistory: () => request<GameHistory>('/api/auth/game-history', { headers: account() }),
+
+  /** Уровень следующей партии по итогу прошлой — field-backlog, пункт 10; пусто — предлагать нечего. */
+  difficultySuggestion: () =>
+    request<DifficultySuggestion>('/api/auth/difficulty-suggestion', { headers: account() }),
+
+  /** Библиотека проектов кораблей учётной записи — пункт 96. */
+  shipTemplates: () => request<ShipTemplate[]>('/api/ship-templates', { headers: account() }),
+
+  saveShipTemplate: (template: ShipTemplate) =>
+    request<ShipTemplate>('/api/ship-templates', {
+      method: 'POST',
+      headers: account(),
+      body: JSON.stringify(template),
+    }),
+
+  deleteShipTemplate: (id: string) =>
+    request<void>(`/api/ship-templates/${id}`, { method: 'DELETE', headers: account() }),
+
+  /** Свои расы учётной записи — пункты 26 и 176. */
+  raceTemplates: () => request<RaceTemplate[]>('/api/race-templates', { headers: account() }),
+
+  saveRaceTemplate: (template: RaceTemplate) =>
+    request<RaceTemplate>('/api/race-templates', {
+      method: 'POST',
+      headers: account(),
+      body: JSON.stringify({ id: template.id, name: template.name, traits: template.traits }),
+    }),
+
+  deleteRaceTemplate: (id: string) =>
+    request<void>(`/api/race-templates/${id}`, { method: 'DELETE', headers: account() }),
+
+  /** Что выбрал бы советник — пункт 23. */
+  advice: (gameId: string, accessToken: string) =>
+    request<Advice>(`/api/games/${gameId}/advice`, { headers: auth(accessToken) }),
+
+  /** Что можно отменить до конца хода — пункт 74. */
+  listUndo: (gameId: string, accessToken: string) =>
+    request<TurnUndo[]>(`/api/games/${gameId}/undo`, { headers: auth(accessToken) }),
+
+  /** Отменить действие этого хода; в ответ — что ещё можно отменить. */
+  undo: (gameId: string, accessToken: string, undoId: string) =>
+    request<TurnUndo[]>(`/api/games/${gameId}/undo/${undoId}`, { method: 'POST', headers: auth(accessToken) }),
+
+  /** «Играть дальше» после победы — пункт 131. */
+  playOn: (gameId: string, accessToken: string) =>
+    request<GameDetails>(`/api/games/${gameId}/play-on`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken }),
+    }),
+
+  /** Свободное сообщение одному человеку или всем — пункт 16. */
+  sendMessage: (gameId: string, accessToken: string, text: string, toPlayerId?: string) =>
+    request<GameSignal[]>(`/api/games/${gameId}/signals`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken, code: 'TEXT', text, toPlayerId }),
+    }),
+
+  /** Кого игрок выключил — пункт 16. */
+  mutedPlayers: (gameId: string, accessToken: string) =>
+    request<string[]>(`/api/games/${gameId}/signals/muted`, { headers: auth(accessToken) }),
+
+  /** Выключить или вернуть сообщения игрока — пункт 16. */
+  mutePlayer: (gameId: string, accessToken: string, playerId: string, muted: boolean) =>
+    request<string[]>(`/api/games/${gameId}/signals/muted/${playerId}?muted=${muted}`, {
+      method: 'PUT',
+      headers: auth(accessToken),
+    }),
+
+  /** Пожаловаться на сообщение — пункт 16: ложится в «Сообщения о проблемах». */
+  reportMessage: (gameId: string, accessToken: string, signalId: string) =>
+    request<void>(`/api/games/${gameId}/signals/${signalId}/report`, {
+      method: 'POST',
+      headers: { ...auth(accessToken), ...account() },
+    }),
+
+  /** Галактика недели — пункт 146: условия и итоги по расам. */
+  weeklyGalaxy: () => request<WeeklyGalaxy>('/api/weekly', { headers: account() }),
+
+  /** Ученик называет наставника; пусто — снимает согласие (пункт 184). */
+  chooseMentor: (gameId: string, accessToken: string, mentorPlayerId: string | null) =>
+    request<void>(`/api/games/${gameId}/mentor`, {
+      method: 'PUT',
+      headers: auth(accessToken),
+      body: JSON.stringify({ mentorPlayerId }),
+    }),
+
+  /** Ученики наставника — каждый своими глазами (пункт 184). */
+  mentorStudents: (gameId: string, accessToken: string) =>
+    request<MentorView[]>(`/api/games/${gameId}/mentor/students`, { headers: auth(accessToken) }),
+
+  /** Метка наставника на карте ученика; пустой знак снимает её (пункт 184). */
+  markForStudent: (gameId: string, accessToken: string, studentPlayerId: string, systemId: string, code: string | null) =>
+    request<MapMark[]>(`/api/games/${gameId}/mentor/marks`, {
+      method: 'PUT',
+      headers: auth(accessToken),
+      body: JSON.stringify({ studentPlayerId, systemId, code }),
+    }),
+
+  /** Партии, открытые зрителям, — пункт 59. */
+  spectatableGames: () => request<SpectatableGame[]>('/api/spectate', { headers: account() }),
+
+  /** Партия глазами зрителя — с отставанием на несколько ходов (пункт 59). */
+  spectate: (gameId: string) => request<SpectatorFrame>(`/api/spectate/${gameId}`, { headers: account() }),
+
+  /** Уведомления о ходе — пункт 22: ключ сервера, подписан ли браузер, письма. */
+  notifySettings: () => request<NotifySettingsState>('/api/notify', { headers: account() }),
+
+  saveNotifyMail: (notifyMail: boolean) =>
+    request<Account>('/api/notify/mail', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ notifyMail }),
+    }),
+
+  subscribePush: (endpoint: string, p256dh: string, auth: string) =>
+    request<void>('/api/notify/push', {
+      method: 'POST',
+      headers: account(),
+      body: JSON.stringify({ endpoint, p256dh, auth }),
+    }),
+
+  unsubscribePush: (endpoint: string) =>
+    request<void>(`/api/notify/push?endpoint=${encodeURIComponent(endpoint)}`, {
+      method: 'DELETE',
+      headers: account(),
+    }),
+
+  /** Советник — пункт 23: пусто — по умолчанию. */
+  saveAdvisor: (advisor: boolean | null) =>
+    request<Account>('/api/auth/advisor', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ advisor }),
+    }),
+
+  /** Сцены, увиденные целиком, — пункт 163. */
+  saveSeenScenes: (seenScenes: string[]) =>
+    request<Account>('/api/auth/scenes', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ seenScenes }),
+    }),
+
+  /** Игровой псевдоним по умолчанию — личный кабинет. */
+  saveName: (name: string) =>
+    request<Account>('/api/auth/name', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ name }),
+    }),
+
+  /** Своё знамя — пункт 144: предлагается первым в новой партии, если свободно. */
+  saveBanner: (banner: string | null) =>
+    request<Account>('/api/auth/banner', {
+      method: 'PUT',
+      headers: account(),
+      body: JSON.stringify({ banner }),
+    }),
+
+  /** Имя флота — field-backlog, пункт 141; пустое снимает его. */
+  renameFleet: (gameId: string, fleetId: string, accessToken: string, name: string) =>
+    request<void>(`/api/games/${gameId}/fleets/${fleetId}/name`, {
+      method: 'PUT',
+      body: JSON.stringify({ accessToken, name }),
+    }),
+
+  /**
+   * Итоги оконченной партии — field-backlog, пункт 33. По учётной записи, как и возврат:
+   * сцену открывают и из «Ваших партий», где пропуска места может не быть.
+   */
+  gameEnding: (gameId: string) =>
+    request<GameEnding>(`/api/games/${gameId}/ending`, { headers: account() }),
+
   /**
    * Возврат в свою партию — п. 3: запись получает пропуск СВОЕГО места.
    *
@@ -1030,6 +1692,104 @@ export const gameApi = {
    * Покинуть партию — backlog-promo, пункт 11: империю ведёт ИИ, партия ушедшего не ждёт.
    * Вернуться — «Ваши партии» главного меню (`rejoinGame`).
    */
+  /** Прогресс к путям к победе и ближайшая веха — field-backlog, пункты 51 и 11. */
+  victoryProgress: (gameId: string, accessToken: string) =>
+    request<VictoryProgress>(`/api/games/${gameId}/victory-progress`, { headers: auth(accessToken) }),
+
+  /** Эволюционная мутация (п. 7): очки и стороны, которые можно взять. */
+  mutationOptions: (gameId: string, accessToken: string) =>
+    request<{ picks: number; options: MutationOption[] }>(`/api/games/${gameId}/race/mutation`, {
+      headers: auth(accessToken),
+    }),
+
+  /** Ответ на мутацию: выбранные стороны прибавляются к расе, остаток очков сгорает. */
+  mutate: (gameId: string, accessToken: string, traits: string[]) =>
+    request<void>(`/api/games/${gameId}/race/mutation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessToken, traits }),
+    }),
+
+  /** Согласие с итогом по могуществу (09.10.2026): до конца хода ответ можно переменить. */
+  answerMight: (gameId: string, accessToken: string, agree: boolean) =>
+    request<void>(`/api/games/${gameId}/might/answer`, {
+      method: 'POST',
+      headers: { ...auth(accessToken), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agree }),
+    }),
+
+  /** Записка к партии — field-backlog, пункт 110: только своему игроку. */
+  gameNote: (gameId: string, accessToken: string) =>
+    request<{ note?: string }>(`/api/games/${gameId}/note`, { headers: auth(accessToken) }),
+
+  saveGameNote: (gameId: string, accessToken: string, note: string) =>
+    request<{ note?: string }>(`/api/games/${gameId}/note`, {
+      method: 'PUT',
+      headers: auth(accessToken),
+      body: JSON.stringify({ note }),
+    }),
+
+  /** Хроника партии — field-backlog, пункт 138: всё заметное по ходам, на языке читателя. */
+  chronicle: (gameId: string, accessToken: string) =>
+    request<EndingMoment[]>(`/api/games/${gameId}/chronicle`, { headers: auth(accessToken) }),
+
+  /** Что ИИ сделал за вас — field-backlog, пункт 112: решения опекуна за время отсутствия. */
+  stewardDecisions: (gameId: string, accessToken: string) =>
+    request<StewardDecision[]>(`/api/games/${gameId}/steward`, { headers: auth(accessToken) }),
+
+  /** Решения опекуна прочитаны — следующая отлучка начнёт список заново. */
+  stewardSeen: (gameId: string, accessToken: string) =>
+    request<StewardDecision[]>(`/api/games/${gameId}/steward/seen`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken }),
+    }),
+
+  /**
+   * «Я здесь» — field-backlog, пункт 127: отвечает на предупреждение о передаче империи ИИ и
+   * забирает её у ИИ обратно. Ответ — состав партии с новым сроком.
+   */
+  imHere: (gameId: string, accessToken: string) =>
+    request<GameDetails>(`/api/games/${gameId}/presence`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken }),
+    }),
+
+  /**
+   * Забрать объявленный ход — field-backlog, пункт 128: пока соперники не закончили, ход не
+   * посчитан. Ответ — состав партии; ход уже посчитан — 409.
+   */
+  undoEndTurn: (gameId: string, accessToken: string) =>
+    request<GameDetails>(`/api/games/${gameId}/turn/undo`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken }),
+    }),
+
+  /**
+   * Признать поражение — field-backlog, пункт 81: империю дальше ведёт ИИ. Ответ — партия ПОСЛЕ
+   * признания: окончена она (один человек против ИИ) или идёт дальше без вас.
+   */
+  /** Можно ли объявить победу — field-backlog, пункт 154; меню гасит пункт до нажатия. */
+  victoryClaim: (gameId: string, accessToken: string) =>
+    request<VictoryClaim>(`/api/games/${gameId}/victory-claim`, { headers: auth(accessToken) }),
+
+  /** Объявить победу — пункт 154: партия кончается победой с пометкой «досрочно». */
+  declareVictory: (gameId: string, accessToken: string) =>
+    request<GameDetails>(`/api/games/${gameId}/declare-victory`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken }),
+    }),
+
+  concede: (gameId: string, accessToken: string) =>
+    request<GameDetails>(`/api/games/${gameId}/concede`, {
+      method: 'POST',
+      headers: auth(accessToken),
+      body: JSON.stringify({ accessToken }),
+    }),
+
   leaveGame: (gameId: string, accessToken: string) =>
     request<unknown>(`/api/games/${gameId}/leave`, {
       method: 'POST',
@@ -1040,6 +1800,30 @@ export const gameApi = {
   /** Загрузка сохранения: сервер поднимает из слепка новую партию. */
   loadSave: (saveId: string) =>
     request<JoinedGame>(`/api/saves/${saveId}/load`, { method: 'POST', headers: account() }),
+
+  /** Автосохранение партии — field-backlog, пункт 160; пусто — его ещё нет. */
+  autosave: (gameId: string) =>
+    request<GameSave | undefined>(`/api/saves/auto/${gameId}`, { headers: account() }),
+
+  /** Слепок файлом — пункт 160: сам файл как JSON. */
+  exportSave: (saveId: string) =>
+    request<unknown>(`/api/saves/${saveId}/file`, { headers: account() }),
+
+  /** Партия из файла — пункт 160: только одиночная, поднимает её принёсший файл. */
+  /** Признаки живой игры — пункт 45: только администратору и модератору. */
+  liveStats: () => request<LiveStats>('/api/stats/live', { headers: account() }),
+
+  /** Свои наборы справочников — пункт 42: только основателю и администратору. */
+  listMods: () => request<ModSet[]>('/api/mods', { headers: account() }),
+  saveMod: (body: { name: string; buildings?: string; ships?: string; technologies?: string; leaders?: string }) =>
+    request<ModSet>('/api/mods', { method: 'POST', headers: { ...account(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body) }),
+  deleteMod: (id: string) => request<void>('/api/mods/' + id, { method: 'DELETE', headers: account() }),
+  /** Файл справочника игры — основа набора (пункт 42). */
+  modBase: (part: string) => request<unknown>('/api/mods/base/' + part, { headers: account() }),
+
+  importSave: (content: string) =>
+    request<JoinedGame>('/api/saves/import', { method: 'POST', headers: account(), body: content }),
 
   /**
    * Удаление сохранения — только администратором (п. 3.1).
@@ -1065,6 +1849,8 @@ export const gameApi = {
 
   reference: {
     galaxySizes: () => request<GalaxySizeOption[]>('/api/reference/galaxy-sizes'),
+    /** Уровни сложности и что ИИ на каждом делает — field-backlog, пункты 9 и 87. */
+    aiSkills: () => request<AiSkillInfo[]>('/api/reference/ai-skills'),
     planetSizes: () => request<PlanetSizeRef[]>('/api/reference/planet-sizes'),
     planetClimates: () => request<PlanetClimateRef[]>('/api/reference/planet-climates'),
     minerals: () => request<MineralRichnessRef[]>('/api/reference/minerals'),
@@ -1102,5 +1888,7 @@ export const gameApi = {
       }),
     /** Дерево технологий для экрана исследований — п. 9. */
     research: () => request<ResearchTree>('/api/reference/research'),
+    /** Справочник «Как устроено» — field-backlog, пункты 75 и 200: порядок хода и правила. */
+    rules: () => request<RulesBook>('/api/reference/rules'),
   },
 };

@@ -29,12 +29,38 @@ public class EmpireController {
     private final EmpireService empireService;
     private final EmpireInfoService empireInfoService;
     private final com.sddnw.server.service.CouncilService councilService;
+    private final com.sddnw.server.service.MightConsentService mightConsentService;
+    private final com.sddnw.server.service.MutationService mutationService;
+    private final com.sddnw.server.service.GameAccess gameAccess;
 
     public EmpireController(EmpireService empireService, EmpireInfoService empireInfoService,
-                            com.sddnw.server.service.CouncilService councilService) {
+                            com.sddnw.server.service.CouncilService councilService,
+                            com.sddnw.server.service.MightConsentService mightConsentService,
+                            com.sddnw.server.service.MutationService mutationService,
+                            com.sddnw.server.service.GameAccess gameAccess) {
+        this.mutationService = mutationService;
+        this.gameAccess = gameAccess;
         this.empireService = empireService;
         this.empireInfoService = empireInfoService;
         this.councilService = councilService;
+        this.mightConsentService = mightConsentService;
+    }
+
+    /** Эволюционная мутация — п. 7: неистраченные очки и стороны, которые можно взять. */
+    @GetMapping("/race/mutation")
+    public java.util.Map<String, Object> mutation(@PathVariable UUID gameId, @AccessToken String accessToken) {
+        var game = gameAccess.requireRunningGame(gameId);
+        return mutationService.options(gameAccess.requirePlayer(game, accessToken));
+    }
+
+    /** Ответ на мутацию — п. 7: выбранные стороны прибавляются к расе, остаток очков сгорает. */
+    @PostMapping("/race/mutation")
+    public void mutate(@PathVariable UUID gameId, @RequestBody java.util.Map<String, Object> request) {
+        var game = gameAccess.requireRunningGame(gameId);
+        var player = gameAccess.requirePlayer(game, (String) request.get("accessToken"));
+        @SuppressWarnings("unchecked")
+        java.util.List<String> traits = (java.util.List<String>) request.getOrDefault("traits", java.util.List.of());
+        mutationService.choose(player.getId(), traits);
     }
 
     /** Разведка империи — п. 13: накопленные очки и приход за ход. */
@@ -96,6 +122,16 @@ public class EmpireController {
     public CouncilDto voteCouncil(@PathVariable UUID gameId, @AccessToken String accessToken,
                                   @RequestBody CouncilVoteRequest request) {
         return councilService.vote(gameId, accessToken, request.choicePlayerId());
+    }
+
+    /**
+     * Согласие с итогом по могуществу (09.10.2026, {@code MightConsentService}): «согласен» или
+     * «нет»; до конца хода ответ можно переменить.
+     */
+    @PostMapping("/might/answer")
+    public void answerMight(@PathVariable UUID gameId, @AccessToken String accessToken,
+                            @RequestBody java.util.Map<String, Boolean> request) {
+        mightConsentService.answer(gameId, accessToken, request.get("agree"));
     }
 
     /** Флот империи — п. 8: проекты кораблей с учётом расы и сами корабли. */

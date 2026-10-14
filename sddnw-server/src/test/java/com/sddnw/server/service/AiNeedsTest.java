@@ -25,7 +25,7 @@ class AiNeedsTest {
      */
     private final AiEmpireService ai = new AiEmpireService(
             null, null, null, null, null, null, null, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, null);
+            null, null, null, null, null, null, null, null, null, null, null);
 
     /** Основа кораблестроения — двигатель и топливо: без неё не строится ни один корабль. */
     private static final List<String> SHIPBUILDING =
@@ -86,7 +86,13 @@ class AiNeedsTest {
         assertThat(peace).doesNotContain(ColonyProject.TRANSPORT_TECH);
         assertThat(war).startsWith(ColonyProject.TRANSPORT_TECH);
         assertThat(war).containsAll(peace);
-        assertThat(war).hasSize(peace.size() + 1);
+        // И средство абордажа (п. 8): без него ИИ не брал трофеев вовсе — технологии
+        // абордажа поздние, и до них он доходил к концу партии, когда войны уже отгремели.
+        assertThat(peace).doesNotContain(AiEmpireService.BOARDING_TECH);
+        assertThat(war).contains(AiEmpireService.BOARDING_TECH);
+        // И следующую ступень оружия (п. 8, 14.10.2026).
+        assertThat(war).contains(AiEmpireService.WEAPON_LADDER.get(0));
+        assertThat(war).hasSize(peace.size() + 3);
     }
 
     @Test
@@ -115,9 +121,53 @@ class AiNeedsTest {
     void nothingWantedMeansObjectiveDecides() {
         // Набор «всего нужного» берётся У САМОГО ПРИБОРА, а не переписывается кодами:
         // список нужд растёт вместе с игрой, и вписанный сюда состав устаревает молча.
-        Set<String> everything = Set.copyOf(ai.wantedTechnologies(Set.of(), Boolean.TRUE));
+        // Лестница оружия называет по ступени за раз — набор копится, пока нужды не кончатся.
+        Set<String> everything = new java.util.HashSet<>();
+        for (int round = 0; round < 20; round++) {
+            List<String> more = ai.wantedTechnologies(everything, Boolean.TRUE);
+            if (more.isEmpty()) {
+                break;
+            }
+            everything.addAll(more);
+        }
 
         assertThat(everything).isNotEmpty();
         assertThat(ai.wantedTechnologies(everything, Boolean.TRUE)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("На войне нужна следующая ступень оружия, в мире — нет")
+    void warWantsNextWeapon() {
+        assertThat(ai.wantedTechnologies(withShipbuilding(), Boolean.FALSE))
+                .doesNotContainAnyElementsOf(AiEmpireService.WEAPON_LADDER);
+        assertThat(ai.wantedTechnologies(withShipbuilding(), Boolean.TRUE)).contains("neutron-blaster");
+        Set<String> blaster = new java.util.HashSet<>(withShipbuilding());
+        blaster.add("neutron-blaster");
+        List<String> next = ai.wantedTechnologies(blaster, Boolean.TRUE);
+        assertThat(next).contains("phasors").doesNotContain("neutron-blaster", "plasma-cannon");
+    }
+
+    @Test
+    @DisplayName("Беспощадный и агрессивный держат оружие в нуждах и в мире, прочие — только на войне")
+    void militantArmsInPeace() {
+        assertThat(ai.armsRace(com.sddnw.server.domain.enums.AiPersonality.AGGRESSIVE, Boolean.FALSE)).isTrue();
+        assertThat(ai.armsRace(com.sddnw.server.domain.enums.AiPersonality.RUTHLESS, Boolean.FALSE)).isTrue();
+        assertThat(ai.armsRace(com.sddnw.server.domain.enums.AiPersonality.PACIFISTIC, Boolean.FALSE)).isFalse();
+        assertThat(ai.armsRace(com.sddnw.server.domain.enums.AiPersonality.PACIFISTIC, Boolean.TRUE)).isTrue();
+        List<String> armedPeace = ai.wantedTechnologies(withShipbuilding(), Boolean.FALSE, Boolean.FALSE, Boolean.TRUE);
+        assertThat(armedPeace).contains(AiEmpireService.WEAPON_LADDER.get(0))
+                .doesNotContain(ColonyProject.TRANSPORT_TECH, AiEmpireService.BOARDING_TECH);
+    }
+
+    @Test
+    @DisplayName("Изученный отсек истребителей без ствола для них — нужен лазер")
+    void fighterBayWantsLaser() {
+        Set<String> withBay = new java.util.HashSet<>(withShipbuilding());
+        withBay.add(AiEmpireService.FIGHTER_BAY_TECH);
+        assertThat(ai.wantedTechnologies(withBay, Boolean.FALSE)).contains(AiEmpireService.FIGHTER_BEAM_TECH);
+        assertThat(ai.wantedTechnologies(withShipbuilding(), Boolean.FALSE))
+                .doesNotContain(AiEmpireService.FIGHTER_BEAM_TECH);
+        withBay.add(AiEmpireService.FIGHTER_BEAM_TECH);
+        assertThat(ai.wantedTechnologies(withBay, Boolean.FALSE)).doesNotContain(AiEmpireService.FIGHTER_BEAM_TECH);
     }
 }

@@ -61,9 +61,9 @@ class GlobalExceptionHandlerTest {
                 .andExpect(jsonPath("$.message").value("Игра уже стартовала"));
         mockMvc.perform(get("/probe/not-found").header(HttpHeaders.ACCEPT_LANGUAGE, "ru-RU,ru;q=0.9"))
                 .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message").value("Игра не найдена: 42"));
+                .andExpect(jsonPath("$.message").value("Игра не найдена"));
         mockMvc.perform(get("/probe/not-found").header(HttpHeaders.ACCEPT_LANGUAGE, "de"))
-                .andExpect(jsonPath("$.message").value("Game not found: 42"));
+                .andExpect(jsonPath("$.message").value("Game not found"));
     }
 
     @Test

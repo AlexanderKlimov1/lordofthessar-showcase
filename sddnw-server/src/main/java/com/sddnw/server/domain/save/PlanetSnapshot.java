@@ -57,8 +57,16 @@ public record PlanetSnapshot(
         List<String> buildQueue,
         Boolean repeatBuild,
         Boolean autoBuild,
+        /** «Жители сами» (пункт 91); {@code null} в старых слепках — выключено. */
+        Boolean autoJobs,
         Integer soldTurn,
         PlanetFind find,
-        Boolean findClaimed
+        Boolean findClaimed,
+        /** Сколько раз планету терраформировали (п. 4.1.2.1); {@code null} в старых слепках — ни разу. */
+        Integer terraformCount,
+        /** Андроиды по делам (п. 4.1); {@code null} в старых слепках — ни одного. */
+        Integer androidFarmers,
+        Integer androidWorkers,
+        Integer androidScientists
 ) {
 }

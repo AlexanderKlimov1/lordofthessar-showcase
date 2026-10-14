@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      Сообщения о проблеме — field-backlog, пункт 157 (P0): единственный канал, по которому
+      тестер скажет, что сломалось. Без него две недели теста дают догадки, а не находки.
+
+      Отчёт несёт сам себя: партию, ход, версию клиента и последние ошибки запросов и
+      консоли (`context`, JSON строкой) — игрок дописывает только строку своими словами.
+      Живёт в источнике истории, рядом с учётными записями: сообщение переживает партию,
+      которую могут удалить, — а разбирают его иногда через неделю.
+
+      Внешнего ключа на `account` нет по той же причине, что и у шаблонов стройки
+      (миграция 079): сообщения записи убираются явной уборкой в `AccountService.deleteByAdmin`.
+    -->
+    <changeSet id="098-problem-report" author="sddnw">
+        <createTable tableName="problem_report">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid"/>
+            <column name="turn" type="int"/>
+            <column name="client_version" type="varchar(64)"/>
+            <column name="screen" type="varchar(64)"/>
+            <column name="text" type="varchar(2000)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="context" type="text"/>
+            <column name="resolved" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamptz">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="problem_report" indexName="idx_problem_report_created">
+            <column name="created_at"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

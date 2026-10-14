@@ -46,6 +46,11 @@ import java.util.stream.Collectors;
 @Service
 public class ResearchService {
 
+    /** Эволюционная мутация — п. 7; необязательна, тестам без неё не нужна. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MutationService mutationService;
+
+
     private static final Logger log = LoggerFactory.getLogger(ResearchService.class);
 
     private final ResearchCatalog researchCatalog;
@@ -64,6 +69,10 @@ public class ResearchService {
      */
     private final ShipDesignService shipDesignService;
     private final GovernmentService governmentService;
+
+    /** Книга дебютов сложного уровня — field-backlog, пункт 9; без неё сложный выбирает как обычный. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AiOpeningBook openingBook;
 
     public ResearchService(ResearchCatalog researchCatalog,
                            ResearchRules researchRules,
@@ -207,8 +216,19 @@ public class ResearchService {
      */
     public Integer researchPerTurn(PlayerEntity player) {
         List<PlanetEntity> colonies = planetRepository.findAllByOwnerPlayerId(player.getId());
-        return researchPerTurn(player, colonies, colonyService.context(colonies));
+        Integer labs = fleets == null ? 0
+                : fleets.scoutLabPoints(player.getGame().getId()).getOrDefault(player.getId(), 0);
+        return researchPerTurn(player, colonies, colonyService.context(colonies)) + labs;
     }
+
+    /**
+     * Флоты — ради разведлабораторий (п. 8, п. 9): корабль с ней приносит очки исследований.
+     * Полем, а не параметром конструктора: службу флотов поднимают после этой, и
+     * обратной зависимости между ними быть не должно.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private FleetService fleets;
 
     /**
      * То же, но по уже загруженным колониям хода — п. 11.1.
@@ -247,6 +267,15 @@ public class ResearchService {
                                                RandomGenerator random,
                                                List<PlanetEntity> colonies,
                                                ColonyService.ColonyContext colonyContext) {
+        return advance(player, completedTurn, random, colonies, colonyContext, 0);
+    }
+
+    /** То же, но с очками разведлабораторий флота (п. 8, п. 9), посчитанными фазой разом. */
+    public List<AcquiredTechnologyDto> advance(PlayerEntity player, Integer completedTurn,
+                                               RandomGenerator random,
+                                               List<PlanetEntity> colonies,
+                                               ColonyService.ColonyContext colonyContext,
+                                               Integer scoutLabPoints) {
         if (player.getResearchOptionCode() == null) {
             // Очки без цели девать некуда: в MOO II исследование идёт только в выбранный проект.
             return List.of();
@@ -255,7 +284,7 @@ public class ResearchService {
         ResearchLevelDto level = researchCatalog.level(
                 player.getResearchCategoryCode(), player.getResearchLevelOrder());
         player.setResearchPoints(player.getResearchPoints()
-                + researchPerTurn(player, colonies, colonyContext));
+                + researchPerTurn(player, colonies, colonyContext) + Math.max(0, scoutLabPoints));
 
         boolean paidInstant = instant(player, level) && player.getResearchPoints() >= level.cost();
         if (!paidInstant && !Boolean.TRUE.equals(researchRules.breakthrough(
@@ -409,6 +438,60 @@ public class ResearchService {
     }
 
     /**
+     * Кандидаты подарка — backlog-promo, пункт 34 («выбор одной из трёх, а не жребий»): по одной
+     * технологии ближайшего неизученного уровня из разных разделов, тем же правилом, что и сам
+     * подарок ({@link #grantGift}) — тот же обход разделов вразнобой и тот же запрет на уровень,
+     * который империя как раз исследует. Порядок — от зерна: та же партия даёт те же три.
+     */
+    public List<ResearchCatalog.TechnologyPlace> giftCandidates(PlayerEntity player, RandomGenerator random,
+                                                                Integer count) {
+        Map<String, Integer> next = nextLevelOrders(player);
+        List<ResearchCategoryDto> categories = new ArrayList<>(researchCatalog.tree().categories());
+        Collections.shuffle(categories, new Random(random.nextLong()));
+        List<ResearchCatalog.TechnologyPlace> picked = new ArrayList<>();
+        for (ResearchCategoryDto category : categories) {
+            if (picked.size() >= count) {
+                break;
+            }
+            Integer order = next.getOrDefault(category.code(), 1);
+            ResearchLevelDto level = category.levels().stream()
+                    .filter(candidate -> candidate.order().equals(order))
+                    .findFirst().orElse(null);
+            if (level == null || level.options().isEmpty()
+                    || (category.code().equals(player.getResearchCategoryCode())
+                    && level.order().equals(player.getResearchLevelOrder()))) {
+                continue;
+            }
+            ResearchOptionDto option = level.options().get(random.nextInt(level.options().size()));
+            picked.add(researchCatalog.place(option.code()));
+        }
+        return picked;
+    }
+
+    /**
+     * Выдаёт выбранную из кандидатов технологию — пункт 34. Общий уровень выдаётся целиком, как
+     * всегда; уровень, уже пройденный к этому мигу (между находкой и выбором прошёл ход), — ничего.
+     */
+    public List<AcquiredTechnologyDto> grantPlace(PlayerEntity player, ResearchCatalog.TechnologyPlace place,
+                                                  Integer turn) {
+        Integer next = nextLevelOrders(player).getOrDefault(place.categoryCode(), 1);
+        if (!next.equals(place.levelOrder())) {
+            return List.of();
+        }
+        ResearchLevelDto level = researchCatalog.tree().categories().stream()
+                .filter(category -> category.code().equals(place.categoryCode()))
+                .flatMap(category -> category.levels().stream())
+                .filter(candidate -> candidate.order().equals(place.levelOrder()))
+                .findFirst().orElse(null);
+        if (level == null) {
+            return List.of();
+        }
+        List<ResearchOptionDto> options = Boolean.TRUE.equals(level.general()) ? level.options()
+                : List.of(place.option());
+        return store(player, place.categoryCode(), place.levelOrder(), options, turn);
+    }
+
+    /**
      * Записывает изученное. На общем уровне дерева игрок получает все его технологии,
      * на обычном — только выбранную.
      */
@@ -468,6 +551,11 @@ public class ResearchService {
             shipDesignService.ensurePlatformDesigns(player.getGame().getId(), player, turn);
             governmentService.upgradeAfterResearch(player,
                     technologies.stream().map(PlayerTechnologyEntity::getOptionCode).toList());
+            // Эволюционная мутация (п. 7, перенос MOO II): новые стороны расы.
+            if (mutationService != null) {
+                mutationService.afterResearch(player,
+                        technologies.stream().map(PlayerTechnologyEntity::getOptionCode).toList());
+            }
         }
 
         log.info("Игрок {} изучил на ходу {}: {}", player.getName(), turn,
@@ -573,7 +661,13 @@ public class ResearchService {
           берётся что угодно: стоять из-за пройденной ветки империя не должна.
         */
         List<Integer> preferred = new ArrayList<>();
-        if (player.getAiObjective() != null) {
+        com.sddnw.server.domain.enums.AiSkill skill = com.sddnw.server.domain.enums.AiSkill.of(player.getAiSkill());
+        // ДЕБЮТ СВОЕЙ РАСЫ — сложный уровень (пункт 9): N-й прорыв идёт в раздел, куда шёл N-й
+        // прорыв сильнейших империй этой расы в замерах; раздел пройден — решает устремление.
+        String booked = bookedSection(player, skill, next);
+        if (booked != null && categories.contains(booked)) {
+            preferred.add(categories.indexOf(booked));
+        } else if (player.getAiObjective() != null) {
             List<String> favourite = player.getAiObjective().getFavouriteCategories();
             for (int i = 0; i < categories.size(); i++) {
                 if (favourite.contains(categories.get(i))) {
@@ -586,7 +680,10 @@ public class ResearchService {
                 ? random.nextInt(available.size())
                 : preferred.get(random.nextInt(preferred.size()));
         ResearchLevelDto level = available.get(pick);
-        ResearchOptionDto option = pickOption(level, raceService.effects(player).uncreative(), random);
+        // Рекомендованная технология уровня — только у тех, кто знает дерево (пункт 9): лёгкие
+        // уровни берут любую, как неизобретательная раса.
+        ResearchOptionDto option = pickOption(level, raceService.effects(player).uncreative()
+                || !Boolean.TRUE.equals(skill.getRecommendedResearch()), random);
 
         player.setResearchCategoryCode(categories.get(pick));
         player.setResearchLevelOrder(level.order());
@@ -595,6 +692,23 @@ public class ResearchService {
         log.debug("ИИ {} выбрал исследование {} ({}, уровень {})",
                 player.getName(), option.name(), categories.get(pick), level.order());
         return Boolean.TRUE;
+    }
+
+    /**
+     * Раздел следующего прорыва по книге дебютов — field-backlog, пункт 9: номер прорыва — число
+     * уже изученных уровней. {@code null} — не сложный уровень, книги нет или дебют кончился.
+     */
+    private String bookedSection(PlayerEntity player, com.sddnw.server.domain.enums.AiSkill skill,
+                                 Map<String, Integer> next) {
+        if (!Boolean.TRUE.equals(skill.getOpeningBook()) || openingBook == null) {
+            return null;
+        }
+        AiOpeningBook.Opening opening = openingBook.of(player.getRaceCode());
+        if (opening == null || opening.sections() == null) {
+            return null;
+        }
+        int researched = next.values().stream().mapToInt(order -> order - 1).sum();
+        return researched < opening.sections().size() ? opening.sections().get(researched) : null;
     }
 
     /**
@@ -652,12 +766,35 @@ public class ResearchService {
         if (wanted.isEmpty()) {
             return Boolean.FALSE;
         }
-        Set<String> known = playerTechnologyRepository
-                .findAllByPlayerIdOrderByCategoryCodeAscLevelOrderAsc(player.getId()).stream()
-                .map(PlayerTechnologyEntity::getOptionCode)
-                .collect(Collectors.toSet());
         Boolean uncreative = raceService.effects(player).uncreative();
+        WantedStep step = wantedStep(knownCodes(player), wanted, next);
+        if (step == null) {
+            return Boolean.FALSE;
+        }
+        ResearchOptionDto option = step.exact() != null && !Boolean.TRUE.equals(uncreative)
+                ? step.exact()
+                : pickOption(step.level(), uncreative, random);
 
+        player.setResearchCategoryCode(step.categoryCode());
+        player.setResearchLevelOrder(step.level().order());
+        player.setResearchOptionCode(option.code());
+        player.setResearchPoints(0);
+        log.debug("ИИ {} взялся за нужное: {} ({}, уровень {})",
+                player.getName(), option.name(), step.categoryCode(), step.level().order());
+        return Boolean.TRUE;
+    }
+
+    /**
+     * Шаг к первой нужде — п. 15: раздел и уровень, которые изучаются следующими по дороге к
+     * нужной технологии. Одно правило на ИИ ({@link #chooseWanted}) и на советника
+     * ({@link #advise}), field-backlog, пункт 23: второго свода не заводим.
+     * <p>
+     * Технология ищется по справочнику: её раздел и уровень известны, и если раздел ещё не
+     * дошёл до неё, изучается очередной его уровень — дорога к нужному и есть нужда.
+     *
+     * @return {@code null} — нужного нет
+     */
+    private WantedStep wantedStep(Set<String> known, List<String> wanted, Map<String, Integer> next) {
         for (String code : wanted) {
             if (known.contains(code)) {
                 continue;
@@ -675,22 +812,70 @@ public class ResearchService {
             if (order > place.levelOrder()) {
                 continue;
             }
-
             ResearchLevelDto level = researchCatalog.level(place.categoryCode(), order);
-            ResearchOptionDto option = order.equals(place.levelOrder())
-                    && !Boolean.TRUE.equals(uncreative)
-                    ? place.option()
-                    : pickOption(level, uncreative, random);
-
-            player.setResearchCategoryCode(place.categoryCode());
-            player.setResearchLevelOrder(level.order());
-            player.setResearchOptionCode(option.code());
-            player.setResearchPoints(0);
-            log.debug("ИИ {} взялся за нужное: {} ({}, уровень {})",
-                    player.getName(), option.name(), place.categoryCode(), level.order());
-            return Boolean.TRUE;
+            return new WantedStep(place.categoryCode(), level,
+                    order.equals(place.levelOrder()) ? place.option() : null, code);
         }
-        return Boolean.FALSE;
+        return null;
+    }
+
+    /**
+     * @param exact нужная технология, если она на этом самом уровне; пусто — уровень лишь шаг к ней
+     */
+    private record WantedStep(String categoryCode, ResearchLevelDto level, ResearchOptionDto exact,
+                              String wantedCode) {
+    }
+
+    /**
+     * Что выбрал бы советник — field-backlog, пункт 23: то же правило, по которому цель берёт
+     * ИИ ({@link #chooseWanted}, рекомендованная технология уровня), но без жребия и без
+     * записи — советник называет, решает игрок. Нужд нет — самый дешёвый из следующих уровней
+     * дерева с его рекомендацией: дешёвое приносит прорыв раньше.
+     *
+     * @return {@code null} — изучать нечего
+     */
+    @Transactional(readOnly = true)
+    public ResearchAdvice advise(PlayerEntity player, List<String> wanted) {
+        Map<String, Integer> next = nextLevelOrders(player);
+        WantedStep step = wantedStep(knownCodes(player), wanted, next);
+        if (step != null) {
+            ResearchOptionDto option = step.exact() != null ? step.exact() : recommendedOf(step.level());
+            return new ResearchAdvice(step.categoryCode(), step.level().order(), option.code(), step.wantedCode());
+        }
+        ResearchLevelDto cheapest = null;
+        String category = null;
+        for (ResearchCategoryDto candidate : researchCatalog.tree().categories()) {
+            Integer order = next.getOrDefault(candidate.code(), 1);
+            ResearchLevelDto level = candidate.levels().stream()
+                    .filter(one -> one.order().equals(order)).findFirst().orElse(null);
+            // Ничья решается порядком разделов в справочнике — совет один и тот же на каждый запрос.
+            if (level != null && (cheapest == null || level.cost() < cheapest.cost())) {
+                cheapest = level;
+                category = candidate.code();
+            }
+        }
+        return cheapest == null ? null
+                : new ResearchAdvice(category, cheapest.order(), recommendedOf(cheapest).code(), null);
+    }
+
+    /**
+     * @param wantedCode нужда, к которой ведёт совет; пусто — нужд нет, совет по рекомендации дерева
+     */
+    public record ResearchAdvice(String categoryCode, Integer levelOrder, String optionCode, String wantedCode) {
+    }
+
+    private static ResearchOptionDto recommendedOf(ResearchLevelDto level) {
+        return level.options().stream()
+                .filter(option -> Boolean.TRUE.equals(option.recommended()))
+                .findFirst()
+                .orElse(level.options().get(0));
+    }
+
+    private Set<String> knownCodes(PlayerEntity player) {
+        return playerTechnologyRepository
+                .findAllByPlayerIdOrderByCategoryCodeAscLevelOrderAsc(player.getId()).stream()
+                .map(PlayerTechnologyEntity::getOptionCode)
+                .collect(Collectors.toSet());
     }
 
     /**
@@ -754,7 +939,10 @@ public class ResearchService {
                 .max()
                 .orElse(0) + 1;
         if (!next.equals(levelOrder)) {
-            throw new ConflictException("research.wrongLevel", categoryCode, next, levelOrder);
+            // Раздел — названием на языке читателя: код раздела («engineering») — служебный
+            // язык, и на экран он не попадает (field-backlog, пункт 198).
+            throw new ConflictException("research.wrongLevel", researchCatalog.category(categoryCode).name(),
+                    next, levelOrder);
         }
     }
 

@@ -2,10 +2,10 @@ import { useState, type ReactNode } from 'react';
 import { BuyCoin } from '../colonies/BuyCoin';
 import type { Colony, ColonyProject } from '../../api/types';
 import { queueEta, queueStalled, turnsLeft } from './colonyRules';
-import { QUEUE_LIMIT } from './buildLimits';
 import { t, tf } from '../../i18n';
-import { Figure } from '../Figure';
+import { Figure, TurnsFigure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { justTouched } from '../touch';
 
 /**
  * Очередь стройки колонии — п. 10, ОДНИМ списком на оба экрана.
@@ -67,6 +67,9 @@ import { figureLabelClass } from '../accent';
  * плюс всё, что стоит впереди. Прежде каждая строка называла свой срок в отрыве от
  * остальных, и числа не складывались ни во что — а спрашивают у очереди именно «когда».
  */
+/** Выделение текущей стройки — верхней строки списка; строки очереди выделяются своим номером. */
+export const CURRENT = -1;
+
 export function ColonyQueue({
   colony,
   own,
@@ -75,10 +78,10 @@ export function ColonyQueue({
   onRemove,
   onMove,
   onPromote,
-  onEnqueue,
   selected,
   onSelect,
   onDropProject,
+  onDropCurrent,
   credits,
   onBuy,
 }: {
@@ -96,13 +99,22 @@ export function ColonyQueue({
    * на текущую стройку.
    */
   onPromote: (project: ColonyProject, keepCurrent?: boolean) => void;
-  /** Добавить ещё одну копию повторяемого — кнопка «+»; без неё её просто не рисуют. */
-  onEnqueue?: (project: ColonyProject) => void;
   /** Выбранная строка очереди: её правят с клавиатуры. */
   selected?: number | null;
   onSelect?: (index: number | null) => void;
-  /** Проект, притащенный из списка стройки, — встаёт в очередь. */
-  onDropProject?: (code: string) => void;
+  /**
+   * Проект, притащенный из списка стройки. `end` — в конец очереди (бросок на очередь),
+   * `top` — первым в очередь, `current` — на стапель, а прежняя стройка первой в очередь
+   * (бросок на текущую стройку, см. `dropFront`), номер — на место этой строки очереди, а
+   * она и всё ниже сдвигаются вниз (бросок на строку).
+   */
+  onDropProject?: (code: string, place: 'end' | 'top' | 'current' | number) => void;
+  /**
+   * Снять текущую стройку (07.10.2026): на стапель встаёт первое из очереди, а пустая
+   * очередь — товары. Без этого стройку, которую игрок передумал строить, можно было лишь
+   * подменить другой, а дома и товары в очереди за ней не начались бы никогда.
+   */
+  onDropCurrent?: () => void;
   /** Казна империи — по ней монетка выкупа знает, хватает ли денег (п. 10). */
   credits?: number;
   /**
@@ -126,6 +138,53 @@ export function ColonyQueue({
     setOver(null);
   };
 
+  /*
+    Оплаченная стройка — выкупом или с избытком вложенного — с места не сдвигается: вложенное
+    принадлежит колонии и ушло бы в новый проект, а купленное снова стало бы недостроенным.
+  */
+  const paid = colony.projectCost !== undefined && colony.projectPoints >= colony.projectCost;
+  const PROJECT = 'application/x-sddnw-project';
+
+  /**
+   * Бросок на текущую стройку или над ней — «на первое место» (06.10.2026). Новое здание из
+   * списка и строка очереди встают на стапель, а прежняя стройка — первой в очередь; у
+   * оплаченной стройки на стапель не встаёт ничего, и брошенное становится первым в очереди.
+   * Прежде бросок проекта из списка сюда не принимал никто, кроме очереди целиком, и
+   * проект уходил в её конец — а целились в начало.
+   */
+  const dropFront = (event: React.DragEvent) => {
+    const code = event.dataTransfer.getData(PROJECT);
+    const from = dragging;
+    setDragging(null);
+    setOver(null);
+    if (code && onDropProject) {
+      event.preventDefault();
+      event.stopPropagation();
+      onDropProject(code, paid ? 'top' : 'current');
+      return;
+    }
+    if (from === null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const project = queue[from];
+    if (!project) {
+      return;
+    }
+    if (!paid) {
+      onPromote(project, true);
+    } else if (from !== 0) {
+      onMove(from, 0);
+    }
+  };
+  const frontOver = (event: React.DragEvent) => {
+    if (dragging !== null || event.dataTransfer.types.includes(PROJECT)) {
+      event.preventDefault();
+      setOver(-1);
+    }
+  };
+
   /**
    * Перетащили что-то НА очередь.
    *
@@ -134,14 +193,22 @@ export function ColonyQueue({
    * разбирается только первый случай: очередь как целое принимает пополнение.
    */
   const dropHere = (event: React.DragEvent) => {
-    const code = event.dataTransfer.getData('application/x-sddnw-project');
+    const code = event.dataTransfer.getData(PROJECT);
     if (code && onDropProject) {
       event.preventDefault();
-      onDropProject(code);
+      onDropProject(code, 'end');
+    }
+    // Строка очереди, брошенная в промежуток между строками, остаётся на месте: бросок
+    // внутри очереди — не «мимо», и убирать её за промах на полточки нельзя.
+    if (dragging !== null) {
+      event.preventDefault();
     }
     setDragging(null);
     setOver(null);
   };
+  // Снимать нечего, когда колония и так на товарах без очереди: туда снятие и привело бы.
+  const canDropCurrent = own && onDropCurrent !== undefined && Boolean(colony.projectCode)
+    && !(colony.projectCode === 'TRADE_GOODS' && queue.length === 0);
   const stalled = queueStalled(colony) && queue.length > 0;
   const runs = collapse(queue);
   /*
@@ -161,24 +228,19 @@ export function ColonyQueue({
       onDragOver={(event) => {
         // Разрешаем бросок, только когда тащат проект: иначе очередь принимала бы что
         // угодно, включая текст со страницы.
-        if (event.dataTransfer.types.includes('application/x-sddnw-project')) {
+        if (dragging !== null || event.dataTransfer.types.includes(PROJECT)) {
           event.preventDefault();
         }
       }}
       onDrop={dropHere}
     >
       {/*
-        Счётчик мест в заголовке. Прежде о пределе очереди игрок узнавал, только упёршись
-        в него: подсказка про семь проектов появлялась в подвале окна ПОСЛЕ отказа.
+        Заголовок без счётчика мест (09.10.2026, решение хозяина проекта): «2 из 10» было лишним —
+        о полной очереди скажет строка состояния, а не число в каждом взгляде.
       */}
-      <div className={`flex items-baseline justify-between text-18 uppercase tracking-[0.2em] text-ink-faint`}>
-        <span>{t('build.queue')}</span>
-        <span className={figureLabelClass('value')} title={t('build.queue.count.title', { max: QUEUE_LIMIT })}>
-          {tf('build.queue.count', {
-            n: <Figure accent="value">{queue.length}</Figure>,
-            max: <Figure accent="value">{QUEUE_LIMIT}</Figure>,
-          })}
-        </span>
+      <div className={`text-18 uppercase tracking-[0.2em] text-ink-faint`}
+           onDragOver={frontOver} onDrop={dropFront}>
+        {t('build.queue')}
       </div>
 
       <ol className="mt-1 flex flex-col gap-0.5">
@@ -189,37 +251,65 @@ export function ColonyQueue({
             в очередь. Прежде бросок сюда не принимал никто, браузер считал его броском МИМО
             очереди, и строка не вставала первой, а исчезала — «бросок мимо» значит «убрать».
           */
-          onDragOver={(event) => {
-            if (dragging !== null) {
-              event.preventDefault();
-              setOver(-1);
-            }
-          }}
-          onDrop={(event) => {
-            if (dragging === null) {
+          onDragOver={frontOver}
+          onDragLeave={() => setOver((now) => (now === -1 ? null : now))}
+          onDrop={dropFront}
+          /*
+            Щелчок по текущей стройке, когда выбрана строка очереди, — та же «вставка на первое
+            место», что и бросок сюда: щелчки и перетаскивание обязаны уметь одно и то же. У
+            оплаченной стройки выбранное встаёт первым в очереди.
+          */
+          onClick={() => {
+            if (!own || busy) {
               return;
             }
-            event.preventDefault();
-            const project = queue[dragging];
-            setDragging(null);
-            setOver(null);
-            if (project) {
+            /*
+              Текущая стройка выделяется, как любая строка (09.10.2026, баг хозяина проекта): иначе
+              её не убрать клавишей D. Выделение у неё — номер −1 (`CURRENT`).
+            */
+            if (selected === null || selected === undefined || selected === CURRENT) {
+              onSelect?.(selected === CURRENT ? null : CURRENT);
+              return;
+            }
+            if (!movable) {
+              onSelect?.(CURRENT);
+              return;
+            }
+            const project = queue[selected];
+            onSelect?.(null);
+            if (!project) {
+              return;
+            }
+            if (!paid) {
               onPromote(project, true);
+            } else if (selected !== 0) {
+              onMove(selected, 0);
             }
           }}
-          className={'flex items-baseline gap-2 '
-            + (over === -1 && dragging !== null ? 'border-b border-accent' : '')}
+          title={canDropCurrent ? t('build.dropCurrent.title') : undefined}
+          className={'flex items-baseline gap-2 ' + (own ? 'cursor-pointer ' : '')
+            + (selected === CURRENT ? 'bg-space-800 ' : '')
+            + (over === -1 ? (paid ? 'border-b border-accent' : 'border-t border-accent') : '')}
         >
-          <span className="w-4 shrink-0 text-right text-18 text-accent">●</span>
-          <span className={`min-w-0 flex-1 break-words text-20 leading-tight text-ink-bright`}>
+          {/*
+            Оплаченная стройка сереет, как недоступная строка, и подписана: место за ней, а
+            брошенное сюда встаёт второй позицией — первым в очереди.
+          */}
+          <span className={'w-4 shrink-0 text-right text-18 ' + (paid ? 'text-ink-faint' : 'text-accent')}>●</span>
+          <span className={'min-w-0 flex-1 break-words text-20 leading-tight '
+                + (paid ? 'text-ink-faint' : 'text-ink-bright')}
+                title={paid ? t('build.paid.title') : undefined}>
             {colony.projectName ?? t('build.nothing')}
+            {paid ? <span className="ml-2 text-14 text-ink-faint">{t('build.paid')}</span> : null}
           </span>
           {/*
             Вложенное — числом и с объяснением: накопленное производство остаётся КОЛОНИИ,
             а не проекту (`ColonyService.setProject` его не трогает). Пока об этом молчали,
             смены стройки боялись — казалось, что вложенное пропадёт.
           */}
-          {colony.projectCost === undefined ? null : (
+          {/* В узкой панели вложенное уже стоит строкой над очередью («13 / 582 производства»), а
+              место нужно сроку — он вдвое крупнее (12.10.2026). */}
+          {colony.projectCost === undefined || !wide ? null : (
             <span className={'shrink-0 ' + figureLabelClass('value')}
                   title={t('build.invested.title')}>
               {tf('build.invested', {
@@ -232,7 +322,7 @@ export function ColonyQueue({
           <span className={'shrink-0 ' + figureLabelClass('value')}>
             {left === null
               ? colony.projectCost === undefined ? t('build.endless') : '—'
-              : tf('build.turns', { n: <Figure accent="value">{left}</Figure> })}
+              : tf('build.turns', { n: <TurnsFigure accent="value">{left}</TurnsFigure> })}
           </span>
           {/*
             Выкуп текущей стройки — та же монетка, что в строке списка колоний: четыре её
@@ -243,6 +333,16 @@ export function ColonyQueue({
             <span className="self-center">
               <BuyCoin colony={colony} credits={credits ?? 0} colonyName={colony.projectName ?? ''}
                        busy={busy} onBuy={onBuy} />
+            </span>
+          ) : null}
+          {canDropCurrent ? (
+            <span className="shrink-0 text-18">
+              {/* Щелчок по крестику не должен заодно стать щелчком по строке: тот вставил бы
+                  выбранное на первое место. */}
+              <span onClick={(event) => event.stopPropagation()}>
+                <QueueButton label="✕" title={t('build.dropCurrent.title')} disabled={busy}
+                             onClick={() => onDropCurrent?.()} />
+              </span>
             </span>
           ) : null}
         </li>
@@ -268,7 +368,19 @@ export function ColonyQueue({
               setOver(null);
             }}
             onDragOver={(event) => { event.preventDefault(); setOver(run.first); }}
-            onDrop={(event) => { event.preventDefault(); drop(run.first); }}
+            onDrop={(event) => {
+              event.preventDefault();
+              // Проект из списка, брошенный на строку, встаёт на её место, а она — ниже.
+              const code = event.dataTransfer.getData(PROJECT);
+              if (code && onDropProject) {
+                event.stopPropagation();
+                setDragging(null);
+                setOver(null);
+                onDropProject(code, run.first);
+                return;
+              }
+              drop(run.first);
+            }}
             /*
               Щелчок: выбрать, снять выбор или ВСТАВИТЬ выбранное сюда — п. 10. Порядок
               разбора именно такой, потому что «вставить» возможно лишь тогда, когда
@@ -295,8 +407,10 @@ export function ColonyQueue({
               onMove(selected, run.first);
               onSelect?.(null);
             }}
+            // Скрытое действие названо (field-backlog, пункт 72): одиночную строку можно
+            // утащить прочь — и она уйдёт из очереди.
             title={t(selected === null || selected === undefined || selected === run.first
-              ? 'build.queue.pick.title'
+              ? (own && run.count === 1 ? 'build.queue.pick.dragTitle' : 'build.queue.pick.title')
               : movable ? 'build.queue.insert.title' : 'build.queue.pick.title')}
             className={
               'flex items-baseline gap-2 '
@@ -319,27 +433,18 @@ export function ColonyQueue({
             <span className={'shrink-0 ' + figureLabelClass('value')} title={t('build.eta.title')}>
               {eta(colony, queue, run.last, etaKey)}
             </span>
+            {/*
+              Справа — цена в единицах производства и крестик (09.10.2026, решение хозяина проекта):
+              порядок правят щелчками, перетаскиванием и клавишами (↑ ↓, Shift, T), а стрелки,
+              «▸» и «+» у каждой строки загромождали список.
+            */}
+            {run.project.cost !== undefined ? (
+              <span className={'shrink-0 ' + figureLabelClass('value')}>
+                {tf('build.queue.cost', { n: <Figure accent="value">{run.project.cost * run.count}</Figure> })}
+              </span>
+            ) : null}
             {own ? (
-              <span className="flex shrink-0 items-baseline gap-1 text-18">
-                {/*
-                  «+» стоит только у последней строки: новая копия уходит в КОНЕЦ очереди
-                  (`enqueue` иначе не умеет), и у строки посередине она встала бы не рядом
-                  с повтором, а в хвосте — кнопка обещала бы не то, что делает.
-                */}
-                {onEnqueue && run.project.repeatable && run.last === queue.length - 1 ? (
-                  <QueueButton label="+" title={t('build.more.title')}
-                               disabled={busy || queue.length >= QUEUE_LIMIT}
-                               onClick={() => onEnqueue(run.project)} />
-                ) : null}
-                <QueueButton label="▸" title={t('build.now.title')} disabled={busy}
-                             onClick={() => onPromote(run.project)} />
-                {/* Весь повтор двигается одним запросом: переставляется СОСЕДНЯЯ строка. */}
-                <QueueButton label="▲" title={t('build.up.title')}
-                             disabled={busy || run.first === 0}
-                             onClick={() => onMove(run.first - 1, run.last)} />
-                <QueueButton label="▼" title={t('build.down.title')}
-                             disabled={busy || run.last === queue.length - 1}
-                             onClick={() => onMove(run.last + 1, run.first)} />
+              <span className="shrink-0 text-18" onClick={(event) => event.stopPropagation()}>
                 <QueueButton label="✕" title={run.count > 1 ? t('build.removeOne.title') : t('build.remove.title')}
                              disabled={busy}
                              onClick={() => onRemove(run.last)} />
@@ -357,6 +462,10 @@ export function ColonyQueue({
         <p className={`mt-1 text-18 leading-tight text-warn`}>
           {t('build.queue.stalled', { name: colony.projectName ?? '' })}
         </p>
+      ) : null}
+      {/* Клавиши очереди названы там, где действуют (пункт 72): иначе о R и D не узнать. */}
+      {wide && own && queue.length > 0 && !justTouched() ? (
+        <p className="mt-1 text-14 text-ink-faint">{t('build.queue.keys')}</p>
       ) : null}
     </div>
   );
@@ -425,7 +534,7 @@ const eta = (
     return t('build.endless');
   }
   const turns = queueEta(colony, queue, index);
-  return turns === null ? '—' : tf(key, { n: <Figure accent="value">{turns}</Figure> });
+  return turns === null ? '—' : tf(key, { n: <TurnsFigure accent="value">{turns}</TurnsFigure> });
 };
 
 /** Кнопка строки очереди: значок и подсказка, гаснет на время ответа сервера. */
@@ -443,7 +552,8 @@ function QueueButton({
   return (
     <button
       type="button"
-      className="link-quiet disabled:cursor-not-allowed disabled:text-ink-off"
+      // Зона нажатия не мельче пальца (пункт 172): значок мелкий, а цель — 24 точки.
+      className="link-quiet hit-24 disabled:cursor-not-allowed disabled:text-ink-off"
       disabled={disabled}
       title={title}
       onClick={onClick}

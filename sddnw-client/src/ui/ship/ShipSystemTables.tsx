@@ -165,6 +165,7 @@ export function ShipSystemTables({
  * <b>«Добавить» стоит ПОД строками, а не в шапке</b>: в оригинале это «Add New Weapon»
  * по центру следующей строкой, и видно её всегда — и у пустой таблицы, и у полной.
  * Раньше зов был только у пустой, а у полной прятался ссылкой в углу заголовка.
+ * Свободное место таблицы зовёт так же, как эта строка.
  */
 function Table({
   head,
@@ -180,11 +181,21 @@ function Table({
   active: boolean;
   onOpen: () => void;
 }) {
+  // Щелчок по свободному месту таблицы зовёт то же окно выбора, что и строка «добавить»
+  // (09.10.2026, решение хозяина проекта): пустая таблица — почти вся свободное место, и
+  // целиться в одну строку внизу незачем. Строки состава и их кнопки живут своими щелчками.
+  const openOnFree = (event: React.MouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('tbody tr, button')) {
+      return;
+    }
+    onOpen();
+  };
   return (
     <div
-      className={`flex min-h-0 flex-1 flex-col border bg-space-950/60 ${
+      className={`flex min-h-0 flex-1 cursor-pointer flex-col border [&_tbody_tr]:cursor-default bg-space-950/60 ${
         active ? 'border-amber-400/60' : 'border-space-700'
       }`}
+      onClick={openOnFree}
     >
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full text-left text-18">

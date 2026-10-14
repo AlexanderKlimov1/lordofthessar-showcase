@@ -10,10 +10,13 @@ import { ColoniesQueueDialog } from './ColoniesQueueDialog';
 import { COLUMNS, ColonyRow } from './ColonyRow';
 import { usePopulationDrag, type Drop, type JobName } from './usePopulationDrag';
 import { t, useT } from '../../i18n';
-import { KeyFigure } from '../KeyFigure';
+import { Colonist, ResourceIcon } from '../system/colonyIcons';
+import { ColoniesIcon, TransportIcon } from '../panelIcons';
+import { buyState } from './BuyCoin';
 import { Figure } from '../Figure';
 import { figureLabelClass, signed, signTone } from '../accent';
 import type { ColonistJob } from '../../api/types';
+import { ActionError } from '../feedback/ActionError';
 
 /** Занятие экрана — так же, как его называет сервер. */
 const SERVER_JOB: Record<JobName, ColonistJob> = {
@@ -21,6 +24,17 @@ const SERVER_JOB: Record<JobName, ColonistJob> = {
   workers: 'WORKERS',
   scientists: 'SCIENTISTS',
 };
+
+/** Значок с числом в сводке империи; что это за число — в подсказке. */
+function Summary({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span className="flex items-center gap-1.5" title={title}>
+      <span className="text-lamp">{icon}</span>
+      <span className="sr-only">{title}</span>
+      {children}
+    </span>
+  );
+}
 
 /**
  * Колонии империи — экран нижнего меню, окном Colonies MOO II (п. 4.1.1, п. 10, п. 11.1).
@@ -372,6 +386,52 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
       .finally(() => setBusy(false));
   };
 
+  /** Выкуп у выбранных — второе нажатие подтверждает (редизайн, 07.10.2026). */
+  const [confirmBuy, setConfirmBuy] = useState(false);
+  /**
+   * Кого из выбранных выкупить: самые дешёвые первыми, пока хватает казны, — тем же правилом
+   * готовности, что у монетки строки (`buyState`).
+   */
+  const bulk = (() => {
+    let left = self?.credits ?? 0;
+    const planets: Planet[] = [];
+    let cost = 0;
+    const ready = selectedPlanets
+      .filter((planet) => planet.colony && buyState(planet.colony, Number.MAX_SAFE_INTEGER) === 'ready')
+      .sort((a, b) => (a.colony!.buyCost ?? 0) - (b.colony!.buyCost ?? 0));
+    for (const planet of ready) {
+      const price = planet.colony!.buyCost ?? 0;
+      if (price <= left) {
+        planets.push(planet);
+        left -= price;
+        cost += price;
+      }
+    }
+    return { planets, cost };
+  })();
+
+  /** Выкупить по очереди: запросы цепочкой, казна и строки перечитываются в конце. */
+  const buyAll = (planets: Planet[]) => {
+    if (!game || !credentials || busy || planets.length === 0) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    planets.reduce<Promise<number>>((chain, planet) => chain.then((done) =>
+      gameApi.buyProject(game.id, planet.id, credentials.accessToken).then((updated) => {
+        updatePlanet(updated);
+        return done + 1;
+      })), Promise.resolve(0))
+      .then(async (done) => {
+        const details = await gameApi.getGame(game.id);
+        setLobby(details.game, details.players);
+        setNotice(t('colonies.boughtAll', { n: done }));
+      })
+      .catch((failure: Error) => setError(failure.message))
+      .finally(() => setBusy(false));
+  };
+
   const { held, hover, hoverZone, start, register, registerZone } = usePopulationDrag(send);
   const color = self?.color ?? '#7fd4ff';
 
@@ -405,14 +465,42 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
   return (
     // Экран во всё окно: в MOO II список колоний — полноэкранный вид, а не окошко.
     <div className="absolute inset-0 z-40 flex flex-col bg-space-950 p-4">
-      <div className="mb-2 flex flex-none items-baseline justify-between gap-6 border-b border-space-700 pb-2">
-        <h2 className="text-28 uppercase tracking-[0.3em] text-ink-bright">{t('colonies.title')}</h2>
-        <p className={figureLabelClass('value')}>
-          {t('colonies.count')} <Figure accent="value">{colonies.length}</Figure> {t('colonies.colonists')}{' '}
-          <Figure accent="value">{totals.population}</Figure> {t('colonies.freighters')}{' '}
-          <Figure accent="value" tone={free === 0 ? 'danger' : undefined}>{free}</Figure> {t('colonies.of')}{' '}
-          <Figure accent="value">{freighters}</Figure>
-        </p>
+      {/*
+        СВОДКА ИМПЕРИИ — ОДНОЙ СТРОКОЙ НАВЕРХУ (редизайн, 07.10.2026, решение хозяина проекта):
+        колонии, жители, грузовики, еда, производство, наука и доход значками с числами. Прежде
+        итоги стояли внизу фразой, а счёт колоний — наверху другой фразой.
+      */}
+      <div className="mb-2 flex flex-none flex-wrap items-center gap-x-8 gap-y-2 border-b border-space-700 pb-2">
+        {/* Отступ слева — под угловой значок звука, который виден поверх полноэкранных сцен. */}
+        <h2 className="mr-4 pl-8 text-28 uppercase tracking-[0.3em] text-ink-bright">{t('colonies.title')}</h2>
+        <div className={'flex flex-wrap items-center gap-x-6 gap-y-1 ' + figureLabelClass('lead')}>
+          <Summary title={t('colonies.summary.colonies')} icon={<ColoniesIcon className="h-6 w-6" />}>
+            <Figure accent="lead">{colonies.length}</Figure>
+          </Summary>
+          <Summary title={t('colonies.summary.colonists')} icon={<Colonist color="rgb(var(--lamp))" className="h-6 w-[17px]" />}>
+            <Figure accent="lead">{totals.population}</Figure>
+          </Summary>
+          <Summary title={t('colonies.summary.freighters', { free, all: freighters })} icon={<TransportIcon className="h-6 w-6" />}>
+            <Figure accent="lead" tone={free === 0 && freighters > 0 ? 'danger' : undefined}>{free}</Figure>
+            <span className="text-ink-dim">/{freighters}</span>
+          </Summary>
+          {/* Главное число списка — баланс еды империи (пункт 13): минус здесь значит голод. */}
+          <Summary title={t('key.food')} icon={<ResourceIcon kind="grain" className="h-6 w-6 text-lamp" />}>
+            <Figure accent="lead" tone={signTone(totals.food)}>{signed(totals.food)}</Figure>
+          </Summary>
+          <Summary title={t('colonies.totals.production')} icon={<ResourceIcon kind="hammer" className="h-6 w-6 text-lamp" />}>
+            <Figure accent="lead">{totals.production}</Figure>
+          </Summary>
+          <Summary title={t('colonies.totals.research')} icon={<ResourceIcon kind="microscope" className="h-6 w-6 text-lamp" />}>
+            <Figure accent="lead">{totals.research}</Figure>
+          </Summary>
+          <Summary title={t('colonies.totals.income')} icon={<ResourceIcon kind="coins" className="h-6 w-6 text-lamp" />}>
+            <Figure accent="lead" tone={signTone(totals.income)}>{signed(totals.income)}</Figure>
+          </Summary>
+        </div>
+        <button type="button" className="link-quiet ml-auto text-19" onClick={onClose}>
+          {t('common.closeEsc')}
+        </button>
       </div>
 
       {/*
@@ -467,7 +555,10 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
               + (order === 'colonists' ? 'text-accent' : 'text-ink-faint hover:text-ink-dim')}
             onClick={() => setOrder('colonists')}
           >
-            {t('colonies.col.colonists')}{order === 'colonists' ? ' ▾' : ''}
+            <span className="inline-flex items-center gap-1">
+              <Colonist color="rgb(var(--lamp))" className="h-6 w-[17px]" />
+              {order === 'colonists' ? <span aria-hidden>▾</span> : null}
+            </span>
           </button>
           <button
             type="button"
@@ -477,7 +568,10 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
               + (order === 'food' ? 'text-accent' : 'text-ink-faint hover:text-ink-dim')}
             onClick={() => setOrder('food')}
           >
-            {t('colonies.col.food')}{order === 'food' ? ' ▾' : ''}
+            <span className="inline-flex items-center justify-end gap-1">
+              {order === 'food' ? <span aria-hidden>▾</span> : null}
+              <ResourceIcon kind="grain" label={t('colonies.col.food')} className="h-6 w-6 text-lamp" />
+            </span>
           </button>
           <button
             type="button"
@@ -487,7 +581,10 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
               + (order === 'production' ? 'text-accent' : 'text-ink-faint hover:text-ink-dim')}
             onClick={() => setOrder('production')}
           >
-            {t('colonies.col.production')}{order === 'production' ? ' ▾' : ''}
+            <span className="inline-flex items-center justify-end gap-1">
+              {order === 'production' ? <span aria-hidden>▾</span> : null}
+              <ResourceIcon kind="hammer" label={t('colonies.col.production')} className="h-6 w-6 text-lamp" />
+            </span>
           </button>
           <button
             type="button"
@@ -497,7 +594,10 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
               + (order === 'research' ? 'text-accent' : 'text-ink-faint hover:text-ink-dim')}
             onClick={() => setOrder('research')}
           >
-            {t('colonies.col.research')}{order === 'research' ? ' ▾' : ''}
+            <span className="inline-flex items-center justify-end gap-1">
+              {order === 'research' ? <span aria-hidden>▾</span> : null}
+              <ResourceIcon kind="microscope" label={t('colonies.col.research')} className="h-6 w-6 text-lamp" />
+            </span>
           </button>
           <button
             type="button"
@@ -507,7 +607,10 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
               + (order === 'income' ? 'text-accent' : 'text-ink-faint hover:text-ink-dim')}
             onClick={() => setOrder('income')}
           >
-            {t('colonies.col.income')}{order === 'income' ? ' ▾' : ''}
+            <span className="inline-flex items-center justify-end gap-1">
+              {order === 'income' ? <span aria-hidden>▾</span> : null}
+              <ResourceIcon kind="coins" label={t('colonies.col.income')} className="h-6 w-6 text-lamp" />
+            </span>
           </button>
           <button
             type="button"
@@ -546,6 +649,7 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
               zoneRef={(job) => registerZone(planet.id, job)}
               onStartDrag={(job, count) => start(planet.id, job, count)}
               onOpen={() => setOpenedColony(planet.id)}
+              onOpenBuild={() => setOpenedColony(planet.id, true)}
               onMoveJob={(from, to) => moveJob(planet.id, from, to)}
               onTransfer={() => setTransferFrom(planet)}
             />
@@ -558,59 +662,57 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
         показывать её нечему, и место в экране она не занимает.
       */}
       {selectedPlanets.length > 0 ? (
-        <div className="mt-2 flex flex-none flex-wrap items-baseline gap-x-5 gap-y-1 border-t border-space-700 pt-2 text-19">
+        /*
+          ДЕЙСТВИЯ НАД ВЫБРАННЫМИ (редизайн, 07.10.2026): заложить общий проект и выкупить стройку
+          у тех, кому хватает казны, — самые дешёвые первыми, пока казна не кончится. Выкуп в два
+          нажатия: он тратит деньги сразу у многих колоний.
+        */
+        <div className="mt-2 flex flex-none flex-wrap items-center gap-x-4 gap-y-2 border-t border-space-700 pt-2 text-19">
           <span className={figureLabelClass('value')}>
             {t('colonies.selected')} <Figure accent="value">{selectedPlanets.length}</Figure> {t('colonies.of')}{' '}
             <Figure accent="value">{colonies.length}</Figure>
           </span>
           <button
             type="button"
-            className="link disabled:cursor-not-allowed disabled:text-ink-off"
+            className="rounded border border-space-600 bg-space-900 px-3 py-1 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:text-ink-off"
             disabled={busy}
             onClick={() => setQueueing(true)}
           >
             {t('colonies.enqueueAll')}
           </button>
-          <button type="button" className="link" onClick={() => setSelected([])}>
+          <button
+            type="button"
+            className={'rounded border px-3 py-1 disabled:cursor-not-allowed disabled:border-space-700 disabled:text-ink-off '
+              + (confirmBuy ? 'border-warn text-warn' : 'border-space-600 bg-space-900 hover:border-accent hover:text-accent')}
+            disabled={busy || bulk.planets.length === 0}
+            title={bulk.planets.length === 0 ? t('colonies.buyAll.none') : undefined}
+            onClick={() => {
+              if (!confirmBuy) {
+                setConfirmBuy(true);
+                return;
+              }
+              setConfirmBuy(false);
+              buyAll(bulk.planets);
+            }}
+          >
+            {confirmBuy
+              ? t('colonies.buyAll.confirm', { n: bulk.planets.length, cost: bulk.cost })
+              : t('colonies.buyAll', { n: bulk.planets.length, cost: bulk.cost })}
+          </button>
+          <button type="button" className="link-quiet text-ink-dim" onClick={() => setSelected([])}>
             {t('colonies.clearSelection')}
           </button>
         </div>
       ) : null}
 
       <div className="mt-2 flex-none border-t border-space-700 pt-2 text-17">
-        <div className="flex items-end justify-between gap-6">
-          {/*
-            Главное число списка колоний — баланс еды империи (пункт 13): минус здесь значит
-            голод, а голод съедает жителей раньше, чем игрок заметит его в строках. Прочие
-            итоги остались строкой рядом, мельче.
-          */}
-          <KeyFigure
-            label={t('key.food')}
-            value={signed(totals.food)}
-            tone={signTone(totals.food)}
-            className="!items-start"
-          />
-          <p className={'mr-auto ' + figureLabelClass('lead')}>
-            {t('colonies.totals.production')} <Figure accent="lead">{totals.production}</Figure> {t('colonies.totals.research')}{' '}
-            <Figure accent="lead">{totals.research}</Figure> {t('colonies.totals.income')}{' '}
-            <Figure accent="lead" tone={signTone(totals.income)}>
-              {signed(totals.income)}
-            </Figure>{' '}
-            {t('colonies.totals.perTurn')}
-          </p>
-
-          <button type="button" className="link shrink-0 text-19" onClick={onClose}>
-            {t('common.closeEsc')}
-          </button>
-        </div>
-
         {/*
           Подсказка, ошибка и вести о рейсе — одна строка под итогами, во всю ширину:
           рядом с итогами её обрезало на узком окне, а именно её и читают после переноса.
         */}
         <p className="mt-1 truncate text-16">
           {error ? (
-            <span className="text-danger">{error}</span>
+            <ActionError as="span" message={error} />
           ) : notice ? (
             <span className="text-good">{notice}</span>
           ) : (
@@ -655,7 +757,7 @@ export function ColoniesScreen({ onClose }: { onClose: () => void }) {
 
       {/* Группа на руках: летит за курсором и не перехватывает события. */}
       {held ? (
-        <HeldColonists held={held} color={color} className="h-[17px] w-[12px]"
+        <HeldColonists held={held} color={color} className="h-[20px] w-[14px]"
                        note={tripNote} refused={tripBlocked !== null} />
       ) : null}
     </div>

@@ -5,8 +5,10 @@ import type {
   ShipComponentOption,
   ShipDesign,
   ShipHull,
+  ShipTemplate,
   WeaponModification,
 } from '../../api/types';
+import { ShipLibraryDialog } from './ShipLibraryDialog';
 import { useGameStore } from '../../state/gameStore';
 import { readRevealGalaxy } from '../../state/settings';
 import { useModalEscape } from '../useModalEscape';
@@ -23,6 +25,7 @@ import {
 import { t, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Сцена дизайна кораблей — п. 8, окном Ship Design из MOO II во весь экран.
@@ -83,6 +86,9 @@ export function ShipDesignScreen({
   const [modifying, setModifying] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Библиотека проектов (пункт 96): открыто ли окно и что сказать после «в библиотеку». */
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   useT();
 
   /*
@@ -91,7 +97,7 @@ export function ShipDesignScreen({
     оба. Так же сделано на экране исследований.
   */
   useModalEscape(
-    openSlot === null && modifying === null,
+    openSlot === null && modifying === null && !libraryOpen,
     // Пришли по указателю из окна стройки — за спиной списка нет, и Esc закрывает сцену.
     () => (slot === null || fromCaller !== undefined ? onClose() : setSlot(null)),
   );
@@ -129,13 +135,24 @@ export function ShipDesignScreen({
   );
 
   /** Открывает ячейку: её проект ложится в редактор, пустая ячейка — чистый лист. */
+  /**
+   * Лучший изученный двигатель — последний доступный в справочнике: лестницы двигателей идут
+   * там возрастающей чередой. Без двигателя проект не сохранить (`ship.engineRequired`), и
+   * пустая ячейка с «очистить» ставят его сами (09.10.2026, баг хозяина проекта: кнопка
+   * сохранения гасла, а что двигатель выбирают щелчком по ящику автоматики, видно не было).
+   */
+  const drivePicks = (): Pick[] => {
+    const drive = components.filter((one) => one.slot === 'ENGINE' && one.available).at(-1);
+    return drive ? [{ component: drive, count: 1, modifications: [] }] : [];
+  };
+
   const openDesign = (nextSlot: number) => {
     const design = designs.find((candidate) => candidate.slot === nextSlot) ?? null;
     const first = hulls.find((candidate) => candidate.available) ?? hulls[0] ?? null;
     setSlot(nextSlot);
     setName(design?.name ?? '');
     setHullCode(design?.hullCode ?? first?.code ?? null);
-    setPicks(design ? picksOf(design, components, catalog?.modifications ?? []) : []);
+    setPicks(design ? picksOf(design, components, catalog?.modifications ?? []) : drivePicks());
     setOpenSlot(null);
     setError(null);
   };
@@ -250,9 +267,42 @@ export function ShipDesignScreen({
     setOpenSlot(null);
   };
 
-  /** Кнопка «очистить» оригинала: с корабля снимается всё, корпус остаётся. */
+  /** Кнопка «очистить» оригинала: с корабля снимается всё, кроме двигателя; корпус остаётся. */
   const clearAll = () => {
-    setPicks([]);
+    setPicks(drivePicks());
+    setError(null);
+  };
+
+  /** В библиотеку — пункт 96: составом, тем же видом, что и сохранение проекта. */
+  const toLibrary = () => {
+    if (!hull) {
+      return;
+    }
+    setError(null);
+    gameApi.saveShipTemplate({
+      name: name.trim() === '' ? hull.name : name.trim(),
+      hullCode: hull.code,
+      components: picks.map((pick) => ({
+        code: pick.component.code,
+        count: pick.count,
+        modifications: pick.modifications.map((mod) => mod.code),
+      })),
+    })
+      .then((saved) => setNotice(t('library.saved', { name: saved.name })))
+      .catch((failure: Error) => setError(failure.message));
+  };
+
+  /**
+   * Из библиотеки — пункт 96: корпус и то, что уже по силам, ложатся в редактор; недоступное окно
+   * библиотеки уже назвало словами. Сохраняет взятое та же кнопка, что любой проект.
+   */
+  const fromLibrary = (template: ShipTemplate) => {
+    const usable = components.filter((component) => component.available);
+    setHullCode(template.hullCode);
+    setName(template.name);
+    setPicks(picksOf({ components: template.components } as ShipDesign, usable, catalog?.modifications ?? []));
+    setLibraryOpen(false);
+    setNotice(null);
     setError(null);
   };
 
@@ -308,7 +358,7 @@ export function ShipDesignScreen({
       .finally(() => setBusy(false));
   };
 
-  const slots = Array.from({ length: catalog?.maxDesigns ?? 6 }, (_, index) => index + 1);
+  const slots = Array.from({ length: catalog?.maxDesigns ?? 8 }, (_, index) => index + 1);
   const smallHulls = catalog?.hullSizeWithoutStarBase ?? 2;
 
   /*
@@ -338,8 +388,8 @@ export function ShipDesignScreen({
   }
 
   // Первый шаг: какой класс кораблей переделываем.
-  /** Ячеек шесть, как в оригинале: справочник говорит сколько, а пока он не пришёл — шесть. */
-  const MAX_SLOTS = catalog?.maxDesigns ?? 6;
+  /** Ячеек восемь (в оригинале шесть): справочник говорит сколько, а пока он не пришёл — восемь. */
+  const MAX_SLOTS = catalog?.maxDesigns ?? 8;
 
   if (slot === null) {
     return (
@@ -356,6 +406,7 @@ export function ShipDesignScreen({
   }
 
   const fits = stats === null || stats.spaceUsed <= stats.space;
+  const hasEngine = picks.some((pick) => pick.component.slot === 'ENGINE');
 
   return (
     <div className="absolute inset-0 z-40 flex flex-col bg-space-950 p-3">
@@ -480,7 +531,18 @@ export function ShipDesignScreen({
         />
       </div>
 
-      {error ? <p className="mt-1 shrink-0 text-18 text-danger">{error}</p> : null}
+      {/*
+        Проект не помещается — пункт 97. Собрать такой окно не даёт, значит, он стал таким
+        ПОТОМ: справочник изменил размеры систем. Собранное не стирается и не чинится молча —
+        игрок видит, что и насколько, и сам решает, что снять.
+      */}
+      {stats && !fits ? (
+        <p className="mt-1 shrink-0 text-18 text-warn">
+          ⚠ {t('design.overflow', { used: stats.spaceUsed, space: stats.space })} {t('design.overflow.fix')}
+        </p>
+      ) : null}
+      {error ? <ActionError className="mt-1 shrink-0 text-18" message={error} /> : null}
+      {notice ? <p className="mt-1 shrink-0 text-16 text-good">✓ {notice}</p> : null}
 
       {/* Нижняя полоса: плашки цены и места слева, кнопки оригинала справа. */}
       <div className="mt-2 flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-space-700 pt-2">
@@ -499,10 +561,19 @@ export function ShipDesignScreen({
             <BarButton onClick={() => setSlot(null)}>{t('design.designs')}</BarButton>
           ) : null}
           <BarButton onClick={clearAll}>{t('design.clear')}</BarButton>
+          {/* Библиотека проектов (пункт 96): собранное переживает партию. */}
+          <BarButton onClick={() => setLibraryOpen(true)}>{t('library.open')}</BarButton>
+          <BarButton disabled={hull === null || picks.length === 0} onClick={toLibrary}>{t('library.store')}</BarButton>
           <BarButton onClick={onClose}>{t('common.cancelEsc')}</BarButton>
+          {/*
+            Без двигателя проект не сохранить (сервер отказывает `ship.engineRequired`), а пустая
+            ячейка открывается без него — поэтому кнопка гаснет и говорит почему (пункт 76:
+            ограничение вместо отказа).
+          */}
           <BarButton
             accent
-            disabled={busy || hull === null || !fits}
+            disabled={busy || hull === null || !fits || !hasEngine}
+            title={hull !== null && !hasEngine ? t('design.engineRequired') : undefined}
             onClick={save}
           >
             {t('design.save', { n: slot })}
@@ -527,6 +598,9 @@ export function ShipDesignScreen({
         />
       ) : null}
 
+      {libraryOpen && catalog ? (
+        <ShipLibraryDialog catalog={catalog} onTake={fromLibrary} onClose={() => setLibraryOpen(false)} />
+      ) : null}
       {openSlot !== null ? (
         <ShipSystemDialog
           slot={openSlot}
@@ -560,9 +634,12 @@ function BarButton({
   children,
   accent = false,
   disabled = false,
+  title,
   onClick,
 }: {
   children: string;
+  /** Подсказка — в том числе почему кнопка погашена. */
+  title?: string;
   /** Главное действие полосы — сохранение: в оригинале оно выделено. */
   accent?: boolean;
   disabled?: boolean;
@@ -572,6 +649,7 @@ function BarButton({
     <button
       type="button"
       disabled={disabled}
+      title={title}
       className={
         'border px-4 py-1.5 uppercase tracking-widest '
         + (disabled

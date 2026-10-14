@@ -105,4 +105,16 @@ class AiPaybackTest {
         assertTrue(miners <= computer, "робошахты не позже суперкомпьютера: "
                 + miners + " и " + computer);
     }
+
+    @Test
+    @DisplayName("Здание без прямой выработки окупается тем, что снимает на колонии: грязью, тяжестью, налогом")
+    void reliefMakesItPayBack() {
+        // Гравитационный генератор (120) выработки не прибавляет — без пользы на колонии не окупается вовсе,
+        // а вернувший колонии 12 единиц за ход окупается за десять ходов (14.10.2026, tools/ai_unused.py).
+        PopulationJobs grown = jobs(3, 5, 3);
+        Building generator = building("gravity-generator");
+        assertNull(AiEmpireService.paybackTurns(generator, grown));
+        assertEquals(10, AiEmpireService.paybackTurns(generator, grown, 12));
+        assertNull(AiEmpireService.paybackTurns(generator, grown, 0));
+    }
 }

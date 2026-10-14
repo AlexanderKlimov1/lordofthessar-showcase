@@ -62,7 +62,7 @@ public class GroundCombatService {
     private static final Logger log = LoggerFactory.getLogger(GroundCombatService.class);
 
     /** Сила одного жителя в десанте до расовых поправок. */
-    private static final int STRENGTH_PER_COLONIST = 10;
+    public static final int STRENGTH_PER_COLONIST = 10;
 
     private final PlanetRepository planetRepository;
     private final PlayerRepository playerRepository;
@@ -76,6 +76,8 @@ public class GroundCombatService {
     private final EmpireActivityService activity;
     /** Оборона колонии — п. 11: планетарный барьер не пускает десант, пока цел. */
     private final OrbitalDefenceRules orbitalDefenceRules;
+    /** Казармы, которых колонии не хватило, — для строки «что изменить» (field-backlog, пункт 103). */
+    private final BuildingCatalog buildingCatalog;
 
     public GroundCombatService(PlanetRepository planetRepository,
                                PlayerRepository playerRepository,
@@ -87,8 +89,10 @@ public class GroundCombatService {
                                AssimilationRules assimilationRules,
                                PlayerTechnologyRepository playerTechnologyRepository,
                                EmpireActivityService activity,
-                               OrbitalDefenceRules orbitalDefenceRules) {
+                               OrbitalDefenceRules orbitalDefenceRules,
+                               BuildingCatalog buildingCatalog) {
         this.orbitalDefenceRules = orbitalDefenceRules;
+        this.buildingCatalog = buildingCatalog;
         this.assimilationRules = assimilationRules;
         this.playerTechnologyRepository = playerTechnologyRepository;
         this.activity = activity;
@@ -200,6 +204,51 @@ public class GroundCombatService {
     }
 
     /**
+     * Абордаж в тактическом бою — п. 8, тем же расчётом, что и наземный бой (п. 12): раса и
+     * изученные винтовки, броня и снаряжение у обеих сторон. Казарм на корабле нет, и
+     * домашней прибавки подземных тоже — дерутся оба экипажа как нападающие. Исход
+     * предрешён силами, без жребия, ровно как высадка, — по нему ИИ и решает, браться ли.
+     */
+    public Outcome boarding(Integer attackers, PlayerEntity attacker, Integer defenders, PlayerEntity defender) {
+        return boarding(attackers, attacker, defenders, defender, 0);
+    }
+
+    /**
+     * То же, но с прибавкой к защитникам корабля — станции безопасности (п. 8, 13.10.2026):
+     * «+20 to Marine Defense», процентом той же шкалы, что и снаряжение пехоты.
+     */
+    public Outcome boarding(Integer attackers, PlayerEntity attacker, Integer defenders, PlayerEntity defender,
+                            Integer defenceBonusPercent) {
+        Map<UUID, Set<String>> known = technologies(attacker.getId(), defender.getId());
+        int attackPower = strength(attackers, raceService.effects(attacker), 0, Boolean.FALSE,
+                GroundCombatTech.attackPercent(known.getOrDefault(attacker.getId(), Set.of())));
+        int defencePower = strength(defenders, raceService.effects(defender), 0, Boolean.FALSE,
+                GroundCombatTech.attackPercent(known.getOrDefault(defender.getId(), Set.of()))
+                        + Math.max(0, defenceBonusPercent));
+        if (defenders <= 0) {
+            return new Outcome(Boolean.TRUE, Math.max(1, attackers), attackPower, 0);
+        }
+        if (attackPower <= defencePower) {
+            int survivors = defencePower == 0 ? 0
+                    : (int) Math.round(defenders * (1.0 - (double) attackPower / defencePower));
+            return new Outcome(Boolean.FALSE, Math.max(1, survivors), attackPower, defencePower);
+        }
+        int survivors = (int) Math.round(attackers * (1.0 - (double) defencePower / attackPower));
+        return new Outcome(Boolean.TRUE, Math.max(1, survivors), attackPower, defencePower);
+    }
+
+    /**
+     * Берёт ли империя на абордаж БЕЗ условий — п. 7, п. 8: правило оригинала дословно,
+     * «unless one is telepathic or certain technology is developed, the ship to be boarded must
+     * have their shields down and have been immobilized». Телепаты берут корабль и с поднятым
+     * щитом, и на ходу; «технология» оригинала — это модули корабля (телепорты, шаттлы,
+     * тяговый луч), и их правила стоят в бою ({@code TacticalBattleService.boardingRefusal}).
+     */
+    public Boolean boardsFreely(PlayerEntity player) {
+        return Boolean.TRUE.equals(raceService.effects(player).telepathic());
+    }
+
+    /**
      * Высадка десанта с одной своей колонии на чужую в той же системе — п. 12.
      * <p>
      * Десант это жители: сколько отправлено, столько колония и теряет. Всех жителей
@@ -244,6 +293,13 @@ public class GroundCombatService {
     }
 
     /**
+     * С каким перевесом считать «отбить» — пункт 37: тот же, с которым на высадку решается ИИ
+     * ({@code AiEmpireService.INVASION_ADVANTAGE_PERCENT}), чтобы совет игроку и решение соседа
+     * держались одной меры.
+     */
+    static final int RETAKE_ADVANTAGE_PERCENT = 150;
+
+    /**
      * Сама высадка — п. 12: бой десанта с жителями колонии и его последствия.
      * <p>
      * Отсюда высаживаются оба десанта игры: соседский, с планеты той же системы, и
@@ -284,6 +340,14 @@ public class GroundCombatService {
         if (Boolean.TRUE.equals(orbitalDefenceRules.blocksLanding(built))) {
             throw new ConflictException("invasion.barrierShield", target.getName());
         }
+        // Вторжению предшествует бой за орбиту (03.10.2026): пока у колонии стоит хоть одна
+        // платформа обороны — база, станция, крепость, ракетная база, батареи, ангары, щит, —
+        // десант не садится. То же условие давно спрашивало подчинение телепатами
+        // (ExpeditionService.requireDefenceDown), а высадка его не знала, и бой за орбиту
+        // для захвата был не нужен вовсе.
+        if (!orbitalDefenceRules.platformsOf(built).isEmpty()) {
+            throw new ConflictException("invasion.defended", target.getName());
+        }
 
         Map<UUID, Set<String>> known = technologies(player.getId(), defender.getId());
         Integer attackerExtra = GroundCombatTech.attackPercent(
@@ -292,8 +356,9 @@ public class GroundCombatService {
                 known.getOrDefault(defender.getId(), Set.of()))
                 + barracksPercent(colony, target);
 
+        Integer colonistsBefore = target.getPopulation();
         Outcome outcome = resolve(troops, raceService.effects(player), attackerLeader, attackerExtra,
-                target.getPopulation(), raceService.effects(defender), defenderLeader, defenderExtra);
+                colonistsBefore, raceService.effects(defender), defenderLeader, defenderExtra);
 
         RaceEffects defenderRace = raceService.effects(defender);
         if (Boolean.TRUE.equals(outcome.captured())) {
@@ -316,9 +381,29 @@ public class GroundCombatService {
             // Место на планете достаётся сперва её жителям, а уж потом десанту: подданные
             // тут живут, а победитель пришёл. Иначе на тесной колонии от прежнего
             // населения не оставалось бы никого — и ассимилировать было бы некого.
-            Integer room = capacity(target, colony);
-            subjects = Math.min(subjects, room);
-            Integer own = Math.min(outcome.survivors(), Math.max(0, room - subjects));
+            // ОБРАТНЫЙ ЗАХВАТ своей колонии: подданные — свой же народ, жившие под чужим
+            // хозяином; они освобождаются и встают к победителю своими, а подданными
+            // становятся жители проигравшего (проверка наземного боя, 03.10.2026). Прежде
+            // свои бывшие жители записывались подданными проигравшего.
+            int liberated = player.getId().equals(target.getAlienOwnerPlayerId())
+                    ? Math.min(target.getAlienPopulation(), target.getPopulation()) : 0;
+            if (liberated > 0) {
+                subjects = Boolean.TRUE.equals(defenderRace.instantAssimilation())
+                        ? 0
+                        : assimilationRules.subjects(target.getPopulation() - liberated,
+                                outcome.defencePower(), outcome.attackPower());
+            }
+            // Вместимость — для расы ЗАХВАТЧИКА (03.10.2026): контекст собран до смены хозяина,
+            // и по расе прежнего планета держала больше — после захвата жителей выходило больше,
+            // чем она вмещает (партия ИИ, Furud IV: 4 при вместимости 2).
+            Integer room = colonyService.maxPopulation(target,
+                    com.sddnw.server.domain.BuildingEffects.sum(colony.buildings(target)),
+                    raceService.effects(player));
+            // Одно место победителю остаётся всегда (03.10.2026): прежде при тесной планете
+            // подданные занимали её целиком, и колония доставалась хозяину без единого его
+            // жителя — а при нулевой вместимости и вовсе пустой.
+            subjects = Math.min(subjects, Math.max(0, room - 1));
+            Integer own = Math.max(1, Math.min(outcome.survivors() + liberated, Math.max(1, room - subjects)));
 
             target.setOwnerPlayerId(player.getId());
             target.setPopulation(own + subjects);
@@ -329,8 +414,17 @@ public class GroundCombatService {
             target.setProjectCode(ColonyProject.TRADE_GOODS);
             target.setProjectPoints(0);
             target.setHomeworld(Boolean.FALSE);
+            // Престол побеждённого захватчику не достаётся — п. 10.1.
+            colonyService.loseCapitol(target, colony);
         } else {
             target.setPopulation(outcome.survivors());
+            // Подданных не больше, чем жителей (03.10.2026): отбитый десант уносит и их долю,
+            // а прежде их число оставалось прежним и могло превысить население колонии.
+            int alien = Math.min(target.getAlienPopulation(), target.getPopulation());
+            target.setAlienPopulation(alien);
+            if (alien == 0) {
+                target.setAlienOwnerPlayerId(null);
+            }
         }
         planetRepository.save(target);
 
@@ -345,12 +439,56 @@ public class GroundCombatService {
             // И зеркало захвата — у того, кто колонию потерял. Без него мерило наземного
             // боя видит только нападение: оборона в нём не считается ничем.
             activity.record(gameId, defender.getId(), EmpireActivityService.COLONY_LOST);
+            activity.moment(gameId, player, turn, MilestoneService.COLONY_TAKEN,
+                    new MessageKey("turn.ai.invasionWon", target.getName()));
         }
 
         // Хозяин колонии узнаёт о нападении в итогах хода: десант высаживают, не спросив.
         playerEvents.record(gameId, defender.getId(), turn, "INVASION",
                 captureMessage(player, target, outcome),
                 target.getStarSystem().getId(), target.getId());
+        // Путь назад (field-backlog, пункт 37): потерявший колонию сразу видит, ЧТО нужно, чтобы её
+        // отбить, — той же мерой, что у ИИ ({@code AiEmpireService.troopsFor}): сила новой обороны
+        // (уцелевший десант захватчика, его раса и наземная техника, обороняется; казармы на месте)
+        // против своего бойца, с тем же полуторным перевесом. Это не туман: потерявший только что
+        // видел этот бой, и силы сторон ему уже названы. Поверх — сколько транспортов это займёт.
+        if (Boolean.TRUE.equals(outcome.captured())) {
+            Integer garrison = strength(target.getPopulation() - target.getAlienPopulation(),
+                    raceService.effects(player), 0, Boolean.TRUE,
+                    GroundCombatTech.defencePercent(known.getOrDefault(player.getId(), Set.of()))
+                            + barracksPercent(colony, target));
+            Integer perTrooper = strength(1, defenderRace, 0, Boolean.FALSE,
+                    GroundCombatTech.attackPercent(known.getOrDefault(defender.getId(), Set.of())));
+            if (perTrooper > 0) {
+                int needed = (int) Math.max(1, ((long) garrison * RETAKE_ADVANTAGE_PERCENT + perTrooper * 100L - 1)
+                        / (perTrooper * 100L));
+                int transports = (needed + ColonyProject.TRANSPORT_TROOPS - 1) / ColonyProject.TRANSPORT_TROOPS;
+                playerEvents.record(gameId, defender.getId(), turn, "LEVER",
+                        new MessageKey("turn.lever.retake", target.getName(), needed, transports, garrison),
+                        target.getStarSystem().getId(), target.getId());
+            }
+        }
+        // Что изменить (field-backlog, пункт 103): казармы, которых у колонии не было, — если тем
+        // же расчётом с их прибавкой колония устояла бы. Иначе строки нет: совет без опоры на
+        // правило хуже молчания.
+        if (Boolean.TRUE.equals(outcome.captured())) {
+            for (String code : BARRACKS) {
+                com.sddnw.server.domain.Building barracks = buildingCatalog.byCode().get(code);
+                if (barracks == null || built.contains(code)) {
+                    continue;
+                }
+                Integer percent = barracks.amount(BuildingEffectType.GROUND_DEFENCE_PERCENT);
+                Outcome held = resolve(troops, raceService.effects(player), attackerLeader, attackerExtra,
+                        colonistsBefore, defenderRace, defenderLeader, defenderExtra + percent);
+                if (!Boolean.TRUE.equals(held.captured())) {
+                    playerEvents.record(gameId, defender.getId(), turn, "LEVER",
+                            new MessageKey("turn.lever.barracks", CatalogTexts.building(code), percent,
+                                    outcome.defencePower(), outcome.attackPower()),
+                            target.getStarSystem().getId(), target.getId());
+                    break;
+                }
+            }
+        }
 
         log.info("Игрок {} высадил {} жителей на {}: {} (силы {} против {})",
                 player.getName(), troops, target.getName(),
@@ -383,16 +521,9 @@ public class GroundCombatService {
                         outcome.defencePower(), outcome.attackPower());
     }
 
-    /**
-     * Сколько жителей держит планета со всем, что на ней построено, — п. 4.1.
-     * <p>
-     * Считается тем же способом, что и при подвозе жителей грузовиками: биосферы и
-     * особенности расы вместимость поднимают, и захватчику она достаётся такой же, какой
-     * была у прежнего хозяина.
-     */
-    private Integer capacity(PlanetEntity planet, ColonyService.ColonyContext context) {
-        return colonyService.maxPopulation(planet, context.effects(planet), context.race(planet));
-    }
+
+    /** Казармы по порядку постройки — какие из них колонии не хватило (пункт 103). */
+    private static final List<String> BARRACKS = List.of("marine-barracks", "armor-barracks");
 
     /**
      * Надбавка казарм колонии к её обороне — п. 12.
@@ -443,9 +574,10 @@ public class GroundCombatService {
      * предикат. Постройки берутся из контекста хода — своей выборки предикат не делает.
      */
     public Boolean landable(PlanetEntity target, ColonyService.ColonyContext colonies) {
-        return !orbitalDefenceRules.blocksLanding(colonies.buildings(target).stream()
+        // Барьер — частный случай обороны: высадку закрывает любая уцелевшая платформа.
+        return orbitalDefenceRules.platformsOf(colonies.buildings(target).stream()
                 .map(com.sddnw.server.domain.Building::code)
-                .toList());
+                .toList()).isEmpty();
     }
 
 }

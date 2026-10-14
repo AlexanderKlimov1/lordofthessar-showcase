@@ -10,6 +10,7 @@ import com.sddnw.server.dto.AcquiredTechnologyDto;
 import com.sddnw.server.service.stub.TurnPhase;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.UUID;
@@ -42,13 +43,21 @@ public class ResearchPhase implements TurnPhase {
     private final SpecialStarReward specialStarReward;
     /** Кто из людей ушёл из-за стола — его империю ведёт ИИ (backlog-promo, пункт 11). */
     private final PresenceService presence;
+    /** Цель науки, выбранная ИИ за ушедшего, — в его журнал (field-backlog, пункт 112). */
+    private final StewardService steward;
+    /** Разведлаборатории флотов приносят очки исследований (п. 8, п. 9). */
+    private final FleetService fleetService;
 
     public ResearchPhase(ResearchService researchService,
                          AiEmpireService aiEmpireService,
                          DiplomacyRelationRepository relationRepository,
                          SpecialStarReward specialStarReward,
-                         PresenceService presence) {
+                         PresenceService presence,
+                         StewardService steward,
+                         FleetService fleetService) {
+        this.fleetService = fleetService;
         this.presence = presence;
+        this.steward = steward;
         this.researchService = researchService;
         this.aiEmpireService = aiEmpireService;
         this.relationRepository = relationRepository;
@@ -82,6 +91,9 @@ public class ResearchPhase implements TurnPhase {
                 .map(DiplomacyRelationEntity::getPlayerId)
                 .collect(Collectors.toSet());
 
+        // Разведлаборатории всех империй — одной выборкой на партию (п. 8, п. 9).
+        java.util.Map<UUID, Integer> scoutLabs = fleetService.scoutLabPoints(context.game().getId());
+
         for (PlayerEntity player : context.players()) {
             Random random = random(context.game(), player);
             // За ушедшего человека цель выбирает ИИ — пункт 11 backlog-promo.
@@ -92,9 +104,17 @@ public class ResearchPhase implements TurnPhase {
                         .getOrDefault(player.getId(), Set.of());
                 // В партии, где побеждает удержание Wardenhold, нужна ещё и дальность до
                 // центра галактики (backlog-promo, пункт 3).
-                researchService.autoChoose(player, random,
-                        aiEmpireService.wantedTechnologies(known, atWar.contains(player.getId()),
-                                context.game().getWardenholdVictory()));
+                // Хозяйство колоний просит своё (андроиды, терраформирование — п. 4.1) после основных нужд.
+                List<String> wanted = new ArrayList<>(aiEmpireService.wantedTechnologies(known, atWar.contains(player.getId()),
+                        context.game().getWardenholdVictory(),
+                        aiEmpireService.armsRace(player.getAiPersonality(), atWar.contains(player.getId()))));
+                wanted.addAll(aiEmpireService.colonyTechnologies(context, player, known));
+                Boolean chose = researchService.autoChoose(player, random, wanted);
+                if (Boolean.TRUE.equals(chose) && player.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.HUMAN
+                        && player.getResearchOptionCode() != null) {
+                    steward.record(context.game().getId(), player.getId(), context.turn(),
+                            new MessageKey("steward.research", CatalogTexts.tech(player.getResearchOptionCode())));
+                }
             } else {
                 // Человек не выбрал цель после прорыва — наука идёт дальше по прежнему
                 // разделу, а не пропадает (п. 9, ResearchService.keepSection).
@@ -103,7 +123,8 @@ public class ResearchPhase implements TurnPhase {
             // Колонии и их контекст берутся из хода: своя выборка на игрока стоила
             // дороже самой фазы — см. ResearchService.researchPerTurn.
             List<AcquiredTechnologyDto> gained = researchService.advance(
-                    player, context.turn(), random, context.colonies(), context.colonyContext());
+                    player, context.turn(), random, context.colonies(), context.colonyContext(),
+                    scoutLabs.getOrDefault(player.getId(), 0));
             for (AcquiredTechnologyDto technology : gained) {
                 context.report().add(player.getId(), "RESEARCH",
                         new MessageKey("turn.research.done",

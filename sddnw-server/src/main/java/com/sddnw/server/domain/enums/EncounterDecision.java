@@ -9,5 +9,11 @@ public enum EncounterDecision {
     ATTACK,
 
     /** Разойтись миром: право нападения переходит второй стороне. */
-    IGNORE
+    IGNORE,
+
+    /**
+     * Бомбить колонию — пункт 25, диалог оригинала «Select Combat at …: BOMBARD». Только у
+     * беззащитной колонии и только флотом с бомбами ({@code BombardmentRules}).
+     */
+    BOMBARD
 }

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Заметки к партии (08.10.2026, решение хозяина проекта): до трёх вместо одной записки, по
+        строке на заметку в той же колонке. Три по двести символов и два перевода строки.
+    -->
+    <changeSet id="138-player-notes" author="sddnw">
+        <modifyDataType tableName="player" columnName="note" newDataType="varchar(602)"/>
+    </changeSet>
+
+</databaseChangeLog>

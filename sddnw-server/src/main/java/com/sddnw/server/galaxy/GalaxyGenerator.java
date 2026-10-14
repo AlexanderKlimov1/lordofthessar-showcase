@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.sddnw.server.domain.enums.SpaceMonster;
+import com.sddnw.server.domain.enums.PlanetFind;
+import com.sddnw.server.domain.enums.GalaxyFeature;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -105,11 +107,19 @@ public class GalaxyGenerator {
             system.setStarColor(STAR_COLORS[random.nextInt(STAR_COLORS.length)]);
             system.setSpecial(orion);
 
-            planetGenerator.populate(system, random);
+            String feature = game.getGalaxyFeature();
+            planetGenerator.populate(system, random,
+                    GalaxyFeature.is(feature, GalaxyFeature.RUINS) ? GalaxyFeature.RUINS_FIND_PERCENT
+                            : PlanetFind.SHARE_PERCENT);
+            if (!orion && GalaxyFeature.is(feature, GalaxyFeature.POOR)) {
+                impoverish(system, random);
+            }
             if (orion && Boolean.TRUE.equals(game.getWardenholdVictory())) {
                 settleableWardenhold(system);
             }
-            settleMonster(system, orion, random);
+            settleMonster(system, orion, random,
+                    GalaxyFeature.is(feature, GalaxyFeature.LAIRS) ? GalaxyFeature.LAIRS_MONSTER_PERCENT
+                            : MONSTER_SHARE_PERCENT);
             // Связь ставим напрямую: коллекция game.starSystems ленивая, а добавление
             // в неё уже управляемой игры привело бы к merge-копиям вместо persist.
             system.setGame(game);
@@ -172,14 +182,35 @@ public class GalaxyGenerator {
                 first.getOrbit(), first.getPlanetSize(), PlanetClimate.ARID, first.getMinerals()));
     }
 
-    private void settleMonster(StarSystemEntity system, boolean special, Random random) {
+    /**
+     * Бедная галактика — field-backlog, пункт 94: половина плодородных миров (лучше бесплодного)
+     * становится бесплодной, радиационной или ядовитой. Родных звёзд это не касается — их чертёж
+     * один на партию и накладывается позже ({@code HomeworldAllocator}). Мир переписывается
+     * чертежом, и вместе с плодородием уходит находка: на голой скале туземцев не бывает.
+     */
+    private void impoverish(StarSystemEntity system, Random random) {
+        PlanetClimate[] harsh = {PlanetClimate.BARREN, PlanetClimate.RADIATED, PlanetClimate.TOXIC};
+        for (PlanetEntity planet : system.getPlanets()) {
+            PlanetClimate climate = planet.getClimate();
+            if (!Boolean.TRUE.equals(climate.getColonizable())
+                    || climate.ordinal() <= PlanetClimate.BARREN.ordinal()
+                    || random.nextInt(100) >= GalaxyFeature.POOR_DOWNGRADE_PERCENT) {
+                continue;
+            }
+            planetGenerator.apply(planet, system.getName(), new PlanetGenerator.PlanetSpec(
+                    planet.getOrbit(), planet.getPlanetSize(), harsh[random.nextInt(harsh.length)],
+                    planet.getMinerals()));
+        }
+    }
+
+    private void settleMonster(StarSystemEntity system, boolean special, Random random, int sharePercent) {
         if (special) {
             system.setMonster(SpaceMonster.GUARDIAN);
             system.setMonsterStrength(SpaceMonster.GUARDIAN.getStrength());
             return;
         }
         if (system.getPlanets().isEmpty()
-                || random.nextInt(100) >= MONSTER_SHARE_PERCENT) {
+                || random.nextInt(100) >= sharePercent) {
             return;
         }
         List<SpaceMonster> kinds = SpaceMonster.all();

@@ -1,5 +1,7 @@
+import { ownerGlyph } from '../../ui/glyphs';
 import Phaser from 'phaser';
-import type { FleetGroup, GalaxyMap, Player, StarSystem } from '../../api/types';
+import type { FleetGroup, ForeignFleet, GalaxyMap, Player, StarSystem } from '../../api/types';
+import { t } from '../../i18n';
 import { gameEvents, type ScreenCourse } from '../../events/gameEvents';
 import { MAP_INSET_ATTRIBUTE, sidePanelWidthPx } from '../../ui/layout';
 import { STAR_TEXTURE_SIZE, ensureDustTexture, ensureStarTexture } from './starArt';
@@ -28,8 +30,12 @@ const DUST_PARALLAX = 0.25;
 /** Глубина фона дальних звёзд: над заливкой поля, под кольцами и звёздами. */
 const DUST_DEPTH = 0.5;
 
-/** Радиус зоны клика: сама звезда слишком мелкая, чтобы попадать по ней курсором. */
-const HIT_RADIUS = 9;
+/**
+ * Радиус зоны клика: сама звезда слишком мелкая, чтобы попадать по ней курсором. 12, а не 9
+ * (field-backlog, пункт 172): цель не мельче пальца — 24 точки поперёк. Звезда держит
+ * экранный размер при любом масштабе, поэтому и зона на экране одна и та же.
+ */
+const HIT_RADIUS = 12;
 
 /** Отступ подписи под звездой в экранных пикселях. */
 const LABEL_OFFSET = 6;
@@ -172,6 +178,8 @@ interface StarView {
   monsterRing: Phaser.GameObjects.Arc | null;
   /** Значок сторожа — рисунок его тела слева сверху от звезды; только у разведанной. */
   monsterIcon: Phaser.GameObjects.Image | null;
+  /** Флажок метки наставника (пункт 184): справа сверху, цветом лампы — «сюда стоит посмотреть». */
+  markFlag: Phaser.GameObjects.Text | null;
   /**
    * Метка сканера: в неразведанной системе кто-то есть — п. 15.
    *
@@ -194,6 +202,10 @@ const isLabeled = (view: StarView): view is LabeledStarView => view.label !== nu
 interface FleetView {
   fleet: FleetGroup;
   icon: Phaser.GameObjects.Triangle;
+  /** Знак знамени у значка — пункт 168: чей флот, видно и без цвета. */
+  badge: Phaser.GameObjects.Text | null;
+  /** Ходов до цели у летящего флота — подпись под значком (12.10.2026). */
+  eta: Phaser.GameObjects.Text | null;
 }
 
 /**
@@ -231,6 +243,19 @@ export class GalaxyScene extends Phaser.Scene {
   private selectionRing: Phaser.GameObjects.Arc | null = null;
   /** Значки флотов игрока: по одному на систему — флот в системе у игрока один. */
   private fleetViews: FleetView[] = [];
+  /** Чужие флоты под глазами и сканерами — п. 15: значок цвета хозяина, без щелчка. */
+  private foreignViews: {
+    fleet: ForeignFleet;
+    icon: Phaser.GameObjects.Triangle;
+    color: number;
+    badge: Phaser.GameObjects.Text | null;
+    eta: Phaser.GameObjects.Text | null;
+  }[] = [];
+  /** Знак своего знамени — у значков своих флотов (пункт 168). */
+  private fleetGlyph = '';
+  private foreignHint: Phaser.GameObjects.Text | null = null;
+  private playerColors = new Map<string, string>();
+  private playerNames = new Map<string, string>();
   /** Флоты, присланные React'ом: держим их, чтобы перерисовать после смены карты. */
   private fleets: FleetGroup[] = [];
   /** Цвет расы игрока — им и рисуются его корабли. */
@@ -313,6 +338,8 @@ export class GalaxyScene extends Phaser.Scene {
     this.rebuildWorld();
 
     const colorByPlayer = new Map(players.map((player) => [player.id, player.color]));
+    this.playerColors = colorByPlayer;
+    this.playerNames = new Map(players.map((player) => [player.id, player.name]));
 
     for (const system of map.systems) {
       this.stars.push(this.createStar(system, colorByPlayer.get(system.ownerPlayerId ?? ''),
@@ -339,6 +366,7 @@ export class GalaxyScene extends Phaser.Scene {
     this.courseLine = this.add.graphics().setDepth(COURSE_DEPTH);
 
     this.renderFleets();
+    this.renderForeignFleets();
     this.fitToScreen();
 
     gameEvents.emit('map:rendered', {
@@ -399,6 +427,13 @@ export class GalaxyScene extends Phaser.Scene {
       });
     }
 
+    // Метка наставника (пункт 184): какая — сказано на правой панели, здесь — где.
+    const marked = this.map?.mentorMarks?.some((mark) => mark.systemId === system.id) ?? false;
+    const markFlag = marked
+      ? this.add.text(x, y, '⚑', { fontFamily: 'Consolas, monospace', fontSize: '20px', color: '#f5b85c' })
+          .setOrigin(-0.4, 1.1).setDepth(2.6).setScale(1 / this.cameras.main.zoom)
+      : null;
+
     // Сканеры видят чужое присутствие в неразведанной системе — п. 15: пунктирного круга
     // в Phaser нет, поэтому метка это тусклое красноватое кольцо. Что именно там —
     // колония или флот, чей — неизвестно: за этим нужно послать корабли.
@@ -409,9 +444,14 @@ export class GalaxyScene extends Phaser.Scene {
 
     // Неразведанная система — безымянная точка: названия сервер не присылает, подписывать
     // нечем. Подпись появится вместе с разведкой, при следующей загрузке карты.
-    const label = system.explored
+    // Знаки знамён хозяев перед названием — пункт 168: чья звезда, читается и без цвета.
+    // Включаемые — пункт 202: пока особая возможность выключена, ownerGlyph отдаёт пусто.
+    const glyphs = labelColors.map(ownerGlyph).filter(Boolean).join('');
+    // Неразведанная, но с известным хозяином (знакомство, сканер — п. 15) подписывается тоже:
+    // чья звезда — видно, а что в ней — нет.
+    const label = system.explored || (system.knownOwners?.length ?? 0) > 0
       ? this.add
-          .text(x, y + STAR_RADIUS + LABEL_OFFSET, system.name ?? '', {
+          .text(x, y + STAR_RADIUS + LABEL_OFFSET, glyphs ? `${glyphs} ${system.name ?? ''}` : system.name ?? '', {
             fontFamily: 'Consolas, monospace',
             fontSize: `${this.labelFontSize}px`,
             color: system.special ? '#ffd447' : '#93a3c4',
@@ -437,6 +477,7 @@ export class GalaxyScene extends Phaser.Scene {
       specialRing,
       monsterRing,
       monsterIcon,
+      markFlag,
       scannerRing,
       hiddenByLayout: false,
     };
@@ -488,7 +529,11 @@ export class GalaxyScene extends Phaser.Scene {
    * и ставить значок было бы некуда.
    */
   private renderFleets(): void {
-    this.fleetViews.forEach((view) => view.icon.destroy());
+    this.fleetViews.forEach((view) => {
+      view.icon.destroy();
+      view.badge?.destroy();
+      view.eta?.destroy();
+    });
     this.fleetViews = [];
 
     for (const fleet of this.fleets) {
@@ -519,7 +564,10 @@ export class GalaxyScene extends Phaser.Scene {
           gameEvents.emit('fleet:selected', { fleetId: fleet.id, course: this.screenCourse(fleet) });
         });
 
-      this.fleetViews.push({ fleet, icon });
+      this.fleetViews.push({
+        fleet, icon, badge: this.glyphBadge(this.fleetGlyph, this.fleetColor),
+        eta: this.etaLabel(fleet.targetSystemId, fleet.arrivalTurn, this.fleetColor),
+      });
     }
 
     this.positionFleets();
@@ -532,8 +580,131 @@ export class GalaxyScene extends Phaser.Scene {
    * масштабе, и значок, отодвинутый на мировые пиксели, при приближении уехал бы от своей
    * звезды на пол-экрана.
    */
+  /**
+   * Чужие флоты — п. 8, п. 15, туман войны: сервер присылает только те, что игрок видит
+   * (своими глазами и сканерами). Значок — тот же треугольник, но цвета хозяина и носом
+   * ВЛЕВО, у звезды снизу: свой и чужой флот у одной звезды не должны сливаться. Щелчка нет —
+   * приказывать чужому флоту нечем; наведение говорит, чей он, сколько в нём кораблей и, у
+   * летящего, куда и к какому ходу он прибудет.
+   */
+  private renderForeignFleets(): void {
+    this.foreignViews.forEach((view) => {
+      view.icon.destroy();
+      view.badge?.destroy();
+      view.eta?.destroy();
+    });
+    this.foreignViews = [];
+    for (const fleet of this.map?.foreignFleets ?? []) {
+      if (!this.starsById.get(fleet.starSystemId)) {
+        continue;
+      }
+      const ownerColor = this.playerColors.get(fleet.ownerPlayerId) ?? '#f87171';
+      const color = Phaser.Display.Color.HexStringToColor(ownerColor).color;
+      const icon = this.add
+        .triangle(0, 0, FLEET_SIZE, 0, 0, FLEET_SIZE / 2, FLEET_SIZE, FLEET_SIZE, color, fleet.armed ? 1 : 0)
+        .setStrokeStyle(1.5, color)
+        .setDepth(FLEET_DEPTH)
+        .setInteractive(
+          new Phaser.Geom.Circle(FLEET_SIZE / 2, FLEET_SIZE / 2, FLEET_HIT_RADIUS),
+          Phaser.Geom.Circle.Contains,
+        );
+      icon
+        .on('pointerover', () => this.showForeignHint(fleet, icon))
+        .on('pointerout', () => {
+          this.foreignHint?.destroy();
+          this.foreignHint = null;
+        });
+      this.foreignViews.push({
+        fleet, icon, color, badge: this.glyphBadge(ownerGlyph(ownerColor), color),
+        eta: this.etaLabel(fleet.targetSystemId, fleet.arrivalTurn, color),
+      });
+    }
+    this.positionFleets();
+  }
+
+  /** Подпись чужого флота при наведении: хозяин, корабли, у летящего — цель и ход прибытия. */
+  private showForeignHint(fleet: ForeignFleet, icon: Phaser.GameObjects.Triangle): void {
+    this.foreignHint?.destroy();
+    const owner = this.playerNames.get(fleet.ownerPlayerId) ?? '?';
+    const target = fleet.targetSystemId ? this.starsById.get(fleet.targetSystemId) : undefined;
+    const text = target && fleet.arrivalTurn !== undefined
+      ? t('map.foreignFleetFlying', {
+        owner, ships: fleet.ships,
+        target: target.system.name ?? t('fleetOrder.unexplored'), turn: fleet.arrivalTurn,
+      })
+      : t('map.foreignFleet', { owner, ships: fleet.ships });
+    const inverse = 1 / this.cameras.main.zoom;
+    this.foreignHint = this.add
+      .text(icon.x + FLEET_SIZE * inverse, icon.y, text, {
+        fontFamily: 'monospace', fontSize: '14px', color: '#e2e8f0', backgroundColor: '#05070fcc',
+        padding: { x: 4, y: 2 },
+      })
+      .setScale(inverse)
+      .setDepth(FLEET_DEPTH + 1);
+  }
+
+  /**
+   * Знак знамени у значка флота — пункт 168: треугольник флота у всех один, и без знака хозяин
+   * читался только цветом. Мышь знак не ловит — щелчок остаётся значку.
+   */
+  private glyphBadge(glyph: string, color: number): Phaser.GameObjects.Text | null {
+    if (!glyph) {
+      return null;
+    }
+    return this.add
+      .text(0, 0, glyph, {
+        fontFamily: 'Segoe UI Symbol, DejaVu Sans, sans-serif',
+        fontSize: `${FLEET_SIZE}px`,
+        color: Phaser.Display.Color.IntegerToColor(color).rgba,
+      })
+      .setOrigin(0, 0.5)
+      .setDepth(FLEET_DEPTH);
+  }
+
+  /**
+   * Ходов до цели у летящего флота — подпись под значком (12.10.2026, решение хозяина проекта):
+   * прежде срок читался только в окне флота, и чтобы узнать, когда подойдёт подкрепление или
+   * враг, приходилось открывать каждый флот. У чужого флота — только когда сканер знает срок.
+   * Мышь подпись не ловит: щелчок остаётся значку.
+   */
+  private etaLabel(targetSystemId: string | undefined, arrivalTurn: number | undefined,
+                   color: number): Phaser.GameObjects.Text | null {
+    if (!targetSystemId || arrivalTurn === undefined) {
+      return null;
+    }
+    return this.add
+      .text(0, 0, String(Math.max(1, arrivalTurn - this.turn)), {
+        fontFamily: 'monospace',
+        fontSize: `${FLEET_SIZE}px`,
+        fontStyle: 'bold',
+        color: Phaser.Display.Color.IntegerToColor(color).rgba,
+        stroke: '#05070f',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0.5)
+      .setDepth(FLEET_DEPTH);
+  }
+
   private positionFleets(): void {
     const inverse = 1 / this.cameras.main.zoom;
+    for (const view of this.foreignViews) {
+      const star = this.starsById.get(view.fleet.starSystemId);
+      if (!star) {
+        continue;
+      }
+      const flight = this.foreignPoint(view.fleet);
+      view.icon
+        .setScale(inverse)
+        .setPosition(
+          (flight?.x ?? star.star.x) - (FLEET_OFFSET + FLEET_SIZE) * inverse,
+          (flight?.y ?? star.star.y) + FLEET_OFFSET * inverse - FLEET_SIZE * inverse / 2,
+        );
+      // Знак — с внешней стороны значка: чужой флот смотрит носом влево.
+      view.badge?.setScale(inverse).setPosition(view.icon.x - 2 * inverse, view.icon.y + FLEET_SIZE * inverse / 2);
+      // Срок — слева от значка, снаружи: чужой флот смотрит носом влево, а под ним название звезды.
+      view.eta?.setOrigin(1, 0.5).setScale(inverse).setPosition(
+        view.icon.x - (view.badge ? FLEET_SIZE + 4 : 3) * inverse, view.icon.y + FLEET_SIZE * inverse / 2);
+    }
     for (const view of this.fleetViews) {
       const star = this.starsById.get(view.fleet.starSystemId);
       if (!star) {
@@ -546,6 +717,11 @@ export class GalaxyScene extends Phaser.Scene {
           (flight?.x ?? star.star.x) + FLEET_OFFSET * inverse,
           (flight?.y ?? star.star.y) - FLEET_OFFSET * inverse,
         );
+      view.badge?.setScale(inverse)
+        .setPosition(view.icon.x + (FLEET_SIZE + 2) * inverse, view.icon.y + FLEET_SIZE * inverse / 2);
+      // Срок — справа от значка, за знаком знамени: под значком стоит название звезды и закрыло бы его.
+      view.eta?.setScale(inverse).setPosition(
+        view.icon.x + (FLEET_SIZE + 3 + (view.badge ? FLEET_SIZE : 0)) * inverse, view.icon.y + FLEET_SIZE * inverse / 2);
     }
     this.drawCourses();
   }
@@ -588,6 +764,14 @@ export class GalaxyScene extends Phaser.Scene {
    * и на карте флот идёт равномерно. У стоящего флота полёта нет — возвращается null,
    * и значок остаётся у своей звезды.
    */
+  /** Где сейчас летящий чужой флот — то же правило, что у своего. */
+  private foreignPoint(fleet: ForeignFleet): { x: number; y: number } | null {
+    return this.flightPoint({
+      starSystemId: fleet.starSystemId, targetSystemId: fleet.targetSystemId,
+      departureTurn: fleet.departureTurn, arrivalTurn: fleet.arrivalTurn,
+    } as FleetGroup);
+  }
+
   private flightPoint(fleet: FleetGroup): { x: number; y: number } | null {
     if (!fleet.targetSystemId || fleet.departureTurn === undefined || fleet.arrivalTurn === undefined) {
       return null;
@@ -643,6 +827,17 @@ export class GalaxyScene extends Phaser.Scene {
         continue;
       }
       line.lineStyle(width, this.fleetColor, 0.5);
+      this.dashedLine(line, point.x, point.y, to.star.x, to.star.y, inverse);
+    }
+    // Курсы чужих флотов, замеченных сканерами, — цветом хозяина: куда идёт враг, видно
+    // по самой карте (правило оригинала: сканер показывает цель и срок).
+    for (const view of this.foreignViews) {
+      const to = view.fleet.targetSystemId ? this.starsById.get(view.fleet.targetSystemId) : undefined;
+      const point = this.foreignPoint(view.fleet);
+      if (!to || !point) {
+        continue;
+      }
+      line.lineStyle(width, view.color, 0.45);
       this.dashedLine(line, point.x, point.y, to.star.x, to.star.y, inverse);
     }
 
@@ -745,6 +940,83 @@ export class GalaxyScene extends Phaser.Scene {
     this.lastClick = { systemId: system.id, at };
   }
 
+  /**
+   * Шаг выбора стрелкой — field-backlog, пункт 171: к ближайшей звезде, лежащей в сторону
+   * стрелки (в конусе ±60°), и камера идёт следом. Ничего не выбрано — первая стрелка выбирает
+   * звезду в середине вида: стрелка не должна молчать.
+   */
+  private step(dx: number, dy: number): void {
+    const centre = this.cameras.main.midPoint;
+    const from = (this.selectedSystemId && this.starsById.get(this.selectedSystemId))
+      || [...this.stars].sort((a, b) => Math.hypot(a.star.x - centre.x, a.star.y - centre.y)
+        - Math.hypot(b.star.x - centre.x, b.star.y - centre.y))[0];
+    if (!from) {
+      return;
+    }
+    if (!this.selectedSystemId) {
+      this.focusAndSelect(from.system.id);
+      return;
+    }
+    let best: StarView | null = null;
+    let bestScore = Infinity;
+    for (const view of this.stars) {
+      if (view === from) {
+        continue;
+      }
+      const vx = view.star.x - from.star.x;
+      const vy = view.star.y - from.star.y;
+      const distance = Math.hypot(vx, vy);
+      const along = (vx * dx + vy * dy) / distance;
+      // Конус ±60° вокруг направления: cos 60° = 0,5.
+      if (along < 0.5) {
+        continue;
+      }
+      // Ближе и прямее — лучше: отклонение от оси удлиняет путь.
+      const score = distance * (2 - along);
+      if (score < bestScore) {
+        bestScore = score;
+        best = view;
+      }
+    }
+    if (best) {
+      this.focusAndSelect(best.system.id);
+    }
+  }
+
+  private focusAndSelect(systemId: string): void {
+    const view = this.starsById.get(systemId);
+    if (!view) {
+      return;
+    }
+    this.cameras.main.pan(view.star.x, view.star.y, 200, 'Sine.easeInOut');
+    this.select(systemId);
+    gameEvents.emit('system:selected', { system: view.system });
+  }
+
+  /** Enter — пункт 171: в прицеле выбранная звезда становится целью, иначе открывается её система. */
+  private activate(): void {
+    const view = this.selectedSystemId ? this.starsById.get(this.selectedSystemId) : undefined;
+    if (!view) {
+      return;
+    }
+    if (this.targetingFleetId) {
+      const fleetId = this.targetingFleetId;
+      this.setTargeting(null, this.reachableSystemIds);
+      gameEvents.emit('fleet:target-picked', { fleetId, systemId: view.system.id });
+      return;
+    }
+    gameEvents.emit('system:opened', { system: view.system });
+  }
+
+  /** Пробел — пункт 171: свой флот у выбранной звезды, как щелчок по его значку. */
+  private fleetHere(): void {
+    const fleet = this.fleets.find((group) => group.starSystemId === this.selectedSystemId && !group.targetSystemId)
+      ?? this.fleets.find((group) => group.starSystemId === this.selectedSystemId);
+    if (fleet) {
+      gameEvents.emit('fleet:selected', { fleetId: fleet.id, course: this.screenCourse(fleet) });
+    }
+  }
+
   private select(systemId: string | null): void {
     this.selectedSystemId = systemId;
     const view = systemId ? this.starsById.get(systemId) : undefined;
@@ -801,6 +1073,7 @@ export class GalaxyScene extends Phaser.Scene {
       view.specialRing?.setPosition(x, y);
       view.monsterRing?.setPosition(x, y);
       view.monsterIcon?.setPosition(x, y);
+      view.markFlag?.setPosition(x, y);
       view.scannerRing?.setPosition(x, y);
     }
     this.positionFleets();
@@ -944,6 +1217,7 @@ export class GalaxyScene extends Phaser.Scene {
       view.specialRing?.setScale(inverse);
       view.monsterRing?.setScale(inverse);
       view.monsterIcon?.setScale(MONSTER_ICON_SCALE * inverse);
+      view.markFlag?.setScale(inverse);
       view.scannerRing?.setScale(inverse);
       view.label?.setScale(inverse);
     }
@@ -1037,10 +1311,35 @@ export class GalaxyScene extends Phaser.Scene {
       this.dragDistance = 0;
     });
 
+    /*
+      Щипок двумя пальцами — field-backlog, пункт 60: масштаб карты меняется колесом мыши, а у
+      планшета колеса нет, и приблизить карту было нечем. Второй палец Phaser по умолчанию не
+      слушает (`addPointer`). Пока на экране два пальца, карта не таскается — иначе щипок
+      заодно возил бы её рывками за тем пальцем, что сдвинулся первым.
+    */
+    this.input.addPointer(1);
+    let pinchSpan: number | null = null;
+    this.input.on('pointerup', () => {
+      pinchSpan = null;
+    });
+
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (!pointer.isDown) {
         return;
       }
+      const first = this.input.pointer1;
+      const second = this.input.pointer2;
+      if (first.isDown && second.isDown) {
+        const span = Phaser.Math.Distance.Between(first.x, first.y, second.x, second.y);
+        if (pinchSpan !== null && pinchSpan > 0) {
+          this.applyZoom(Phaser.Math.Clamp(camera.zoom * (span / pinchSpan), this.minZoom, MAX_ZOOM));
+        }
+        pinchSpan = span;
+        // Щипок — не щелчок: отпущенный палец не должен выбрать звезду под собой.
+        this.dragDistance = Number.MAX_SAFE_INTEGER;
+        return;
+      }
+      pinchSpan = null;
       const dx = pointer.x - pointer.prevPosition.x;
       const dy = pointer.y - pointer.prevPosition.y;
       this.dragDistance += Math.hypot(dx, dy);
@@ -1079,6 +1378,7 @@ export class GalaxyScene extends Phaser.Scene {
         this.fleets = fleets;
         this.turn = turn;
         this.fleetColor = Phaser.Display.Color.HexStringToColor(color).color;
+        this.fleetGlyph = ownerGlyph(color);
         this.renderFleets();
       }),
       gameEvents.on('fleet:targeting', ({ fleetId, reachableSystemIds }) =>
@@ -1096,6 +1396,9 @@ export class GalaxyScene extends Phaser.Scene {
         this.stars.forEach((view) => view.label?.setVisible(visible && !view.hiddenByLayout));
       }),
       gameEvents.on('map:select-system', ({ systemId }) => this.select(systemId)),
+      gameEvents.on('map:step', ({ dx, dy }) => this.step(dx, dy)),
+      gameEvents.on('map:activate', () => this.activate()),
+      gameEvents.on('map:fleet-here', () => this.fleetHere()),
       gameEvents.on('map:clear-selection', () => this.select(null)),
     ];
 
@@ -1107,8 +1410,20 @@ export class GalaxyScene extends Phaser.Scene {
   }
 
   private clearMap(): void {
-    this.fleetViews.forEach((view) => view.icon.destroy());
+    this.fleetViews.forEach((view) => {
+      view.icon.destroy();
+      view.badge?.destroy();
+      view.eta?.destroy();
+    });
     this.fleetViews = [];
+    this.foreignViews.forEach((view) => {
+      view.icon.destroy();
+      view.badge?.destroy();
+      view.eta?.destroy();
+    });
+    this.foreignViews = [];
+    this.foreignHint?.destroy();
+    this.foreignHint = null;
     this.stars.forEach((view) => {
       view.star.destroy();
       view.label?.destroy();
@@ -1116,6 +1431,7 @@ export class GalaxyScene extends Phaser.Scene {
       view.specialRing?.destroy();
       view.monsterRing?.destroy();
       view.monsterIcon?.destroy();
+      view.markFlag?.destroy();
       view.scannerRing?.destroy();
     });
     this.stars = [];
@@ -1139,6 +1455,13 @@ export class GalaxyScene extends Phaser.Scene {
  */
 function ownerColors(system: StarSystem, colorByPlayer: Map<string, string>): string[] {
   const colors: string[] = [];
+  // Неразведанная система с известным хозяином — п. 15: планет нет, хозяева пришли списком.
+  for (const owner of system.knownOwners ?? []) {
+    const color = colorByPlayer.get(owner);
+    if (color && !colors.includes(color)) {
+      colors.push(color);
+    }
+  }
   for (const planet of system.planets) {
     const color = planet.ownerPlayerId ? colorByPlayer.get(planet.ownerPlayerId) : undefined;
     if (color && !colors.includes(color)) {

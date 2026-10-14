@@ -10,7 +10,8 @@ import java.util.UUID;
  * Опрашивать сервер ради этого пришлось бы всем и постоянно, поэтому сервер сам
  * рассказывает о событиях по подписке (SSE), а клиент только слушает.
  *
- * @param type     вид события: PLAYER_READY, TURN_ADVANCED, GAME_STARTED, GAME_DELETED
+ * @param type     вид события: PLAYER_READY, TURN_ADVANCED, GAME_STARTED, GAME_DELETED, а также
+ *                 TURN_PHASE — какая фаза конца хода идёт (в {@code text} — имя класса фазы)
  * @param gameId   партия, к которой относится событие
  * @param turn     ход партии на момент события
  * @param playerId игрок, о котором событие; пусто — событие про всю партию

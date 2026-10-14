@@ -13,6 +13,7 @@ import { useModalEscape } from '../useModalEscape';
 import { t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { ACCENTS, figureLabelClass } from '../accent';
+import { galaxySizeName } from '../planetLabels';
 
 /**
  * Пульт балансировки — этап 2 плана (`balance-metrics-works.txt`).
@@ -24,6 +25,12 @@ import { ACCENTS, figureLabelClass } from '../accent';
  * Экран намеренно не ждёт конца прогона: тот идёт десятки минут. Страницу можно закрыть и
  * вернуться — прогон живёт записью в базе, а пульт спрашивает его раз в несколько секунд.
  */
+/**
+ * Раньше какой доли партии решённость считается ранней (пункт 155): победитель определился в первой
+ * половине, а вторую партия доигрывала для формы. Порог — подсветка, а не приговор.
+ */
+const DECIDED_EARLY_PERCENT = 50;
+
 export function BalanceRunScreen({ onClose }: { onClose: () => void }) {
   const [runs, setRuns] = useState<BalanceRun[]>([]);
   /*
@@ -197,10 +204,10 @@ export function BalanceRunScreen({ onClose }: { onClose: () => void }) {
                 value={galaxySize}
                 onChange={(event) => setGalaxySize(event.target.value)}
               >
-                <option value="SMALL">Small</option>
-                <option value="MEDIUM">Medium</option>
-                <option value="LARGE">Large</option>
-                <option value="HUGE">Huge</option>
+                <option value="SMALL">{galaxySizeName('SMALL')}</option>
+                <option value="MEDIUM">{galaxySizeName('MEDIUM')}</option>
+                <option value="LARGE">{galaxySizeName('LARGE')}</option>
+                <option value="HUGE">{galaxySizeName('HUGE')}</option>
               </select>
             </label>
 
@@ -304,7 +311,7 @@ export function BalanceRunScreen({ onClose }: { onClose: () => void }) {
             >
               {running ? t('balance.alreadyRunning') : busy ? t('balance.starting') : t('balance.start')}
             </button>
-            {failure ? <p className="mt-2 text-11 text-danger">{failure}</p> : null}
+            {failure ? <p className="mt-2 text-11 text-danger"><span aria-hidden className="mr-1">⚠</span>{failure}</p> : null}
           </section>
 
           <section className="panel">
@@ -484,7 +491,7 @@ function RunDetails({
         <div className="panel-title">{t('balance.run')}</div>
         <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-ink-soft">
           <Line name={t('balance.run.createdAt')} value={new Date(run.createdAt).toLocaleString()} />
-          <Line name={t('balance.run.galaxy')} value={tf('balance.run.galaxy.value', { size: run.galaxySize, empires: <Figure accent="value">{run.empires}</Figure> })} />
+          <Line name={t('balance.run.galaxy')} value={tf('balance.run.galaxy.value', { size: galaxySizeName(run.galaxySize), empires: <Figure accent="value">{run.empires}</Figure> })} />
           <Line name={t('balance.run.games')} value={tf('balance.run.games.value', { played: <Figure accent="value">{run.played}</Figure>, games: <Figure accent="value">{run.games}</Figure>, turns: <Figure accent="value">{run.turns}</Figure> })} />
           <Line name={t('balance.run.seed')} value={String(run.seed)} />
           {run.pointValue !== undefined && run.pointValue !== null ? (
@@ -492,6 +499,19 @@ function RunDetails({
           ) : null}
           {run.residual !== undefined && run.residual !== null ? (
             <Line name={t('balance.run.residual')} value={tf('balance.run.residual.value', { n: <Figure accent="value">{run.residual.toFixed(1)}</Figure> })} />
+          ) : null}
+          {/*
+            Ход решённости — пункт 155: партия, решённая задолго до конца, — изъян баланса. Правка,
+            сдвигающая это число раньше, — шаг назад, даже если цены стали точнее.
+          */}
+          {run.decidedPercent !== undefined && run.decidedPercent !== null ? (
+            <Line
+              name={t('balance.run.decided')}
+              value={tf('balance.run.decided.value', {
+                n: <Figure accent="value" tone={run.decidedPercent < DECIDED_EARLY_PERCENT ? 'warn' : undefined}>{run.decidedPercent}</Figure>,
+                tail: <Figure accent="value">{run.tailTurns ?? 0}</Figure>,
+              })}
+            />
           ) : null}
           <Line name={t('balance.run.measured')} value={<Figure accent="value">{run.measured ?? 0}</Figure>} />
           {run.combination?.length >= 2 ? (
@@ -510,6 +530,9 @@ function RunDetails({
           <p className="mt-1 text-10 leading-snug text-ink-faint">
             <b>{t('balance.run.residual.note.a')}</b>{t('balance.run.residual.note.b')}
           </p>
+        ) : null}
+        {run.decidedPercent !== undefined && run.decidedPercent !== null ? (
+          <p className="mt-1 text-10 leading-snug text-ink-faint">{t('balance.run.decided.note')}</p>
         ) : null}
         {run.status === 'FINISHED' ? (
           <button

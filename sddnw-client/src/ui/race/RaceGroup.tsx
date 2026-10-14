@@ -33,8 +33,14 @@ export function RaceGroup({
   group,
   traits,
   headless = false,
+  savedPrices,
   onPick,
 }: {
+  /**
+   * Цены своей расы на миг сохранения — пункт 176: сторона, подешевевшая с тех пор, горит
+   * зелёным, подорожавшая — красным, со знаком ▼/▲ и прежней ценой рядом (не только цветом).
+   */
+  savedPrices?: Record<string, number>;
   /** Весь конструктор: по нему считаются запреты между сторонами разных групп. */
   design: RaceDesign | null;
   group: RaceTraitGroup;
@@ -60,6 +66,9 @@ export function RaceGroup({
           // Связка, собравшаяся в наборе: обе её стороны получают кружок ОДНОГО цвета и
           // цену удорожания рядом — иначе связь между строками пришлось бы искать глазами.
           const pair = active ? combinationOf(design, traits, option.code) : null;
+          const saved = active ? savedPrices?.[option.code] : undefined;
+          const moved = saved === undefined || saved === option.picks ? null
+            : option.picks < saved ? 'cheaper' : 'pricier';
           return (
             <li key={option.code}>
               <button
@@ -71,7 +80,9 @@ export function RaceGroup({
                   (blocked
                     ? 'cursor-not-allowed text-space-600'
                     : 'hover:bg-space-800/60 ' +
-                      (active ? 'text-ink-bright' : 'text-ink-soft hover:text-ink-bright'))
+                      (moved === 'cheaper' ? 'text-good'
+                        : moved === 'pricier' ? 'text-danger'
+                          : active ? 'text-ink-bright' : 'text-ink-soft hover:text-ink-bright'))
                 }
                 onClick={() => onPick(option.code)}
               >
@@ -83,6 +94,11 @@ export function RaceGroup({
                   aria-hidden="true"
                   className="mx-1 min-w-[0.5rem] flex-1 translate-y-[-0.3em] border-b border-dotted border-space-600"
                 />
+                {moved ? (
+                  <span className="flex-none text-[0.85em]" title={t('race.saved.was', { n: saved ?? 0 })}>
+                    {moved === 'cheaper' ? '▼' : '▲'} {t('race.saved.wasShort', { n: saved ?? 0 })}
+                  </span>
+                ) : null}
                 <Price picks={option.picks} />
               </button>
             </li>

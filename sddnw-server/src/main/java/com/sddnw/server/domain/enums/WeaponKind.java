@@ -19,7 +19,14 @@ public enum WeaponKind {
     PROJECTILE("снаряд"),
 
     /** Ракета или торпеда: идёт к цели своим ходом. */
-    MISSILE("ракета");
+    MISSILE("ракета"),
+
+    /**
+     * Бомба — п. 8, backlog, пункт 25: бьёт ТОЛЬКО по планетам — «Ship Weapon that can only be
+     * used against planets and only at zero range». В бой корабль на корабль не идёт, в силу
+     * флота не входит; её работа — бомбардировка колонии ({@code BombardmentRules}).
+     */
+    BOMB("бомба");
 
     private final String label;
 

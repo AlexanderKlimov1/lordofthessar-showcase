@@ -85,6 +85,8 @@ export interface Race {
    * Названия берутся из `RaceDesign`, который у клиента уже есть.
    */
   traits: string[];
+  /** Предыстория расы — откуда она и чего хочет (пункт 43). */
+  lore?: string;
 }
 
 export interface Player {
@@ -116,6 +118,36 @@ export interface Player {
   turnEnded: boolean;
   /** Человек ушёл из-за стола, и его империю ведёт ИИ — backlog-promo, пункт 11. */
   away?: boolean;
+  /** Когда игрок последний раз закончил ход или вошёл в партию (ISO) — пункт 108. */
+  lastActionAt?: string;
+  /**
+   * Через сколько секунд часы передадут империю ИИ — field-backlog, пункт 127; считает сервер.
+   * Пусто — не грозит: ход закончен, никто не ждёт или игрок уже ушёл.
+   */
+  aiTakeoverSeconds?: number;
+  /** До какого мига игрок в отпуске — field-backlog, пункт 177; пусто — не в отпуске. */
+  vacationUntil?: string;
+  /** Глава партии — пункт 54: 1 расселение … 5 финал. */
+  chapter?: number;
+  /** Кому этот игрок показал империю как ученик — пункт 184. */
+  mentorPlayerId?: string;
+  /** Приходило ли хоть одно предложение службы лидера — пункт 27. */
+  leadersSeen?: boolean;
+  /** Знак «с нами с раннего доступа» — пункт 147. */
+  earlyBird?: boolean;
+  /** Знак спутника — подарок за доигранную по приглашению партию (пункты 50, 174), 0…3. */
+  companions?: number;
+  /** Неистраченные очки эволюционной мутации: пока они есть, своему игроку открывается окно выбора. */
+  mutationPicks?: number;
+}
+
+/** Сторона расы, которую может прибавить эволюционная мутация. */
+export interface MutationOption {
+  code: string;
+  name: string;
+  description: string;
+  picks: number;
+  group: string;
 }
 
 /** Событие хода — что изменилось у игрока, пока считалась галактика (п. 11.1). */
@@ -123,6 +155,8 @@ export interface TurnEvent {
   /** POPULATION, BUILDING, COLONY_BASE, SPY, INCOME, RESEARCH, ESPIONAGE. */
   code: string;
   text: string;
+  /** Успех игрока — пункт 88: своим разделом итогов после угроз (правило летописи на сервере). */
+  success?: boolean;
   /**
    * Ключ словаря, из которого собран `text`, — п. 3.5.
    *
@@ -189,6 +223,12 @@ export interface FleetShip {
   role: ShipRole;
   /** Сколько жителей везут эти корабли: поселенцы или десант; у боевых ноль. */
   cargo: number;
+  /** Прибавка дальности от дополнительных баков, процентов; 0 — без баков (пункт 206). */
+  rangePercent?: number;
+  /** Звание экипажа: 0 — новобранцы … 4 — сверхэлита (опыт за бои и академию). */
+  crewLevel?: number;
+  /** Прибавка звания к меткости и защите. */
+  crewBonus?: number;
 }
 
 /**
@@ -226,6 +266,16 @@ export interface FleetGroup {
   arrivalTurn?: number;
   /** Приказ «разведывать самим» — backlog-promo, пункт 24. */
   autoExplore?: boolean;
+  /** Имя флота — пункт 141; пусто — безымянный. */
+  name?: string;
+  /** Бои флота — пункт 141. */
+  battlesWon?: number;
+  battlesLost?: number;
+  /**
+   * Флот в пути слышит приказ сейчас (п. 8, `FlightRules.canOrder`): гиперпространственная связь
+   * или своя звёздная база рядом — ближе парсека, 3 пк с тахионной связью, 6 с подпространственной.
+   */
+  orderable?: boolean;
 }
 
 /** Состояние встречи флотов — п. 8. */
@@ -253,11 +303,76 @@ export interface Encounter {
   battleId?: string;
   /** Исход боя; пусто, пока встреча не закрыта. */
   outcome?: string;
+  /**
+   * Встреча у беззащитной колонии флота с бомбами — пункт 25: решение «бомбить или уйти»,
+   * диалог оригинала «Select Combat at …: BOMBARD / CANCEL».
+   */
+  bombard?: boolean;
+  /** Своя сила — флот и платформы своих колоний системы (пункты 84 и 153). */
+  yourPower?: number;
+  /** Сила соперника; пусто — не видна: технологии на его кораблях не увидены. */
+  opponentPower?: number;
+  /** Исход словами: LIKELY_WIN, UNCLEAR, LIKELY_LOSS или UNKNOWN. */
+  forecast?: 'LIKELY_WIN' | 'UNCLEAR' | 'LIKELY_LOSS' | 'UNKNOWN';
+  /** Сколько технологий на кораблях соперника ещё не увидено. */
+  unseenTechnologies?: number;
+}
+
+/** Прогресс к путям к победе — field-backlog, пункты 51 и 11; выключенный путь пуст. */
+export interface VictoryProgress {
+  council?: { yourVotes: number; knownVotes: number; neededPercent: number; nextTurn?: number; unknownEmpires: number };
+  conquest: { yourColonies: number; knownRivals: number; unknownEmpires: number };
+  thessar?: { holderPlayerId?: string; turnsLeft?: number; holdTurns: number };
+  might?: {
+    place?: number; ranked: number; turnsLeft: number; turnLimit: number;
+    /** Итог ждёт согласия людей (09.10.2026): кого назвали сильнейшим; пусто — не ждёт. */
+    pendingPlayerId?: string;
+    /** Спрашивают ли вас. */
+    asked?: boolean;
+    /** Ваш ответ: AGREE, REFUSE или пусто. */
+    yourAnswer?: 'AGREE' | 'REFUSE';
+  };
+  /** Ближайшая значимая веха одной строкой; пусто — вехи нет. */
+  milestone?: string;
+  /** Финиш близко — пункт 56: своя или чужая победа в считанных ходах, строкой на путь. */
+  finish?: { kind: string; yours: boolean; text: string }[];
+}
+
+/** Наследие ушедших на выбор — backlog-promo, пункт 34. */
+export interface ArtifactChoice {
+  id: string;
+  systemName: string;
+  /** Сколько можно взять: одну, при удачном броске — две. */
+  picks: number;
+  /** До конца какого хода ждут выбора; дальше берутся первые. */
+  deadlineTurn: number;
+  options: { code: string; name: string; description: string; categoryCode: string; levelOrder: number }[];
+}
+
+/** Короткий знак между людьми партии — field-backlog, пункт 183; текст — словарём по коду. */
+export interface GameSignal {
+  id: string;
+  fromPlayerId: string;
+  fromName?: string;
+  /** Кому; пусто — всем. */
+  toPlayerId?: string;
+  code: string;
+  turn: number;
+  createdAt: string;
+  /** Свободный текст при коде TEXT — пункт 16. */
+  text?: string;
+}
+
+/** Решение, которое ИИ принял за ушедшего игрока, — field-backlog, пункт 112. */
+export interface StewardDecision {
+  turn: number;
+  text: string;
 }
 
 /** Событие партии из подписки — п. 11.1. */
 export interface GameEvent {
-  type: 'SUBSCRIBED' | 'PLAYER_READY' | 'TURN_ADVANCED' | 'GAME_STARTED' | 'PLAYER_JOINED';
+  type: 'SUBSCRIBED' | 'PLAYER_READY' | 'TURN_ADVANCED' | 'GAME_STARTED' | 'PLAYER_JOINED' | 'TURN_PHASE'
+    | 'SIGNAL';
   gameId: string;
   turn?: number;
   playerId?: string;
@@ -299,12 +414,157 @@ export interface GameSummary {
   mightVictoryTurn?: number;
   /** Срок хода в секундах — backlog-promo, пункт 11; пусто — без срока. */
   turnSeconds?: number;
+  /** Гостевые правила: богатый старт, первые уровни по оплате, наука вдвое (`GuestGameRules`). */
+  guestRules?: boolean;
+  /** Партию можно смотреть со стороны — field-backlog, пункт 59. */
+  spectators?: boolean;
+  /** Особенность галактики — пункт 94; пусто — нет. */
+  galaxyFeature?: string;
+  /** Неделя галактики недели — пункт 146. */
+  weeklyWeek?: number;
+  /** Союзники, разделившие победу покорением, — пункт 145. */
+  coWinnerPlayerIds?: string[];
+  /** Уровень сложности — пункт 9 (`AiSkill`); пусто — обычный. */
+  aiSkill?: string;
+  /**
+   * Партия под наблюдением администратора — field-backlog, пункт 197: он смотрел в ней всю
+   * галактику при других людях. Видна каждому красным оком (`AdminWatchEye`).
+   */
+  adminWatched?: boolean;
+  /**
+   * Стол подбора «сыграть с людьми» (field-backlog, пункт 65): когда он стартует сам, если за ним
+   * хотя бы двое людей; пусто — обычная партия, её стартует создатель.
+   */
+  autoStartAt?: string;
   /** Когда истекает текущий ход (ISO); пусто — срока нет. */
   turnDeadline?: string;
+  /**
+   * Ход, на котором ВЫ признали поражение (пункт 81) — только в «Ваших партиях»: партия для вас
+   * окончена, даже если идёт дальше без вас.
+   */
+  yourConcededTurn?: number;
+  /** Чем эта партия запомнилась вам — только в «Ваших партиях» (пункт 109). */
+  mine?: {
+    /** Своё место по мощи на последнем замере; пусто — замеров ещё нет. */
+    place?: number;
+    empires: number;
+    /** Ждёт ли партия вашего хода (иначе ход объявлен — ждём соперников). */
+    yourMove: boolean;
+    /** Последний главный момент летописи, на языке запроса. */
+    lastEvent?: string;
+    lastEventTurn?: number;
+    lastActionAt?: string;
+  };
 }
 
 /** Чем кончилась партия — п. 3. */
-export type VictoryKind = 'CONQUEST' | 'COUNCIL' | 'WARDENHOLD' | 'MIGHT';
+export type VictoryKind = 'CONQUEST' | 'COUNCIL' | 'WARDENHOLD' | 'MIGHT' | 'CONCEDED' | 'DECLARED';
+
+/**
+ * Можно ли объявить победу — field-backlog, пункт 154: мощь своя и всех прочих живых вместе,
+ * во сколько раз нужно быть сильнее и, если нельзя, — почему.
+ */
+export interface VictoryClaim {
+  allowed: boolean;
+  own: number;
+  others: number;
+  ratio: number;
+  reason?: string;
+}
+
+/**
+ * Итоги оконченной партии — field-backlog, пункт 33: всё, из чего сцена конца рассказывает
+ * партию. Причину сервер присылает готовой фразой с числами на языке запроса.
+ */
+export interface GameEnding {
+  gameName: string;
+  turn: number;
+  victoryKind: VictoryKind;
+  kindLabel: string;
+  /** Пусто у признавшего поражение в партии, которая идёт дальше без него (пункт 81). */
+  winnerId?: string;
+  winnerName?: string;
+  winnerColor?: string;
+  won: boolean;
+  reason: string;
+  /** Место спрашивающего по мощи на последнем ходу. */
+  place: number;
+  empires: number;
+  mine: EndingAchievements;
+  history: EndingEmpireLine[];
+  /** Летопись главных моментов игрока (пункт 34), по ходам, на языке запроса. */
+  chronicle: EndingMoment[];
+  /** «Как это было» — пункт 143: сильнейшие строки хроники по ходам. */
+  story?: EndingMoment[];
+  /** Какой трудной была победа — пункт 185; пусто — не была. */
+  hardship?: string;
+  /** Путь победителя по контрольным ходам — пункт 106. */
+  winnerPath?: {
+    name: string;
+    color: string;
+    self: boolean;
+    firstColonyTurn?: number;
+    checkpoints: { turn: number; colonies: number; fleetPower: number; technologies: number }[];
+    wars: number;
+    battles: number;
+    captured: number;
+  };
+  /** Сравнение с лучшей своей партией той же настройки — пункт 115. */
+  pastSelf?: PastSelf;
+  /** Первые места партии по осям — пункт 116: только настоящие, из записанных чисел. */
+  firsts?: {
+    axis: string;
+    holders: { name: string; color: string; self: boolean }[];
+    value: number;
+    mine: boolean;
+  }[];
+  guest?: boolean;
+  /**
+   * Сыграть снова тем же составом — пункт 149: `started` — кто-то из участников уже завёл новую
+   * (`byName`), `joined` — вы за её столом. Пусто — других людей за столом не было.
+   */
+  rematch?: { started: boolean; byName?: string; joined: boolean };
+  /** Ваша раса названием — пункт 98. */
+  raceName?: string;
+  /** Свои проекты кораблей партии, лучший первым — пункт 98. */
+  designs?: OwnDesign[];
+  /** Звания за трудное, которые принесла эта партия, — пункт 41 (коды). */
+  titles?: string[];
+  /** Доля среди похожих партий других игроков — пункт 117; пусто — рано или не с чем. */
+  peers?: PeerShare;
+  /** Рейтинг и сдвиг от этой партии — пункт 19; пусто — без других людей или своих партий мало. */
+  rating?: Rating;
+}
+
+export interface EndingMoment {
+  turn: number;
+  /** Род момента: CONTACT, WAR, BATTLE_WON, COLONY_FOUNDED, COLONY_TAKEN, COLONY_LOST… */
+  kind: string;
+  text: string;
+}
+
+export interface EndingAchievements {
+  /** Ход наибольшей доли мощи в галактике; пусто — летописи нет. */
+  bestTurn?: number;
+  bestSharePercent: number;
+  peakColonies: number;
+  peakPopulationK: number;
+  technologies: number;
+  founded: number;
+  captured: number;
+  lost: number;
+  battles: number;
+  wars: number;
+}
+
+export interface EndingEmpireLine {
+  playerId: string;
+  name: string;
+  color: string;
+  self: boolean;
+  winner: boolean;
+  points: { turn: number; might: number }[];
+}
 
 /**
  * Для чего корабль построен — п. 8.
@@ -362,6 +622,26 @@ export interface ColonyProject {
    * приходит с сервера: повторять его здесь значило бы дать ему разъехаться.
    */
   repeatable: boolean;
+  /**
+   * За сколько ходов здание окупится на этой колонии — field-backlog, пункт 122: то же число,
+   * по которому выбирают ИИ и автострой. Пусто — окупаемости нет, тогда говорит `purpose`.
+   */
+  paybackTurns?: number;
+  /** Ради чего строят здание без окупаемости: DEFENCE, FOOD, INCOME, GROWTH, POLLUTION, MORALE… */
+  purpose?: string;
+}
+
+/** Слагаемое выработки колонии — field-backlog, пункт 40 (`ColonyDto.OutputPartDto`). */
+export interface OutputPart {
+  resource: 'FOOD' | 'PRODUCTION' | 'RESEARCH';
+  /** BASE, BUILDING, RACE, ARTIFACTS, FIND, GRAVITY, MORALE, TREATIES, TECHNOLOGIES, LEADER, POLLUTION. */
+  source: string;
+  /** Имя постройки — у слагаемого BUILDING. */
+  name?: string;
+  perUnit: number;
+  flat: number;
+  percent: number;
+  perColonist: number;
 }
 
 /** Занятие жителя — так его называет сервер (`ColonistJob`), п. 4.1. */
@@ -398,6 +678,11 @@ export interface Colony {
    * рециклотрон, и эта часть планету не пачкает.
    */
   productionPerColonist: number;
+  /**
+   * Твёрдое производство, которое пачкает, — п. 10: роботизированный завод (по недрам).
+   * В чистую часть добычи не входит. У ответов старого сервера поля нет.
+   */
+  productionDirtyFlat?: number;
   researchPerScientist: number;
   researchFlat: number;
 
@@ -449,6 +734,8 @@ export interface Colony {
    * самое быстроокупаемое из доступного, по тому же правилу, по которому выбирает ИИ.
    */
   autoBuild: boolean;
+  /** «Жители сами» — field-backlog, пункт 91: фермеров на прокорм, остальные в доле игрока. */
+  autoJobs: boolean;
   /**
    * Во что обойдётся выкуп недостающего по текущей стройке — п. 10. Пусто, когда
    * выкупать нечего: дома и товары не кончаются, а оплаченному докупать уже нечего.
@@ -463,6 +750,29 @@ export interface Colony {
   alienPopulation: number;
   /** Через сколько ходов один из подданных станет своим; пусто — подданных нет. */
   assimilationTurns?: number;
+  /**
+   * Мораль колонии в процентах — п. 10.1: процент ко всему, что дают жители. Уже сидит в
+   * процентах ниже и в доходе.
+   */
+  moralePercent: number;
+  /** Из чего мораль сложилась — строками подсказки. */
+  moraleParts: MoralePart[];
+  /** Строй морали не знает (объединение). */
+  moraleIgnored: boolean;
+  /** Проценты к выработке фермера, рабочего и учёного: строй, тяжесть, мораль. */
+  foodPercent: number;
+  productionPercent: number;
+  researchPercent: number;
+  /** Из чего сложились еда, производство и наука — пункт 40. */
+  outputParts?: OutputPart[];
+  /** Стоят пищевые репликаторы: недостающую еду колония делает из производства, единица за единицу. */
+  foodReplicator?: boolean;
+}
+
+/** Слагаемое морали колонии — п. 10.1. */
+export interface MoralePart {
+  source: 'GOVERNMENT' | 'BUILDINGS' | 'VIRTUAL_REALITY' | 'PSIONICS' | 'LEADER' | 'ALIENS';
+  percent: number;
 }
 
 export interface Planet {
@@ -504,6 +814,15 @@ export interface Planet {
   findLabel?: string;
   /** Что находка даёт и при каком условии — теми же словами, что и в оригинале. */
   findDescription?: string;
+  /**
+   * Оборона ЧУЖОЙ колонии глазами игрока (п. 15, туман войны): названия платформ, батарей,
+   * щитов и казарм. У своей колонии пусто — она видна целиком через `colony`.
+   */
+  defences?: string[];
+  /** Ход, на котором чужую колонию видели в последний раз; пусто — видна сейчас. */
+  seenTurn?: number;
+  /** Радиус варп-перехватчика ЧУЖОЙ колонии в парсеках (п. 8); пусто — его нет. */
+  interdictorParsecs?: number;
 }
 
 /**
@@ -545,6 +864,12 @@ export interface StarSystem {
   monster?: string;
   /** Тело этого чудища (`amoeba-body`, `dragon-body`…): им карта рисует значок сторожа. */
   monsterHull?: string;
+  /**
+   * Хозяева НЕРАЗВЕДАННОЙ системы, известные без разведки — п. 15, туман войны: ближайшая система
+   * знакомой империи и системы знакомых в дальности сканеров. Тогда же приходит и название; состав
+   * системы — нет.
+   */
+  knownOwners?: string[];
 }
 
 /** Карта галактики — прямоугольное поле в парсеках со звёздными системами. */
@@ -555,6 +880,31 @@ export interface GalaxyMap {
   heightParsecs: number;
   minStarDistanceParsecs: number;
   systems: StarSystem[];
+  /** Чужие флоты, которые игрок видит: под глазами и в радиусе сканеров (п. 15). */
+  foreignFleets?: ForeignFleet[];
+  /**
+   * Клад особой звезды, названный наполовину, — пункт 135: сколько технологий Стражей получит
+   * первый, кто поселится у звезды. Пусто — клад взят.
+   */
+  specialStarReward?: number;
+  /** Метки наставника на карте этого игрока — пункт 184. */
+  mentorMarks?: MapMark[];
+}
+
+/**
+ * Чужой флот на карте — п. 8, п. 15. Состав со стороны не виден: число кораблей и есть ли
+ * вооружённые; у летящего — цель и срок прибытия (правило оригинала для сканеров).
+ */
+export interface ForeignFleet {
+  id: string;
+  ownerPlayerId: string;
+  ships: number;
+  armed: boolean;
+  /** Где стоит; у летящего — откуда вылетел. */
+  starSystemId: string;
+  targetSystemId?: string;
+  departureTurn?: number;
+  arrivalTurn?: number;
 }
 
 /** Технология на выбор внутри уровня раздела — п. 9. */
@@ -733,6 +1083,12 @@ export interface Leader {
   systemName?: string;
   fleetId?: string;
   arrivesTurn?: number;
+  /** Послужной список — пункт 140: бои флота лидера. */
+  battlesWon?: number;
+  battlesLost?: number;
+  /** Ход начала срока губернатора и рост его системы за срок, жителей. */
+  termStartTurn?: number;
+  systemGrowth?: number;
 }
 
 /** Офицерский резерв империи — п. 6. */
@@ -794,6 +1150,8 @@ export interface DiplomacyRelation {
    * переговоров укорачивает список — как в оригинале.
    */
   negotiates?: boolean;
+  /** Характер правителя ИИ кодом (`AGGRESSIVE`, `HONORABLE`…) — пункт 43: посол говорит им. */
+  personality?: string;
 }
 
 /** Договор между империями — п. 15. */
@@ -809,6 +1167,35 @@ export type DiplomacyActionCode =
   | 'EXCHANGE_TECH'
   | 'GIFT_CREDITS'
   | 'GIFT_TECH';
+
+/**
+ * Предложение, ждущее ответа человека, — field-backlog, пункт 182: мир, договор, дань и обмен,
+ * адресованные живому игроку, решает он сам; ответ исполняется в конце хода, без ответа к концу
+ * `deadlineTurn` решает доверие.
+ */
+export interface DiplomacyProposal {
+  id: string;
+  fromPlayerId: string;
+  fromName: string;
+  toPlayerId: string;
+  toName: string;
+  action: DiplomacyActionCode;
+  treaty?: TreatyCode;
+  offeredTech?: string;
+  offeredTechName?: string;
+  requestedTech?: string;
+  requestedTechName?: string;
+  turn: number;
+  deadlineTurn: number;
+  /** Ответ адресата; пусто — ещё не ответил. */
+  accepted?: boolean;
+}
+
+/** Предложения игроку и от игрока — пункт 182. */
+export interface DiplomacyProposals {
+  incoming: DiplomacyProposal[];
+  outgoing: DiplomacyProposal[];
+}
 
 /** Технология в списке обмена — п. 15. */
 export interface TechnologyOffer {
@@ -827,8 +1214,12 @@ export interface TechnologyOffer {
  * предложить) и чего нет у меня (это можно попросить).
  */
 export interface TechTrade {
+  /** Мои технологии, о которых не известно, что они у соседа есть. */
   offer: TechnologyOffer[];
+  /** Увиденные у соседа технологии, которых нет у меня (п. 15, туман войны). */
   wanted: TechnologyOffer[];
+  /** Всё, что увидено у соседа в бою или сканерами флота, — доклад о расе. */
+  observed: TechnologyOffer[];
 }
 
 /** Гнездо компонента корабля — п. 8. */
@@ -883,7 +1274,7 @@ export interface ShipComponentOption {
    * Вид выстрела — только у оружия: по нему окно выбора раскладывает пушки лучами,
    * снарядами и ракетами, как полоса BEAM/MISSILE/BOMB в оригинале.
    */
-  weaponKind?: 'BEAM' | 'PROJECTILE' | 'MISSILE';
+  weaponKind?: WeaponKindCode;
   /**
    * Обволакивает ли удар цель сам собой — п. 8: так бьют плазменная пушка и Копьё новы,
    * и в залпе такой ствол считается вчетверо.
@@ -1006,6 +1397,64 @@ export interface SaveShipDesignPayload {
   components: { code: string; count: number; modifications?: string[] }[];
 }
 
+/** Проект корабля в библиотеке учётной записи — пункт 96: составом, как сохранение проекта. */
+export interface ShipTemplate {
+  id?: string;
+  name: string;
+  hullCode: string;
+  components: { code: string; count: number; modifications?: string[] }[];
+  /** Части, которые справочник поменял с сохранения (пункт 176), — названиями; пусто — ничего. */
+  changed?: string[];
+  /** Корпус названием — сервер отдаёт, чтобы библиотеку можно было смотреть вне партии. */
+  hullName?: string;
+  /** Состав строками «название ×N». */
+  parts?: string[];
+}
+
+/** Своя раса в учётной записи — пункты 26 и 176: составом и с ценами на миг сохранения. */
+export interface RaceTemplate {
+  id?: string;
+  name: string;
+  traits: string[];
+  /** Стороны с ценой на миг сохранения и нынешней (пусто — стороны больше нет). */
+  details?: { code: string; name: string; savedPicks?: number; picks?: number }[];
+  /** Свободных очков выбора на миг сохранения. */
+  savedFree?: number;
+  /** Свободных сейчас: больше прежнего — балансировка расе прибавила. */
+  free?: number;
+  /** Почему расу сейчас нельзя взять как есть; пусто — законна. */
+  refusal?: string;
+  /** Чья это раса — пункт 99: при сохранении — раса автора из ссылки; в ответе — есть ли автор. */
+  originId?: string;
+  /** Сколько людей сыграли расой по вашей ссылке — пункт 99; пусто — никто. */
+  plays?: { people: number; games: number; finished: number; wins: number };
+}
+
+/** Что выбрал бы советник — пункт 23. */
+export interface Advice {
+  research?: {
+    categoryCode: string;
+    levelOrder: number;
+    optionCode: string;
+    optionName: string;
+    /** Нужда, к которой совет лишь шаг; пусто — он сама нужда. */
+    wantedName?: string;
+    reason: string;
+    /** Игрок уже исследует именно это. */
+    chosen: boolean;
+  };
+  colonies: {
+    planetId: string;
+    planetName: string;
+    projectCode: string;
+    projectName: string;
+    paybackTurns?: number;
+    /** Колония свободна — на товарах или без стройки. */
+    idle: boolean;
+    reason: string;
+  }[];
+}
+
 /** Флот империи — п. 8. */
 export interface Fleet {
   attackPercent: number;
@@ -1033,6 +1482,10 @@ export interface Fleet {
   commandUsed: number;
   /** Сколько их дают колонии; перебор оплачивается казной каждый ход. */
   commandCapacity: number;
+  /** Изучены прыжковые врата: от своей колонии флот летит на 3 парсека за ход быстрее. */
+  jumpGate?: boolean;
+  /** Изучены звёздные врата: от колонии к колонии — один ход при любом расстоянии. */
+  starGate?: boolean;
 }
 
 /** Сторона тактического боя — п. 8. */
@@ -1057,7 +1510,12 @@ export interface BattleShip {
   maxStructure: number;
   armour: number;
   maxArmour: number;
+  /** Запас щита сейчас — п. 8: падает под огнём, восстанавливается на 30 % за круг. */
   shield: number;
+  /** Полный запас щита; у ответов старого сервера поля нет. */
+  maxShield?: number;
+  /** Класс щита: столько он срезает с каждого выстрела. */
+  shieldClass?: number;
   attack: number;
   /** Инициатива: по ней строится очередь хода — ходят корабли, а не игроки. */
   initiative: number;
@@ -1094,6 +1552,26 @@ export interface BattleShip {
   armourName?: string;
   shieldName?: string;
   computerName?: string;
+  /** Шанс противоракет в упор, в процентах (пункт 30); ноль — их на корабле нет. */
+  antiMissile: number;
+  /** Морская пехота на борту — п. 8, абордаж. */
+  marines: number;
+  /** Корабль взят абордажем и воюет за захватчика — п. 8. */
+  captured: boolean;
+  /** С какого расстояния корабль идёт на абордаж: 1 — вплотную, больше — телепортом. */
+  boardingRange: number;
+  /** Обездвижен: двигатель разбит или держат тяговые лучи — его можно брать вплотную. */
+  immobile: boolean;
+  /** Получил приказ отходить: развёрнут к своему краю и уйдёт в свой следующий ход — п. 8. */
+  retreating?: boolean;
+  /** Ушёл с поля отходом — на поле его нет, но он и не погиб. */
+  retreated?: boolean;
+  /** Проект собран игроком, а не игрой — пункт 98: карточка боя называет его «ваш проект». */
+  crafted?: boolean;
+  /** Заморожен стазисным полем — п. 8: не ходит, не стреляет, атаковать его нельзя. */
+  frozen?: boolean;
+  /** Замаскирован — п. 8: защищён от лучей и ракет, пока не выстрелит. */
+  cloaked?: boolean;
 }
 
 /** Ствол корабля в бою — п. 8: строка таблицы оружия в нижней полосе и окне осмотра. */
@@ -1111,12 +1589,12 @@ export interface BattleWeapon {
    * есть, да не стреляет».
    */
   wrecked: number;
-  /** Дальность ствола в клетках — п. 8: по ней прицел показывает, достаёт ли оружие; у ракет — всё поле. */
+  /** Дальность ствола в клетках — п. 8: по ней прицел показывает, достаёт ли оружие; у ракет — путь на топливе. */
   range?: number;
 }
 
 /** Чем стреляли — п. 8: сцена рисует луч, снаряд и ракету по-разному. */
-export type WeaponKindCode = 'BEAM' | 'PROJECTILE' | 'MISSILE';
+export type WeaponKindCode = 'BEAM' | 'PROJECTILE' | 'MISSILE' | 'BOMB';
 
 /** Что случилось в бою — п. 8: строка журнала и повод для картинки на поле. */
 export interface BattleEvent {
@@ -1125,8 +1603,10 @@ export interface BattleEvent {
    * летит дальше; MISSILE_LOST — кончилось топливо, цели больше нет или сбиты все;
    * INTERCEPT — ближняя оборона сбила ракеты (`x`, `y` — где).
    */
-  type: 'MOVE' | 'FIRE' | 'DESTROYED' | 'PASS' | 'RETREAT' | 'FINISHED'
-    | 'LAUNCH' | 'MISSILE_MOVE' | 'MISSILE_LOST' | 'INTERCEPT';
+  type: 'MOVE' | 'FIRE' | 'DESTROYED' | 'PASS' | 'RETREAT' | 'WARP_OUT' | 'FINISHED'
+    | 'LAUNCH' | 'MISSILE_MOVE' | 'MISSILE_LOST' | 'INTERCEPT'
+    // Абордаж (п. 8): тяговый луч, захват, рейд и пехота, выжженная нейтронным огнём.
+    | 'TRACTOR' | 'BOARD' | 'RAID' | 'MARINES' | 'STASIS';
   shipId?: string;
   targetShipId?: string;
   x?: number;
@@ -1137,6 +1617,11 @@ export interface BattleEvent {
   text: string;
   /** Сколько выстрелов ушло этим видом оружия — только у залпа: столько ракет и летит. */
   shots?: number;
+  /**
+   * Причина гибели — только у DESTROYED (field-backlog, пункт 204): SHOT, BLAST, BLAST_HIT,
+   * SELF_DESTRUCT, STRANDED; `targetShipId` тогда — тот, чей удар или взрыв был последним.
+   */
+  cause?: 'SHOT' | 'BLAST' | 'BLAST_HIT' | 'SELF_DESTRUCT' | 'STRANDED';
   /** Откуда летит выстрел, если не от корабля: ракета в полёте — со своей клетки (пункт 30). */
   fromX?: number;
   fromY?: number;
@@ -1155,6 +1640,8 @@ export interface BattleMissile {
   speed: number;
   /** Сколько кругов полёта ещё осталось. */
   fuel: number;
+  /** Пехота на борту, если это штурмовые шаттлы (п. 8, абордаж); у ракет — пусто. */
+  marines?: number;
 }
 
 /**
@@ -1173,6 +1660,8 @@ export interface CouncilVoter {
   yours: boolean;
   /** Голос ещё не объявлен: совет открыт (чужие скрыты до итога) или игрок не ответил. */
   pending: boolean;
+  /** Свой голос подан по доверию: игрок не ответил до итога. */
+  silent?: boolean;
 }
 
 /** Выборы Высшего совета — п. 3: всё, что нужно сцене совета. */
@@ -1242,12 +1731,14 @@ export interface DemoBattle {
 /** Ход корабля в бою — п. 8. */
 export interface BattleActionPayload {
   shipId: string;
-  action: 'MOVE' | 'FIRE' | 'PASS' | 'RETREAT' | 'SELF_DESTRUCT';
+  action: 'MOVE' | 'FIRE' | 'PASS' | 'RETREAT' | 'SELF_DESTRUCT' | 'BOARD' | 'RAID';
   x?: number;
   y?: number;
   targetShipId?: string;
   /** Какие строки оружия стреляют — номера в `ship.weapons`; пусто — всё. */
   weaponRows?: number[];
+  /** По какому залпу ракет в полёте стрелять вместо корабля (пункт 30) — `BattleMissile.id`. */
+  targetMissileId?: number;
 }
 
 /** Итог наземного боя — п. 12. */
@@ -1383,6 +1874,8 @@ export interface Account {
   id: string;
   /** Логин — он же почта: отдельного логина у записи нет (кроме администратора). */
   login: string;
+  /** Своё знамя — пункт 144; пусто — не выбирал. */
+  banner?: string;
   email?: string;
   /** Имя для показа в интерфейсе игры; входить по нему нельзя. */
   name: string;
@@ -1407,6 +1900,13 @@ export interface Account {
    */
   textScale?: number;
   /**
+   * Громкость музыки и звуковых эффектов ступенью 0…3 или пусто. Пусто значит «игрок звука не
+   * трогал», то есть ВЫКЛЮЧЕНО: звук, заигравший сам при первом входе, раздражает сильнее
+   * тишины. Едет за игроком, как язык.
+   */
+  musicVolume?: number;
+  sfxVolume?: number;
+  /**
    * Раскладка горячих клавиш карты — п. 11.1: «действие: клавиша» (`{"turn": "KeyT"}`) или
    * пусто, если игрок клавиш не переназначал.
    *
@@ -1415,6 +1915,32 @@ export interface Account {
    * пары не толкует: что они значат, знает только клиент (`ui/hotkeys.ts`).
    */
   hotkeys?: Record<string, string>;
+  /** Подсказки новичку — пункт 30: пусто — ещё не спрашивали. */
+  noviceHints?: boolean;
+  /** Подсказки, отклонённые «больше не показывать», — пункт 130. */
+  dismissedHints?: string[];
+  /** Окна, которые не открываются сами, — пункт 164; пусто — открываются все. */
+  quietWindows?: string[];
+  /** Меньше движения — пункт 170: пусто — как в системе. */
+  reduceMotion?: boolean;
+  /** Знаки знамён у хозяев на карте — пункт 202: пусто — выключены. */
+  bannerGlyphs?: boolean;
+  /** Действующие права записи (backlog-promo, пункт 41): FOUNDER, EARLY_ACCESS, SUPPORTER. */
+  entitlements?: string[];
+  /** Открыты ли страницы прибора — баланс рас и «как сделано» (пункты 47, 70, 101). */
+  insider?: boolean;
+  /** Новая почта, ждущая подтверждения по ссылке (пункт 45). */
+  pendingEmail?: string;
+  /** Уникальный игровой код — номер записи по порядку заведения (личный кабинет). */
+  playerCode?: number;
+  /** Советник — пункт 23: пусто — по умолчанию (выключен, в гостевой партии включён). */
+  advisor?: boolean;
+  /** Когда запись заведена. */
+  createdAt?: string;
+  /** Сцены, увиденные целиком, — пункт 163: дальше они идут строкой итогов. */
+  seenScenes?: string[];
+  /** Письма о ходе в партии с людьми — пункт 22; пусто — выключены. */
+  notifyMail?: boolean;
 }
 
 /**
@@ -1500,6 +2026,20 @@ export interface CreateGamePayload {
   mightVictory?: boolean;
   /** Срок хода в секундах — backlog-promo, пункт 11; пусто — без срока. */
   turnSeconds?: number;
+  /** Разрешить зрителей — field-backlog, пункт 59; пусто — нельзя. */
+  spectators?: boolean;
+  /** Закрытая партия — пункт 67: только по ссылке-приглашению; пусто — открытая. */
+  inviteOnly?: boolean;
+  /** Ход итога по могуществу (пункт 24): 100, 200 или 300; пусто — 300. */
+  mightTurn?: number;
+  /** Тихая галактика (пункт 186): ИИ войну первым не начинает. */
+  peacefulAi?: boolean;
+  /** Особенность галактики — пункт 94: RANDOM, NONE или код. */
+  galaxyFeature?: string;
+  /** Галактика недели — пункт 146. */
+  weekly?: boolean;
+  /** Уровень сложности — пункт 9: BEGINNER, EASY, NORMAL или HARD; пусто — обычный. */
+  aiSkill?: string;
   playerName: string;
   /** Название родной звезды игрока; пусто — имя выберет генератор. */
   homeStarName?: string;
@@ -1507,6 +2047,12 @@ export interface CreateGamePayload {
   /** Знамя — цвет империи, п. 3.2 (`BannerColor` сервера); пусто — знамя расы. */
   banner?: string;
   seed?: number;
+  /** Учебная партия — пункт 41: звания по ней не считаются. */
+  tutorial?: boolean;
+  /** Своя раса из личного кабинета — пункт 99: раса по чужой ссылке засчитывается автору. */
+  raceTemplateId?: string;
+  /** Свой набор справочников основателя — пункт 42: партия одиночная, в историю не идёт. */
+  modId?: string;
 }
 
 /**
@@ -1536,6 +2082,13 @@ export interface BalanceRun {
    * Счёт адекватных для этого не годится — он растёт от размытости прогона.
    */
   residual?: number;
+  /**
+   * Ход решённости медианой по партиям, в процентах их длины (пункт 155): с какого места будущий
+   * победитель первый до конца. Пусто — прогон старый или ещё идёт.
+   */
+  decidedPercent?: number;
+  /** Хвост — ходов после решённости, медианой. */
+  tailTurns?: number;
   /** Сколько сторон удалось оценить: прочие взяли слишком редко. */
   measured?: number;
   judgements: BalanceJudgement[];
@@ -1745,4 +2298,393 @@ export interface BuildingRef {
   cost: number;
   upkeep: number;
   requiredTechCode?: string;
+}
+
+/** Сообщение о проблеме в списке хозяина — field-backlog, пункт 157. */
+/** Частый отказ игрокам — field-backlog, пункт 77: ключ, текст, сколько раз и когда последний. */
+export interface RefusalCount {
+  key: string;
+  text: string;
+  refusals: number;
+  lastAt: string;
+}
+
+/**
+ * Что ждёт пришедшего по приглашению — field-backlog, пункт 15: партия, ход, срок хода и место —
+ * в лобби (`LOBBY`) или империя, которую ведёт ИИ (`EMPIRE`); пусто — мест нет.
+ */
+export interface InvitePreview {
+  gameName: string;
+  status: GameStatus;
+  turn: number;
+  galaxySize?: string;
+  humanPlayers: number;
+  totalPlayers: number;
+  turnSeconds?: number;
+  seat?: 'LOBBY' | 'EMPIRE';
+  empire?: string;
+  color?: string;
+  host?: string;
+  /**
+   * Империи ИИ, которые можно взять в идущей партии, — пункт 66: выбирает пришедший; в войне с
+   * пригласившим — помечены.
+   */
+  empires?: { playerId: string; name: string; color: string; raceName?: string; colonies: number;
+    atWarWithHost: boolean }[];
+}
+
+/** Что понравилось больше всего — вопрос пункта 187. */
+export type FeedbackLiked = 'HARD_WIN' | 'DISCOVERY' | 'BUILDING' | 'PEOPLE';
+
+/** Отзыв после партии для администратора — field-backlog, пункты 46 и 187. */
+export interface GameFeedback {
+  rating: number;
+  liked?: FeedbackLiked;
+  comment?: string;
+  outcome?: string;
+  victoryKind?: string;
+  galaxySize?: string;
+  empires?: number;
+  turn?: number;
+  createdAt: string;
+}
+
+export interface ProblemReport {
+  id: string;
+  accountId: string;
+  accountName?: string;
+  accountRole?: string;
+  gameId?: string;
+  turn?: number;
+  clientVersion?: string;
+  screen?: string;
+  text: string;
+  /** Что клиент собрал сам: последние сбои, JSON строкой. */
+  context?: string;
+  resolved: boolean;
+  createdAt: string;
+  /** Ответ хозяина — field-backlog, пункт 158; пусто, пока не ответили. */
+  answerKind?: ProblemAnswerKind;
+  answerVersion?: string;
+  answerText?: string;
+  answeredAt?: string;
+  /** Написавший прочёл ответ. */
+  answerSeen?: boolean;
+}
+
+/** Ответ хозяина на сообщение о проблеме — пункт 158: исправлено или «не будем исправлять». */
+export type ProblemAnswerKind = 'FIXED' | 'WONT_FIX';
+
+/** Ответ на своё сообщение глазами написавшего — пункт 158. */
+export interface ProblemAnswer {
+  id: string;
+  reportedAt: string;
+  /** Начало его же сообщения — узнать, о чём речь. */
+  excerpt: string;
+  kind: ProblemAnswerKind;
+  version?: string;
+  text?: string;
+}
+
+/**
+ * Раздел «что нового» — пункты 159 и 161: потерянное и что делать, правила, цены сторон рас,
+ * новое, исправленное. Порядок показа — этот же.
+ */
+export type NoticeKind = 'loss' | 'changed' | 'prices' | 'new' | 'fixed';
+export const NOTICE_KINDS: NoticeKind[] = ['loss', 'changed', 'prices', 'new', 'fixed'];
+
+/** Запись «что нового» — field-backlog, пункты 159 и 161. */
+export interface Notice {
+  id: string;
+  date: string;
+  /** Версия, с которой изменение вышло. */
+  version: string;
+  kind: NoticeKind;
+  text: string;
+}
+
+/**
+ * Страница пакета основателя — целиком и на обоих языках (`FounderPageDto`): переключатель
+ * языка меняет её сразу, без нового запроса, а администратор правит её так же целиком.
+ */
+export interface FounderPage {
+  price?: string;
+  seatsTotal: number;
+  seatsTaken: number;
+  published: boolean;
+  /** Куда ведёт кнопка покупки; пусто — продажа ещё не открыта. */
+  buyUrl?: string;
+  en: FounderText;
+  ru: FounderText;
+  updatedAt?: string;
+}
+
+export interface FounderText {
+  title: string;
+  tagline?: string;
+  intro?: string;
+  sections?: FounderSection[];
+  faq?: FounderQuestion[];
+  note?: string;
+}
+
+export interface FounderSection {
+  title?: string;
+  items?: string[];
+}
+
+export interface FounderQuestion {
+  question?: string;
+  answer?: string;
+}
+
+/**
+ * Справочник «Как устроено» — field-backlog, пункты 75 и 200: фазы конца хода в порядке сервера
+ * и статьи о правилах с числами из классов правил.
+ */
+export interface RulesBook {
+  /** `code` — имя класса фазы: им подписано событие TURN_PHASE (пункт 100). */
+  phases: { code: string; order: number; title: string; text: string }[];
+  articles: {
+    code: string;
+    title: string;
+    text: string;
+    /** Чем правило этой игры отличается от оригинала; пусто — ничем. */
+    deviation?: string;
+  }[];
+}
+
+/** Свой проект корабля в итогах — пункт 98: собранный игроком и сколько по нему построено. */
+export interface OwnDesign {
+  name: string;
+  built: number;
+}
+
+/** История своих партий — field-backlog, пункт 18, — с личными рекордами. */
+export interface GameHistory {
+  games: {
+    gameName: string;
+    raceName?: string;
+    galaxySize?: string;
+    empires: number;
+    outcome: 'WON' | 'LOST' | 'CONCEDED';
+    victoryKind?: string;
+    turn: number;
+    place: number;
+    peakColonies: number;
+    deficitTurn?: number;
+    deficitPercent?: number;
+    finishedAt: string;
+    /** Свои проекты кораблей партии, лучший первым — пункт 98. */
+    designs?: OwnDesign[];
+  }[];
+  played: number;
+  wins: number;
+  fastestWin?: number;
+  mostColonies?: number;
+  hardestWin?: number;
+  /** Звания за трудное с ходом к ним — пункт 41. */
+  titles?: Title[];
+  /** Рейтинг среди людей со списком — пункт 19. */
+  rating?: Rating;
+  /** Подарков за приглашение — пункты 50 и 174, 0…3. */
+  companions?: number;
+}
+
+/** Доля среди похожих — field-backlog, пункт 117: только доли, без имён и чужих чисел. */
+export interface PeerShare {
+  games: number;
+  /** У какой доли похожих колоний было меньше, %. */
+  coloniesAbove: number;
+  /** У какой доли похожих побед победа пришла позже, %. */
+  fasterThan?: number;
+  /** Сравнение среди гостевых партий — пункт 118. */
+  guest: boolean;
+}
+
+/** Рейтинг игроков — field-backlog, пункт 19: только партии с людьми. */
+export interface Rating {
+  value: number;
+  games: number;
+  provisional: boolean;
+  /** Сдвиг от этой партии (сцена конца). */
+  delta?: number;
+  /** Все с рейтингом, сильнейшие первыми (экран истории). */
+  board?: { name: string; value: number; games: number; you: boolean; earlyBird?: boolean }[];
+}
+
+/** Звание за трудное — пункт 41: код, заработано ли и сколько пройдено из скольких. */
+export interface Title {
+  code: string;
+  earned: boolean;
+  progress: number;
+  goal: number;
+}
+
+/** Что сервер знает об уведомлениях записи — пункт 22. */
+export interface NotifySettingsState {
+  pushKey: string;
+  subscribed: boolean;
+  notifyMail: boolean;
+  hasEmail: boolean;
+}
+
+/** Сравнение с собой прошлым — field-backlog, пункт 115. */
+export interface PastSelf {
+  checkpoint: number;
+  mine: number;
+  best: number;
+  /** Насколько выше (плюс) или ниже (минус) лучшей своей партии, %. */
+  percent: number;
+}
+
+/** Партия, которую можно смотреть, — field-backlog, пункт 59. */
+export interface SpectatableGame {
+  id: string;
+  name: string;
+  galaxySize: string;
+  turn: number;
+  empires: number;
+  humans: number;
+  /** Ход, который зритель увидит сейчас; пусто — партия ещё молода. */
+  viewTurn?: number;
+  /** Спрашивающий сам за этим столом — смотреть нельзя. */
+  yours: boolean;
+}
+
+/** Партия глазами зрителя: вся галактика без тумана, но на ходу `turn`, а не `gameTurn`. */
+export interface SpectatorFrame {
+  gameId: string;
+  name: string;
+  turn: number;
+  gameTurn: number;
+  widthParsecs: number;
+  heightParsecs: number;
+  empires: {
+    slot: number; name: string; raceName?: string; color?: string; ai: boolean;
+    colonies: number; populationK: number; might?: number; alive: boolean;
+  }[];
+  stars: {
+    id: string; name: string; x: number; y: number; starColor?: string; special?: boolean;
+    owners: number[]; monster?: string;
+  }[];
+  fleets: {
+    slot: number; systemId?: string; originId?: string; targetId?: string;
+    departureTurn?: number; arrivalTurn?: number; ships: number; armed: boolean;
+  }[];
+}
+
+/** Метка наставника на карте ученика — field-backlog, пункт 184. */
+export interface MapMark {
+  systemId: string;
+  /** COLONIZE, OUTPOST, EXPLORE, DEFEND, ATTACK, AVOID. */
+  code: string;
+  author: string;
+  turn: number;
+}
+
+/** Империя ученика глазами наставника — пункт 184. */
+export interface MentorView {
+  studentPlayerId: string;
+  name: string;
+  color?: string;
+  credits: number;
+  map: GalaxyMap;
+  fleets: FleetGroup[];
+  marks: MapMark[];
+}
+
+/** Галактика недели — пункт 146: условия и итоги по расам. */
+export interface WeeklyGalaxy {
+  week: number;
+  from: string;
+  until: string;
+  galaxySize: string;
+  empires: number;
+  feature?: string;
+  started: number;
+  /** Своя раса — строкой без кода. */
+  races: { raceCode?: string; games: number; wins: number }[];
+}
+
+/** Что можно отменить до конца хода — пункт 74. */
+export interface TurnUndo {
+  id: string;
+  /** SELL, BUY или SCRAP. */
+  kind: string;
+  what: string;
+  where: string;
+  credits?: number;
+}
+
+/**
+ * Уровень сложности — field-backlog, пункты 9 и 87: что делает ИИ этого уровня, признаками его правила
+ * (`AiSkill` на сервере). Прибавок у ИИ нет ни на одном уровне.
+ */
+export interface AiSkillInfo {
+  code: string;
+  /** PAYBACK — по окупаемости, LIST — по списку, SHUFFLED — вразнобой. */
+  build: string;
+  recommendedResearch: boolean;
+  purchasesPerTurn: number;
+  coalitions: boolean;
+  openingBook: boolean;
+}
+
+/** Подсказка уровня следующей партии — пункт 10; пустой объект — предлагать нечего. */
+export interface DifficultySuggestion {
+  last?: string;
+  suggested?: string;
+  /** EASY_WIN или EARLY_LOSS. */
+  reason?: string;
+  turn?: number;
+}
+
+/**
+ * Баланс рас в открытую — field-backlog, пункты 70 и 101: итоги законченных прогонов, все числа — из
+ * записей прогонов. Видят администратор, модератор и основатель.
+ */
+export interface OpenBalance {
+  runs: number;
+  games: number;
+  turns: number;
+  lastFinishedAt?: string;
+  /** С какого числа партий прогон показывается приговорами. */
+  minGames: number;
+  measure?: BalanceRun;
+  oracle?: BalanceRun;
+  previousAt?: string;
+  priceChanges: { code: string; before?: number; after: number }[];
+}
+
+/** Признаки живой игры — field-backlog, пункт 45; только администратору и модератору. */
+export interface LiveStats {
+  /** Партий доиграно за неделю (людьми, без учебных и служебных). */
+  weekGames: number;
+  /** Людей сейчас в сетевых партиях. */
+  onlineNow: number;
+  /** Ниже скольких людей сейчас блок игрокам не показывался бы. */
+  publicThreshold: number;
+  /** За сколько минут действие считается «сейчас». */
+  onlineMinutes: number;
+  lastGames: {
+    raceName?: string;
+    outcome: string;
+    victoryKind?: string;
+    turns: number;
+    empires: number;
+    humans: number;
+    finishedAt: string;
+  }[];
+}
+
+/** Свой набор справочников основателя — field-backlog, пункт 42: какие справочники он меняет. */
+export interface ModSet {
+  id: string;
+  name: string;
+  buildings: boolean;
+  ships: boolean;
+  technologies: boolean;
+  leaders: boolean;
+  updatedAt: string;
 }

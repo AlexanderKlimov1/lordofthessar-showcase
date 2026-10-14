@@ -47,6 +47,11 @@ public class OrbitalDefenceRules {
      */
     private static final List<String> ORBIT = List.of(STAR_BASE, BATTLE_STATION, STAR_FORTRESS);
 
+    /** Орбитальная база (звёздная база, станция или крепость) — по коду здания (п. 8). */
+    public static Boolean orbital(String buildingCode) {
+        return ORBIT.contains(buildingCode);
+    }
+
     /**
      * Здания планетарной обороны и корпус, которым каждое выходит в бой.
      * <p>
@@ -147,6 +152,14 @@ public class OrbitalDefenceRules {
      */
     public String buildingOf(String hull) {
         return ORBIT.contains(hull) ? hull : null;
+    }
+
+    /**
+     * Оборонные постройки, которые видит чужой глаз (п. 15, туман войны): орбита,
+     * наземные батареи и щиты. Их и помнит игрок о чужой колонии.
+     */
+    public Boolean isDefence(String code) {
+        return ORBIT.contains(code) || SURFACE.contains(code) || SHIELDS.contains(code);
     }
 
     /** Здания планетарной обороны в порядке, в каком они выставляют батареи. */

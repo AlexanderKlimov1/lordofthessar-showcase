@@ -4,6 +4,7 @@ import { useModalEscape } from '../useModalEscape';
 import { tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Продажа постройки — п. 10, всплывающим окошком у указателя (30.09.2026, решение хозяина
@@ -113,7 +114,7 @@ export function ColonySellDialog({
             {t('colony.sell.soldThisTurn')}
           </p>
         ) : null}
-        {error ? <p className="mt-3 text-19 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mt-3 text-19" message={error} /> : null}
 
         {/* Кнопки внизу справа, отмена перед продажей — порядок оригинала. */}
         <div className="mt-4 flex items-center justify-end gap-5 border-t border-space-700 pt-2 text-20">

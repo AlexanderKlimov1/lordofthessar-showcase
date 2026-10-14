@@ -53,6 +53,13 @@ public record LeaderDto(
         UUID systemId,
         String systemName,
         UUID fleetId,
-        Integer arrivesTurn
+        Integer arrivesTurn,
+        /** Послужной список (пункт 140): бои флота лидера, выигранные и проигранные. */
+        Integer battlesWon,
+        Integer battlesLost,
+        /** Ход, с которого губернатор служит в нынешней системе; пусто — не служит в системе. */
+        Integer termStartTurn,
+        /** На сколько жителей выросла его система за срок; пусто — срок начат до записи. */
+        Integer systemGrowth
 ) {
 }

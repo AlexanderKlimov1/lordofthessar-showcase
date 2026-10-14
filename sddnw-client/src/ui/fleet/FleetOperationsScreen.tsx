@@ -13,6 +13,7 @@ import { t, tf, useT } from '../../i18n';
 import { KeyFigure } from '../KeyFigure';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Флот империи — экран нижнего меню окном Fleet Operations MOO II (п. 8, п. 11.1).
@@ -105,14 +106,16 @@ export function FleetOperationsScreen({ onClose }: { onClose: () => void }) {
     && !inFlight
     && here !== null
     && (group?.composition.some((ship) => ship.role !== 'WARSHIP' && ship.ships > 0) ?? false);
-  const canRedirect = fleet?.canRedirect ?? false;
-  // Флот в пути слушается приказа только с Hyperspace Communications — п. 8.
+  // Флот в пути слушается приказа с Hyperspace Communications или у своей базы — п. 8.
+  const canRedirect = group?.orderable ?? fleet?.canRedirect ?? false;
   const canRelocate =
     !busy
     && selected.size > 0
     && target !== null
     && reachable.has(target)
     && target !== group?.starSystemId
+    // Летящий флот туда, куда уже летит, не перенаправить (`fleet.alreadyHeading`, пункт 76).
+    && target !== group?.targetSystemId
     && (!inFlight || canRedirect);
 
   const toggle = (key: string) =>
@@ -339,7 +342,7 @@ export function FleetOperationsScreen({ onClose }: { onClose: () => void }) {
 
           <p className="flex-none text-11 leading-tight">
             {error ? (
-              <span className="text-danger">{error}</span>
+              <ActionError as="span" message={error} />
             ) : notice ? (
               <span className="text-ink-soft">{notice}</span>
             ) : (

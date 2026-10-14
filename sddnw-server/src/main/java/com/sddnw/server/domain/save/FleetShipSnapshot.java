@@ -11,6 +11,8 @@ package com.sddnw.server.domain.save;
 public record FleetShipSnapshot(
         Integer designIndex,
         Integer ships,
-        Integer colonists
+        Integer colonists,
+        /** Опыт экипажей (п. 8); {@code null} в старых слепках — новобранцы. */
+        Integer experience
 ) {
 }

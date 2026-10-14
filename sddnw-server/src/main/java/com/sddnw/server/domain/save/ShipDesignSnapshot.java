@@ -25,6 +25,17 @@ public record ShipDesignSnapshot(
         Integer createdTurn,
         Boolean obsolete,
         String role,
-        List<ShipDesignComponentSnapshot> components
+        List<ShipDesignComponentSnapshot> components,
+        /**
+         * Собран ли проект игрой (03.10.2026). Прежде признак в слепок не шёл, и после
+         * загрузки игра больше не обновляла свои проекты — а заводила рядом новые.
+         */
+        Boolean auto,
+        /** Задача проекта игры (ShipMission); у слепков прошлых версий и у проектов игрока — пусто. */
+        String mission,
+        /** Трофей абордажа (п. 8); у слепков прошлых версий — пусто. */
+        Boolean trophy,
+        /** Сколько кораблей построено по проекту (пункт 98); у слепков прошлых версий — пусто. */
+        Integer built
 ) {
 }

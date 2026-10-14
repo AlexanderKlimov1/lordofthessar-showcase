@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        13.10.2026, перенос технологий MOO II: терраформирование дорожает с каждым разом (250, 500,
+        750), «depending on how many times the planet has already been terraformed (possibly by
+        another empire)». Счёт живёт на самой планете.
+    -->
+    <changeSet id="144-terraform-count" author="sddnw">
+        <addColumn tableName="planet">
+            <column name="terraform_count" type="integer" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

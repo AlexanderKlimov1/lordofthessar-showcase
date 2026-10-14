@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useModalEscape } from '../useModalEscape';
+import { reducedMotion } from '../motion';
 import { MilkyWayControls } from './MilkyWayControls';
 import { MilkyWayCanvas } from './MilkyWayCanvas';
 import { t, useT, type Key } from '../../i18n';
@@ -123,14 +124,15 @@ const JET_STYLE: Record<JetLayer['code'], { fill: string; animation: string }> =
 
 export function MilkyWayScreen({ onClose }: { onClose: () => void }) {
   const [view, setView] = useState<ViewAngles>({ yawDeg: 20, pitchDeg: 62, rollDeg: 0, zoom: 1 });
-  const [spinning, setSpinning] = useState(true);
+  // Меньше движения (пункт 170): схема стоит, пока игрок сам её не запустит.
+  const [spinning, setSpinning] = useState(() => !reducedMotion());
   const [labels, setLabels] = useState(true);
   const [radiation, setRadiation] = useState(true);
   const [dragging, setDragging] = useState(false);
   /** Размер поля в пикселях экрана: от него зависят и пропорции схемы, и растр звёзд. */
   const [box, setBox] = useState({ width: 0, height: 0 });
 
-  useModalEscape(true, onClose);
+  useModalEscape(true, onClose, true);
   useT();
 
   /*
@@ -568,7 +570,7 @@ export function MilkyWayScreen({ onClose }: { onClose: () => void }) {
           ))}
         </p>
         <button type="button" className="link shrink-0 text-18" onClick={onClose}>
-          {t('common.closeEsc')}
+          {t('common.ok')}
         </button>
       </div>
     </div>

@@ -1,8 +1,24 @@
+import type { GameDetails } from '../api/types';
+import type { Section as ProfileSection } from './profile/ProfileScreen';
 import { useGameStore, type OverlayPanel } from '../state/gameStore';
 import { GameMenu } from './GameMenu';
 import { hotkeyLabel, useHotkeys } from './hotkeys';
 import { HUD_FONT_SIZE, SIDE_PANEL_WIDTH } from './layout';
 import { t, useT } from '../i18n';
+import { clickSound } from '../audio/uiSfx';
+import { useEffect, type ReactNode } from 'react';
+import { markHud } from '../state/hudPresence';
+import { noviceHintsOn } from '../state/hints';
+
+/** Какие разделы игрок уже открывал в этой партии — пункт 27, для подсветки «новое». */
+const seenPanels = (gameId: string | undefined): string[] => {
+  try {
+    return JSON.parse(localStorage.getItem(`sddnw.hud.seen.${gameId ?? ''}`) ?? '[]') as string[];
+  } catch {
+    return [];
+  }
+};
+import { ColoniesIcon, FleetIcon, InfoIcon, LeadersIcon, PlanetsIcon, RacesIcon } from './panelIcons';
 
 /**
  * Нижнее меню — п. 11.1: все разделы игры текстовыми ссылками, включая саму «Игру».
@@ -14,13 +30,22 @@ import { t, useT } from '../i18n';
  * ряд во всю ширину экрана ради одной ссылки стоил карте верхней полосы, а масштаб и так
  * меняется колесом мыши — в оригинале на этом месте нижнего меню стоит `ZOOM`.
  */
-export function Hud({ onLeave, onLoad, onPreferences }: {
+export function Hud({ onLeave, onLoad, onStudents, onPreferences, onRegister, onReport, onEnding, onConceded }: {
   /** «Новая» и «Выход» меню «Игра» ведут на один экран — создания партии. */
   onLeave: () => void;
   /** Список сохранений — п. 3: полоса только передаёт вызов, рисует окно `App`. */
   onLoad: () => void;
+  /** Империи учеников — пункт 184: полоса только передаёт вызов, рисует окно `App`. */
+  onStudents: () => void;
   /** Настройки игрока — п. 11.1: полоса только передаёт вызов, рисует экран `App`. */
-  onPreferences: () => void;
+  /** Личный кабинет; с разделом — «Настройки» открывают его сразу на звуке. */
+  onPreferences: (section?: ProfileSection) => void;
+  onRegister: () => void;
+  onReport: () => void;
+  /** Итоги оконченной партии — field-backlog, пункт 33; сцену рисует `App`. */
+  onEnding: () => void;
+  /** Поражение признано — field-backlog, пункт 81; сцену рисует `App`. */
+  onConceded: (details: GameDetails) => void;
 }) {
   const game = useGameStore((state) => state.game);
   const overlay = useGameStore((state) => state.overlay);
@@ -29,12 +54,47 @@ export function Hud({ onLeave, onLoad, onPreferences }: {
   // иначе на кнопке осталась бы прежняя буква, а работала бы новая — и поверят кнопке.
   const keys = useHotkeys();
   const { t } = useT();
+  // Полоса отмечает себя: значки звука и наблюдения на карте живут в ней, а не в углу.
+  useEffect(() => (game ? markHud() : undefined), [game !== null]);
+
+  const toggle = (panel: OverlayPanel) => {
+    seen(panel);
+    setOverlay(overlay === panel ? 'none' : panel);
+  };
+  /*
+    Разделы по мере надобности — field-backlog, пункт 27 (решение хозяина проекта 08.10.2026):
+    «Расы» появляются после первого знакомства (вторая глава партии и дальше), «Лидеры» — после
+    первого предложения службы. Ветерану — всё сразу; горячая клавиша работает всегда, и открытый
+    ею раздел говорит о пустоте одной строкой. Появившийся раздел подсвечен «новое», пока его не
+    откроют (`sddnw.hud.seen.<партия>`).
+  */
+  const self = useGameStore((state) => state.players.find((player) => player.id === state.credentials?.playerId));
+  const veteran = !noviceHintsOn();
+  const showRaces = veteran || (self?.chapter ?? 1) >= 2 || overlay === 'races';
+  const showLeaders = veteran || Boolean(self?.leadersSeen) || overlay === 'leaders';
+  const fresh = (panel: OverlayPanel) => !veteran && !seenPanels(game?.id).includes(panel);
+  function seen(panel: OverlayPanel) {
+    const list = seenPanels(game?.id);
+    if (!list.includes(panel)) {
+      try {
+        localStorage.setItem(`sddnw.hud.seen.${game?.id ?? ''}`, JSON.stringify([...list, panel]));
+      } catch {
+        // Хранилище недоступно — подсветка «новое» просто останется до перезагрузки.
+      }
+    }
+  }
+  // Открытый горячей клавишей раздел тоже считается увиденным.
+  useEffect(() => {
+    if (overlay === 'races' || overlay === 'leaders') {
+      seen(overlay);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlay, game?.id]);
 
   if (!game) {
     return null;
   }
 
-  const toggle = (panel: OverlayPanel) => setOverlay(overlay === panel ? 'none' : panel);
 
   return (
     // data-map-inset — метка для сцены: панель лежит поверх карты,
@@ -49,7 +109,9 @@ export function Hud({ onLeave, onLoad, onPreferences }: {
         Высоту полосы сцена меряет сама по метке `data-map-inset`, поэтому вторая строка
         карту не закрывает.
       */
-      className="absolute bottom-0 left-0 z-10 flex flex-wrap items-stretch border-t border-space-700 bg-space-950/85"
+      className="absolute bottom-0 left-0 z-10 flex flex-wrap items-stretch border-t border-space-700 bg-space-950/90"
+      // Нажатия полосы и меню «Игра» звучат щелчком (07.10.2026) — одним обработчиком на всю полосу.
+      onClickCapture={clickSound}
     >
       {/*
         У каждого пункта есть и горячая клавиша (п. 11.1) — она названа во всплывающей подсказке:
@@ -58,6 +120,7 @@ export function Hud({ onLeave, onLoad, onPreferences }: {
       */}
       <MenuItem
         active={overlay === 'colonies'}
+        icon={<ColoniesIcon />}
         hotkey={hotkeyLabel(keys.colonies)}
         onClick={() => toggle('colonies')}
       >
@@ -65,6 +128,7 @@ export function Hud({ onLeave, onLoad, onPreferences }: {
       </MenuItem>
       <MenuItem
         active={overlay === 'planets'}
+        icon={<PlanetsIcon />}
         hotkey={hotkeyLabel(keys.planets)}
         onClick={() => toggle('planets')}
       >
@@ -72,6 +136,7 @@ export function Hud({ onLeave, onLoad, onPreferences }: {
       </MenuItem>
       <MenuItem
         active={overlay === 'fleet'}
+        icon={<FleetIcon />}
         hotkey={hotkeyLabel(keys.fleet)}
         onClick={() => toggle('fleet')}
       >
@@ -81,33 +146,42 @@ export function Hud({ onLeave, onLoad, onPreferences }: {
         «Игра» стоит там, где прежде были кнопки масштаба, — и там же, где `ZOOM` в
         нижнем меню оригинала. Меню раскрывается вверх: полоса у нижнего края экрана.
       */}
-      <GameMenu onLeave={onLeave} onLoad={onLoad} onPreferences={onPreferences} />
-      <MenuItem
-        active={overlay === 'leaders'}
-        hotkey={hotkeyLabel(keys.leaders)}
-        onClick={() => toggle('leaders')}
-      >
-        {t('hud.leaders')}
-      </MenuItem>
+      <GameMenu onLeave={onLeave} onLoad={onLoad} onStudents={onStudents} onPreferences={onPreferences} onRegister={onRegister} onReport={onReport} onEnding={onEnding} onConceded={onConceded} />
+      {showLeaders ? (
+        <MenuItem
+          active={overlay === 'leaders'}
+          icon={<LeadersIcon />}
+          hotkey={hotkeyLabel(keys.leaders)}
+          fresh={fresh('leaders')}
+          onClick={() => toggle('leaders')}
+        >
+          {t('hud.leaders')}
+        </MenuItem>
+      ) : null}
       {/*
         Отдельного пункта «Дипломатия» в нижнем меню нет — его нет и в оригинале:
         разговор с правителем открывается аудиенцией с пульта «Расы», а не своей
         кнопкой карты. Сам экран дипломатии никуда не делся, туда ведёт «аудиенция»
         (`RaceRelationsScreen`).
       */}
-      <MenuItem
-        active={overlay === 'races'}
-        hotkey={hotkeyLabel(keys.races)}
-        onClick={() => toggle('races')}
-      >
-        {t('hud.races')}
-      </MenuItem>
+      {showRaces ? (
+        <MenuItem
+          active={overlay === 'races'}
+          icon={<RacesIcon />}
+          hotkey={hotkeyLabel(keys.races)}
+          fresh={fresh('races')}
+          onClick={() => toggle('races')}
+        >
+          {t('hud.races')}
+        </MenuItem>
+      ) : null}
       {/*
         Инфо — п. 11.1, окно Information MOO II: летопись империй графиком, свойства
         рас знакомых соседей и обе страницы технологий.
       */}
       <MenuItem
         active={overlay === 'info'}
+        icon={<InfoIcon />}
         hotkey={hotkeyLabel(keys.info)}
         onClick={() => toggle('info')}
       >
@@ -126,11 +200,17 @@ export function Hud({ onLeave, onLoad, onPreferences }: {
  */
 function MenuItem({
   children,
+  icon,
   active = false,
   hotkey,
+  fresh = false,
   onClick,
 }: {
   children: string;
+  /** Раздел только что появился (пункт 27) — подсвечен «новое», пока его не откроют. */
+  fresh?: boolean;
+  /** Значок рядом со словом — редизайн главной сцены (07.10.2026), как на наброске хозяина. */
+  icon?: ReactNode;
   active?: boolean;
   /** Горячая клавиша этого раздела — п. 11.1; пусто, если её нет. */
   hotkey?: string;
@@ -143,15 +223,19 @@ function MenuItem({
     <button
       type="button"
       /*
-        Основа — по слову, а не 9ch на каждый пункт (backlog-promo, пункт 32): «Info» и
-        «Колонии» разной длины, и равные основы перенесли «Info» на вторую строку уже на
-        ширине 1100, хотя словам места хватало. Растягиваются пункты по-прежнему поровну.
+        РЕДИЗАЙН (07.10.2026): значок и слово, полоса вдвое выше, без пунктирного подчёркивания —
+        у восьми ссылок подряд оно было шумом. Открытый раздел подчёркнут янтарём снизу: это и
+        есть примета «где я», а не цвет одного слова. Основа — по слову (backlog-promo, пункт
+        32): пункты растягиваются поровну, а не влезающий переносится на вторую строку.
       */
-      className={`link flex-auto whitespace-nowrap px-1.5 py-2 text-center ${active ? 'link-active' : ''}`}
+      className={'flex flex-auto items-center justify-center gap-2 whitespace-nowrap border-b-2 px-2 py-3 '
+        + (active ? 'border-accent text-accent' : 'border-transparent text-ink hover:text-accent')}
       title={hotkey ? t('hotkey.title', { action: children, key: hotkey }) : undefined}
       onClick={onClick}
     >
+      {icon ? <span className={active ? 'text-accent' : 'text-lamp'}>{icon}</span> : null}
       {children}
+      {fresh ? <span className="ml-1 bg-lamp px-1 text-11 uppercase text-space-950">{t('hud.new')}</span> : null}
     </button>
   );
 }

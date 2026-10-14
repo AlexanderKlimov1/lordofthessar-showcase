@@ -2,6 +2,7 @@ package com.sddnw.server.service;
 
 import com.sddnw.server.domain.entity.DiplomacyRelationEntity;
 import com.sddnw.server.domain.entity.PlayerEntity;
+import com.sddnw.server.domain.entity.StarSystemEntity;
 import com.sddnw.server.domain.enums.AiPersonality;
 import com.sddnw.server.domain.enums.DiplomacyAction;
 import com.sddnw.server.domain.enums.DiplomacyStance;
@@ -100,6 +101,14 @@ public class AiDiplomacyService {
     private static final int ACQUAINTANCE_BEFORE_WAR = 10;
 
     /**
+     * Агония соседа — его мощь не больше этой доли своей, в процентах (09.10.2026, разбор
+     * мёртвого покорения: за 300 ходов не добита ни одна империя). Реконструкция, правленая
+     * вдвое (пункт 89): при четверти правило не сработало ни разу — мощь умирающей империи с
+     * четырьмя колониями всё ещё около трети сильнейшей (в мощь входят наука и население).
+     */
+    private static final int AGONY_PERCENT = 50;
+
+    /**
      * Насколько охотнее нападают на отталкивающего соседа — п. 7.
      * <p>
      * <b>Вторая половина стороны, которой не было в игре вовсе.</b> Карточка обещает:
@@ -126,6 +135,39 @@ public class AiDiplomacyService {
      * подменяет собой нрав.
      */
     private static final int RUTHLESS_WAR_ADVANTAGE = AiPersonality.RUTHLESS.getWarAdvantagePercent();
+
+    /**
+     * БАЛАНС СИЛ — field-backlog, пункт 151 (08.10.2026, правило хозяина проекта).
+     * <p>
+     * Лидер — империя, которая сильнее ДВУХ БЛИЖАЙШИХ к ней империй вместе. Тогда эти двое
+     * ({@code core}) сближаются против общего врага: доверие между ними растёт, они мирятся,
+     * заключают союз и, когда перевес союза достаточен, объявляют лидеру войну. Следующие двое по
+     * близости ({@code backers}) поддерживают их деньгами и технологиями для войны. Остальные
+     * держатся с лидером осторожно-враждебно: доверие к нему не выше {@link #CAUTIOUS_TRUST}, ни
+     * договоров, ни обменов, ни дани.
+     * <p>
+     * <i>Реконструкция:</i> MOO II такого правила не знала, его подсказывает история держав —
+     * поэтому оно читается естественно, а не подкруткой. Близость меряется между родными
+     * звёздами; лидер один на партию — сильнейший из подходящих. Мерило успеха — ход решённости
+     * партии (пункт 150) уходит позже.
+     */
+    private record Bloc(UUID leader, List<UUID> core, List<UUID> backers) {
+    }
+
+    /** На сколько за ход растёт доверие двух соседей лидера друг к другу — общий враг сближает. */
+    private static final int COMMON_ENEMY_TRUST = 5;
+
+    /** Выше этого общий враг доверие не поднимает: дальше дружба держится своими делами. */
+    private static final int COMMON_ENEMY_TRUST_CAP = 80;
+
+    /** Осторожная враждебность к лидеру: доверие не выше этого — ниже порога вражды {@link #HOSTILE_TRUST}. */
+    private static final int CAUTIOUS_TRUST = 35;
+
+    /** Как часто помощник союза шлёт помощь, в процентах на ход: не каждый ход, чтобы не разориться. */
+    private static final int BACKER_CHANCE_PERCENT = 50;
+
+    /** Разделы дерева, которые воюют: лучи, ракеты и броня, щиты. Помощь технологией берётся отсюда. */
+    private static final Set<String> WAR_SECTIONS = Set.of("physics", "chemistry", "force_fields");
 
     private final DiplomacyRelationRepository relationRepository;
     private final DiplomacyService diplomacyService;
@@ -175,6 +217,12 @@ public class AiDiplomacyService {
                         Collectors.mapping(PlayerTechnologyEntity::getOptionCode,
                                 Collectors.toSet())));
         Map<String, ResearchCatalog.TechnologyPlace> places = researchCatalog.places();
+        // Баланс сил (пункт 151): блок против лидера считается один раз на ход и действует
+        // прежде обычных разговоров — у сближения и помощи свой ритм.
+        Bloc bloc = bloc(context, might);
+        if (bloc != null) {
+            balanceOfPower(context, bloc, byId, relationsByPlayer, technologies, places, might);
+        }
 
         for (PlayerEntity ai : context.players()) {
             if (ai.getPlayerType() != PlayerType.AI || ai.getAiPersonality() == null) {
@@ -232,7 +280,13 @@ public class AiDiplomacyService {
                     technologies.getOrDefault(other.getId(), Set.of()));
 
             DiplomacyAction action = decide(ai, other, mine, noTalks, theirsRepulsive, might,
-                    random, context.turn(), trade);
+                    random, context.turn(), trade, bloc);
+            // Тихая галактика (пункт 186): первым войну не начинают и договоров не рвут; войну,
+            // объявленную ему, ИИ ведёт как обычно — защищается и отвечает.
+            if (Boolean.TRUE.equals(context.game().getPeacefulAi())
+                    && (action == DiplomacyAction.DECLARE_WAR || action == DiplomacyAction.BREAK_TREATY)) {
+                action = null;
+            }
             if (action != null) {
                 perform(context, ai, other, mine, action, trade);
             }
@@ -250,18 +304,45 @@ public class AiDiplomacyService {
                                    DiplomacyRelationEntity mine, Boolean noTalks,
                                    Boolean theirsRepulsive,
                                    Map<UUID, Integer> might, Random random, Integer turn,
-                                   Exchange trade) {
+                                   Exchange trade, Bloc bloc) {
         AiPersonality character = ai.getAiPersonality();
         Integer trust = mine.getTrust();
+        // Лидер блока (пункт 151): с ним не договариваются, не меняются и дани не требуют.
+        Boolean againstLeader = bloc != null && bloc.leader().equals(other.getId());
+        Boolean core = bloc != null && bloc.core().contains(ai.getId());
+
+        /*
+          УМИРАЮЩЕГО ДОБИВАЮТ (09.10.2026, разбор мёртвого покорения): в замере сильнейший оказался
+          миролюбцем и мирился сразу после объявления войны, соседей лидера правило блока
+          (пункт 151) держало от войн, и со слабыми воевали только такие же слабые — колонии
+          ходили из рук в руки, а империя не гибла ни одна. Сосед, чья мощь вчетверо меньше,
+          в агонии: с ним мира не просят, а войну ему объявляет и сосед лидера — спасать того,
+          кто уже не встанет, коалиции не из чего. Миролюбец и благородный к другу — по нраву.
+        */
+        Boolean agony = !stronger(might, other, ai, 100) && stronger(might, ai, other, 10_000 / AGONY_PERCENT);
+        if (mine.getStance() == DiplomacyStance.WAR && Boolean.TRUE.equals(agony)) {
+            return null;
+        }
+        if (Boolean.TRUE.equals(agony) && !Boolean.TRUE.equals(character.seeksPeace())
+                && readyToFinish(ai, other, mine, character, theirsRepulsive, turn)) {
+            DiplomacyTreaty binding = mine.getTreaties().stream()
+                    .filter(treaty -> Boolean.TRUE.equals(treaty.forbidsWar()))
+                    .findFirst()
+                    .orElse(null);
+            return binding == null ? DiplomacyAction.DECLARE_WAR : DiplomacyAction.BREAK_TREATY;
+        }
 
         if (mine.getStance() == DiplomacyStance.WAR) {
             // Мира просят миролюбивые и проигрывающие: незачем длить войну, которую не тянешь.
+            // А сосед лидера — со всеми, кроме лидера (пункт 151): чтобы стоять против него.
             return Boolean.TRUE.equals(character.seeksPeace()) || losing(might, ai, other)
+                    || (core && !againstLeader)
                     ? DiplomacyAction.PROPOSE_PEACE
                     : null;
         }
 
-        if (readyForWar(ai, other, mine, character, theirsRepulsive, might, random, turn)) {
+        // Сосед лидера войн по своему нраву не начинает: его войну с лидером ведёт блок (пункт 151).
+        if (!core && readyForWar(ai, other, mine, character, theirsRepulsive, might, random, turn)) {
             // Пакт о ненападении и союз войну запрещают — их сперва РВУТ. До этой ветки ИИ
             // не рвал договоров вовсе: подписав однажды, он держал мир до конца партии, и
             // галактика запиралась наглухо — та же поломка вечного мира, только приходила
@@ -299,7 +380,8 @@ public class AiDiplomacyService {
         // сторона, запрещающая переговоры, не отнимала ничего, потому что переговоров и так
         // не было. Теперь отметка дружбы стоит там, где ей место, — на договорах, которые
         // запрещают войну.
-        if (bestTreaty(mine) != null) {
+        // С лидером договоров не заводят: договор запрещает войну, а союз стоит против него.
+        if (!againstLeader && bestTreaty(mine) != null) {
             return DiplomacyAction.PROPOSE_TREATY;
         }
         // ОБМЕН ТЕХНОЛОГИЯМИ — п. 15. Стоит он здесь, между договором и данью, потому что
@@ -314,6 +396,9 @@ public class AiDiplomacyService {
         // Завод и лаборатория лежат на уровнях из трёх вариантов: обычная раса берёт
         // рекомендованное всегда, неизобретательная — одно из трёх, а уровень не
         // переучивается никогда.
+        if (againstLeader) {
+            return null;
+        }
         if (trade != null) {
             return DiplomacyAction.EXCHANGE_TECH;
         }
@@ -370,6 +455,198 @@ public class AiDiplomacyService {
             advantage = Math.max(RUTHLESS_WAR_ADVANTAGE, advantage - REPULSIVE_WAR_DISCOUNT);
         }
         return stronger(might, ai, other, advantage);
+    }
+
+    /** Готов ли ИИ добить соседа в агонии: знакомство не вчерашнее, а благородный щадит друга. */
+    private Boolean readyToFinish(PlayerEntity ai, PlayerEntity other, DiplomacyRelationEntity mine,
+                                  AiPersonality character, Boolean theirsRepulsive, Integer turn) {
+        if (turn - mine.getMetTurn() < ACQUAINTANCE_BEFORE_WAR) {
+            return Boolean.FALSE;
+        }
+        return !(Boolean.TRUE.equals(character.sparesFriends()) && mine.getTrust() >= FRIENDLY_TRUST
+                && !Boolean.TRUE.equals(theirsRepulsive));
+    }
+
+    /**
+     * Лидер и его блок — пункт 151: империя, которая сильнее двух ближайших к ней империй
+     * вместе; ближайшие двое — ядро союза, следующие двое — помощники. Подходят несколько —
+     * берётся сильнейшая. Близость — между родными звёздами, равные расстояния решает место.
+     */
+    private Bloc bloc(TurnContext context, Map<UUID, Integer> might) {
+        Map<UUID, StarSystemEntity> systems = context.systems().stream()
+                .collect(Collectors.toMap(StarSystemEntity::getId, Function.identity()));
+        List<PlayerEntity> alive = context.players().stream()
+                .filter(player -> might.getOrDefault(player.getId(), 0) > 0)
+                .filter(player -> player.getHomeSystemId() != null && systems.containsKey(player.getHomeSystemId()))
+                .sorted(Comparator.comparing(PlayerEntity::getSlot))
+                .toList();
+        Bloc best = null;
+        Integer bestMight = 0;
+        for (PlayerEntity candidate : alive) {
+            StarSystemEntity home = systems.get(candidate.getHomeSystemId());
+            List<PlayerEntity> nearest = alive.stream()
+                    .filter(other -> !other.getId().equals(candidate.getId()))
+                    .sorted(Comparator.comparingDouble((PlayerEntity other) -> distance(home,
+                                    systems.get(other.getHomeSystemId())))
+                            .thenComparing(PlayerEntity::getSlot))
+                    .toList();
+            if (nearest.size() < 2) {
+                continue;
+            }
+            Integer theirs = might.getOrDefault(candidate.getId(), 0);
+            Integer pair = might.getOrDefault(nearest.get(0).getId(), 0)
+                    + might.getOrDefault(nearest.get(1).getId(), 0);
+            if (theirs > pair && theirs > bestMight) {
+                bestMight = theirs;
+                best = new Bloc(candidate.getId(),
+                        nearest.subList(0, 2).stream().map(PlayerEntity::getId).toList(),
+                        nearest.subList(2, Math.min(4, nearest.size())).stream().map(PlayerEntity::getId).toList());
+            }
+        }
+        return best;
+    }
+
+    private static double distance(StarSystemEntity a, StarSystemEntity b) {
+        return Math.hypot(a.getXParsec() - b.getXParsec(), a.getYParsec() - b.getYParsec());
+    }
+
+    /**
+     * Что делает блок против лидера за ход — пункт 151. Действуют только империи ИИ; человек в
+     * ядре или среди помощников получает предложения и помощь, а решает сам.
+     */
+    private void balanceOfPower(TurnContext context, Bloc bloc, Map<UUID, PlayerEntity> byId,
+                                Map<UUID, List<DiplomacyRelationEntity>> relationsByPlayer,
+                                Map<UUID, Set<String>> technologies,
+                                Map<String, ResearchCatalog.TechnologyPlace> places,
+                                Map<UUID, Integer> might) {
+        PlayerEntity leader = byId.get(bloc.leader());
+        for (PlayerEntity ai : context.players().stream().sorted(Comparator.comparing(PlayerEntity::getSlot)).toList()) {
+            if (ai.getPlayerType() != PlayerType.AI || ai.getAiPersonality() == null
+                    || ai.getId().equals(bloc.leader())) {
+                continue;
+            }
+            // Коалиция против лидера — самое «умное» в дипломатии ИИ, и на лёгких уровнях её нет
+            // (field-backlog, пункт 9): соседи не сговариваются, каждый играет сам за себя.
+            if (!Boolean.TRUE.equals(com.sddnw.server.domain.enums.AiSkill.of(ai.getAiSkill()).getCoalitions())) {
+                continue;
+            }
+            List<DiplomacyRelationEntity> relations = relationsByPlayer.getOrDefault(ai.getId(), List.of());
+            DiplomacyRelationEntity towardLeader = relationTo(relations, bloc.leader());
+            if (bloc.core().contains(ai.getId())) {
+                coreTurn(context, ai, bloc, byId, relations, towardLeader, leader, might);
+            } else if (bloc.backers().contains(ai.getId())) {
+                backerTurn(context, ai, bloc, byId, relations, technologies, places);
+            }
+            // Осторожная враждебность к лидеру — у всех, кроме самого лидера.
+            if (towardLeader != null && towardLeader.getTrust() > CAUTIOUS_TRUST) {
+                towardLeader.setTrust(CAUTIOUS_TRUST);
+            }
+        }
+    }
+
+    /**
+     * Ход соседа лидера: сблизиться с напарником (общий враг поднимает доверие), помириться с
+     * ним, заключить союз — и, когда перевес двоих достаточен, объявить лидеру войну. Перевес
+     * нужен вдвое меньший, чем характеру в одиночку (реконструкция): лидер воюет на два фронта.
+     * За ход — одно действие, по порядку важности.
+     */
+    private void coreTurn(TurnContext context, PlayerEntity ai, Bloc bloc, Map<UUID, PlayerEntity> byId,
+                          List<DiplomacyRelationEntity> relations, DiplomacyRelationEntity towardLeader,
+                          PlayerEntity leader, Map<UUID, Integer> might) {
+        UUID partnerId = bloc.core().stream().filter(id -> !id.equals(ai.getId())).findFirst().orElse(null);
+        DiplomacyRelationEntity towardPartner = partnerId == null ? null : relationTo(relations, partnerId);
+        PlayerEntity partner = partnerId == null ? null : byId.get(partnerId);
+        if (towardPartner != null && towardPartner.getTrust() < COMMON_ENEMY_TRUST_CAP) {
+            towardPartner.setTrust(Math.min(COMMON_ENEMY_TRUST_CAP, towardPartner.getTrust() + COMMON_ENEMY_TRUST));
+        }
+        if (towardPartner != null && partner != null) {
+            if (towardPartner.getStance() == DiplomacyStance.WAR) {
+                act(context, ai, partner, DiplomacyAction.PROPOSE_PEACE, null, null, null);
+                return;
+            }
+            if (!towardPartner.getTreaties().contains(DiplomacyTreaty.ALLIANCE)
+                    && towardPartner.getTrust() >= DiplomacyTreaty.ALLIANCE.getRequiredTrust()) {
+                act(context, ai, partner, DiplomacyAction.PROPOSE_TREATY, DiplomacyTreaty.ALLIANCE, null, null);
+                return;
+            }
+        }
+        if (towardLeader == null || leader == null || towardLeader.getStance() == DiplomacyStance.WAR
+                || context.turn() - towardLeader.getMetTurn() < ACQUAINTANCE_BEFORE_WAR
+                // Тихая галактика (пункт 186): блок против лидера сближается, но войну не начинает.
+                || Boolean.TRUE.equals(context.game().getPeacefulAi())) {
+            return;
+        }
+        Integer coalition = bloc.core().stream().mapToInt(id -> might.getOrDefault(id, 0)).sum();
+        Integer theirs = might.getOrDefault(leader.getId(), 0);
+        if (coalition * 100 < theirs * ai.getAiPersonality().getWarAdvantagePercent() / 2) {
+            return;
+        }
+        DiplomacyTreaty binding = binding(towardLeader);
+        if (binding != null) {
+            act(context, ai, leader, DiplomacyAction.BREAK_TREATY, binding, null, null);
+            return;
+        }
+        act(context, ai, leader, DiplomacyAction.DECLARE_WAR, null, null, null);
+    }
+
+    /**
+     * Ход помощника союза: через ход — деньгами, через ход — технологией для войны (лучи, ракеты и
+     * броня, щиты), самой дорогой из тех, что у помощника есть, а у получателя нет. Получатель —
+     * слабейший из ядра, с кем помощник знаком.
+     */
+    private void backerTurn(TurnContext context, PlayerEntity ai, Bloc bloc, Map<UUID, PlayerEntity> byId,
+                            List<DiplomacyRelationEntity> relations, Map<UUID, Set<String>> technologies,
+                            Map<String, ResearchCatalog.TechnologyPlace> places) {
+        Random random = new Random(context.game().getSeed() * 43L + context.turn() * 47L + ai.getSlot());
+        if (random.nextInt(100) >= BACKER_CHANCE_PERCENT) {
+            return;
+        }
+        PlayerEntity recipient = bloc.core().stream()
+                .filter(id -> relationTo(relations, id) != null)
+                .map(byId::get)
+                .filter(java.util.Objects::nonNull)
+                .min(Comparator.comparing(PlayerEntity::getCredits).thenComparing(PlayerEntity::getSlot))
+                .orElse(null);
+        if (recipient == null) {
+            return;
+        }
+        if (context.turn() % 2 == 0 && ai.getCredits() > 0) {
+            act(context, ai, recipient, DiplomacyAction.GIFT_CREDITS, null, null, giftSize(ai));
+            return;
+        }
+        Set<String> theirs = technologies.getOrDefault(recipient.getId(), Set.of());
+        String gift = technologies.getOrDefault(ai.getId(), Set.of()).stream()
+                .filter(code -> !theirs.contains(code))
+                .map(places::get)
+                .filter(java.util.Objects::nonNull)
+                .filter(place -> WAR_SECTIONS.contains(place.categoryCode()))
+                .max(Comparator.comparing(ResearchCatalog.TechnologyPlace::levelCost)
+                        .thenComparing(place -> place.option().code()))
+                .map(place -> place.option().code())
+                .orElse(null);
+        if (gift != null) {
+            act(context, ai, recipient, DiplomacyAction.GIFT_TECH, null, gift, null);
+        } else if (ai.getCredits() > 0) {
+            act(context, ai, recipient, DiplomacyAction.GIFT_CREDITS, null, null, giftSize(ai));
+        }
+    }
+
+    private static DiplomacyRelationEntity relationTo(List<DiplomacyRelationEntity> relations, UUID other) {
+        return relations.stream().filter(one -> one.getOtherPlayerId().equals(other)).findFirst().orElse(null);
+    }
+
+    /** Действие блока — тем же путём, что у игрока; отказ — обычный ответ, а не поломка хода. */
+    private void act(TurnContext context, PlayerEntity ai, PlayerEntity other, DiplomacyAction action,
+                     DiplomacyTreaty treaty, String offeredTech, Integer credits) {
+        DiplomacyActionRequest request = new DiplomacyActionRequest(ai.getAccessToken(), other.getId(), action,
+                treaty, offeredTech, null, credits);
+        try {
+            diplomacyService.act(ai, request, context.turn());
+            log.debug("Блок против лидера: ИИ {} → {}: {}", ai.getName(), other.getName(), action);
+        } catch (ConflictException conflict) {
+            log.debug("Блок против лидера: ИИ {} не смог {} с {}: {}", ai.getName(), action, other.getName(),
+                    conflict.getMessage());
+        }
     }
 
     /**

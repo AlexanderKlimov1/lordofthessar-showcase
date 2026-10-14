@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Когда человек последний раз ДЕЙСТВОВАЛ в партии — field-backlog, пункт 108: вернувшемуся
+        после перерыва показывают сводку «пока вас не было». Присутствие (PresenceService) живёт
+        в памяти и переживает не всякий перезапуск, поэтому время хранится здесь — но пишется
+        не каждым запросом (строка игрока держит версию), а концом хода и входом в партию.
+        Пусто — с миграции игрок ещё не заканчивал хода.
+    -->
+    <changeSet id="104-player-last-action" author="sddnw">
+        <addColumn tableName="player">
+            <column name="last_action_at" type="timestamp with time zone"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -7,6 +7,7 @@ import { useModalEscape } from '../useModalEscape';
 import { locale, t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Запросы на регистрацию — п. 3.1: страница администратора.
@@ -24,7 +25,15 @@ import { figureLabelClass } from '../accent';
  * записи сервера: администратору нужно видеть и то, что уже открыто, иначе «этой почты
  * здесь нет» и «эта почта уже вошла» неразличимы.
  */
-export function RegistrationRequestsScreen({ onClose }: { onClose: () => void }) {
+export function RegistrationRequestsScreen({ onClose, mode = 'requests' }: {
+  onClose: () => void;
+  /**
+   * Модерация (07.10.2026, решение хозяина проекта): «Учётные записи» — поиск по всем
+   * записям сервера, «Заявки» — только регистрации, ждущие ручного подтверждения.
+   */
+  mode?: 'search' | 'requests';
+}) {
+  const [query, setQuery] = useState('');
   const [accounts, setAccounts] = useState<AccountSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +115,28 @@ export function RegistrationRequestsScreen({ onClose }: { onClose: () => void })
       });
   };
 
+  /** Модератор — да или нет (08.10.2026): переключается одним нажатием, как и снимается. */
+  const changeRole = (account: AccountSummary) => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    gameApi
+      .changeAccountRole(account.id, account.role === 'MODERATOR' ? 'PLAYER' : 'MODERATOR')
+      .then((updated) => {
+        setAccounts((current) => (current ?? []).map((entry) => (entry.id === updated.id ? updated : entry)));
+        setNotice(t('accounts.role.changed', { name: updated.name, role: updated.roleLabel }));
+      })
+      .catch((failure: unknown) =>
+        setError(failure instanceof GameApiError ? failure.message : t('accounts.role.failed')),
+      )
+      .finally(() => setBusy(false));
+  };
+
   const waiting = (accounts ?? []).filter((account) => !account.confirmed);
+  const needle = query.trim().toLowerCase();
+  const found = (accounts ?? []).filter((account) => needle === ''
+    || [account.name, account.login, account.email ?? '', account.roleLabel]
+      .some((value) => value.toLowerCase().includes(needle)));
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-space-900 text-xs">
@@ -118,20 +148,31 @@ export function RegistrationRequestsScreen({ onClose }: { onClose: () => void })
           {t('requests.admin')}
         </span>
         <span className="border border-space-600 bg-space-950 px-6 py-0.5 uppercase tracking-[0.3em] text-accent">
-          {t('requests.title')}
+          {t(mode === 'search' ? 'accounts.search.title' : 'requests.title')}
         </span>
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
-        <p className="mb-3 max-w-4xl leading-relaxed text-ink-dim">
-          {t('requests.intro')}
-        </p>
+        {mode === 'requests' ? (
+          <p className="mb-3 max-w-4xl leading-relaxed text-ink-dim">
+            {t('requests.intro')}
+          </p>
+        ) : (
+          <input
+            type="search"
+            autoFocus
+            className="field mb-3 w-full max-w-md"
+            placeholder={t('accounts.search.placeholder')}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        )}
 
         {accounts === null ? <p className="text-ink-dim">{t('requests.loading')}</p> : null}
-        {error ? <p className="mb-2 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mb-2" message={error} /> : null}
         {notice ? <p className="mb-2 text-accent">{notice}</p> : null}
 
-        {accounts !== null ? (
+        {accounts !== null && mode === 'requests' ? (
           <section className="mb-6">
             <div className={`panel-title mb-2 ${figureLabelClass('note')}`}>
               {t('requests.waiting')}
@@ -195,10 +236,13 @@ export function RegistrationRequestsScreen({ onClose }: { onClose: () => void })
           </section>
         ) : null}
 
-        {accounts !== null && accounts.length > 0 ? (
+        {accounts !== null && mode === 'search' && found.length === 0 ? (
+          <p className="text-ink-faint">{t('accounts.search.none')}</p>
+        ) : null}
+        {accounts !== null && mode === 'search' && found.length > 0 ? (
           <section>
             <div className="panel-title mb-2">
-              {t('requests.all')}<span className="ml-2 text-ink-faint">{accounts.length}</span>
+              {t('requests.all')}<span className="ml-2 text-ink-faint">{found.length}</span>
             </div>
             <table className="w-full max-w-4xl">
               <thead>
@@ -212,11 +256,24 @@ export function RegistrationRequestsScreen({ onClose }: { onClose: () => void })
                 </tr>
               </thead>
               <tbody>
-                {accounts.map((account) => (
+                {found.map((account) => (
                   <tr key={account.id} className="border-t border-space-700 text-ink">
                     <td className="py-1">{account.name}</td>
                     <td className="py-1 text-ink-dim">{account.email ?? account.login}</td>
-                    <td className="py-1 text-ink-dim">{account.roleLabel}</td>
+                    <td className="py-1 text-ink-dim">
+                      {account.roleLabel}
+                      {/* Модератор (08.10.2026): назначает и снимает администратор, только у игроков. */}
+                      {account.role === 'PLAYER' || account.role === 'MODERATOR' ? (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="link ml-2 disabled:opacity-40"
+                          onClick={() => changeRole(account)}
+                        >
+                          {t(account.role === 'MODERATOR' ? 'accounts.role.unmake' : 'accounts.role.make')}
+                        </button>
+                      ) : null}
+                    </td>
                     <td className="py-1 text-ink-dim">{applied(account.createdAt)}</td>
                     <td className={`py-1 ${account.confirmed ? 'text-ink-dim' : 'text-warn'}`}>
                       {account.confirmed ? t('requests.yes') : t('requests.pending')}

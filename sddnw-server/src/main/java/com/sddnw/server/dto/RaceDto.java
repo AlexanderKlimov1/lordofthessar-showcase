@@ -15,6 +15,8 @@ public record RaceDto(
         String description,
         String homeClimateCode,
         String color,
-        List<String> traits
+        List<String> traits,
+        /** Предыстория расы — откуда она и чего хочет (пункт 43); у своей расы игрока пусто. */
+        String lore
 ) {
 }

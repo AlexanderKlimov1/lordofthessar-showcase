@@ -68,6 +68,19 @@ export function HistoryChart({
     ? 1 + drawn.filter((empire) => !empire.own && lastValue(empire) > lastValue(own)).length
     : null;
 
+  /*
+    Место — с расстоянием до соседей (field-backlog, пункт 114): «2 / 5» не говорит, догнать ли
+    первого за десять ходов или он впереди вдвое. Подписью ступени note, а не вторым главным
+    числом: до первого (если игрок не первый) и насколько отстаёт следующий за ним. Только среди
+    знакомых — тех же, что на графике.
+  */
+  const mine = own ? lastValue(own) : 0;
+  const others = drawn.filter((empire) => !empire.own).map(lastValue);
+  const first = Math.max(0, ...others);
+  const below = others.filter((value) => value <= mine).sort((p, q) => q - p)[0];
+  const toFirst = own && first > mine && first > 0 ? Math.round((100 * (first - mine)) / first) : null;
+  const behind = own && below !== undefined && mine > 0 ? Math.round((100 * (mine - below)) / mine) : null;
+
   return (
     <div className="border border-space-700 bg-space-950/60 p-2">
       {place !== null ? (
@@ -76,6 +89,14 @@ export function HistoryChart({
           value={`${place} / ${drawn.length}`}
           className="ml-2 !items-start"
         />
+      ) : null}
+      {place !== null && (toFirst !== null || behind !== null) ? (
+        <p className={'ml-2 ' + figureLabelClass('note')}>
+          {[
+            toFirst !== null ? t('info.distance.toFirst', { n: toFirst }) : null,
+            behind !== null ? t('info.distance.behind', { n: behind }) : null,
+          ].filter(Boolean).join(' · ')}
+        </p>
       ) : null}
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img"
            aria-label={t('history.aria', { metric: t(metric.label) })}>

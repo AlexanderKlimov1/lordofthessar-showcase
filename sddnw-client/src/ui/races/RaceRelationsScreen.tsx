@@ -1,6 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useColonistPick } from '../system/useColonistPick';
+import { AgentLane, HeldAgents } from './AgentLane';
+import { SignalsPanel } from '../signals/SignalsPanel';
 
 import { gameApi } from '../../api/client';
+import { warRefusal } from '../diplomacy/diplomacyRules';
 import type { DiplomacyRelation, Spy, SpyMissionCode, TechTrade } from '../../api/types';
 import { useGameStore } from '../../state/gameStore';
 import { useModalEscape } from '../useModalEscape';
@@ -8,6 +12,7 @@ import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
 import { RacePortrait } from '../race/RacePortrait';
 import { t, tf, useT, type Key } from '../../i18n';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Полоса заданий разведки под каждой империей — три кнопки оригинала.
@@ -88,7 +93,6 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
     agents.filter((spy) => spy.targetPlayerId === playerId);
 
   const idle = agents.filter((spy) => spy.mission === 'HOME');
-  const defenders = agents.filter((spy) => spy.mission === 'COUNTER');
 
   const assign = (spy: Spy, mission: SpyMissionCode, targetPlayerId?: string) => {
     if (!game || !credentials) {
@@ -119,6 +123,72 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
       .catch((failure: Error) => setError(failure.message))
       .finally(() => setBusy(false));
   };
+
+  /*
+    Полосы агентов — п. 13 (09.10.2026, решение хозяина проекта), узором жителей колонии
+    (`useColonistPick`): «дома», «на защите» и полоса каждой знакомой империи. Группа уходит
+    запросами ПО ОДНОМУ и подряд: каждый ответ правит агента в хранилище, и запросы вперегонки
+    затирали бы друг друга прежним списком.
+  */
+  const laneOf = (spy: Spy): string =>
+    spy.mission === 'HOME' || spy.mission === 'COUNTER' ? spy.mission : `empire:${spy.targetPlayerId}`;
+  const laneAgents = (lane: string): Spy[] => agents.filter((spy) => laneOf(spy) === lane);
+  const laneRects = useRef<Record<string, HTMLElement | null>>({});
+  const registerLane = (lane: string) => (element: HTMLElement | null) => {
+    laneRects.current[lane] = element;
+  };
+  const laneAt = (x: number, y: number): string | null =>
+    Object.entries(laneRects.current).find(([, element]) => {
+      const rect = element?.getBoundingClientRect();
+      return !!rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    })?.[0] ?? null;
+  const tipOf = (spy: Spy): string =>
+    spy.mission === 'HOME' || spy.mission === 'COUNTER'
+      ? t(`races.agent.${spy.mission}` as Key)
+      : t('races.agent.abroad.tip', { mission: spy.missionLabel, target: spy.targetName ?? '?',
+          points: spy.points, cost: spy.missionCost });
+
+  const assignMany = async (spies: Spy[], mission: SpyMissionCode, targetPlayerId?: string) => {
+    if (!game || !credentials) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      for (const spy of spies) {
+        const updated = await gameApi.assignSpy(game.id, credentials.accessToken, spy.id, mission, targetPlayerId);
+        const state = useGameStore.getState();
+        if (state.espionage) {
+          setEmpire({
+            ...state.espionage,
+            agents: state.espionage.agents.map((agent) => (agent.id === updated.id ? updated : agent)),
+          }, state.fleet);
+        }
+      }
+      setNotice(null);
+    } catch (failure) {
+      setError((failure as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const { held, pick } = useColonistPick<string, string>(laneAt, (target, group) => {
+    if (target === group.from) {
+      return;
+    }
+    const moving = laneAgents(group.from).slice(-group.count);
+    if (target === 'HOME' || target === 'COUNTER') {
+      void assignMany(moving, target);
+      return;
+    }
+    // К соседу агент встаёт на то задание, что у агентов там уже есть, иначе — на кражу:
+    // сменить задание можно кнопками полосы заданий этой империи.
+    const playerId = target.slice('empire:'.length);
+    const there = agentsOf(playerId)[0];
+    void assignMany(moving, there?.mission ?? 'STEAL_TECH', playerId);
+  });
+  const hoverLane = held ? laneAt(held.x, held.y) : null;
 
   /** Полоса заданий: приказ всем агентам этой империи, а если их нет — свободному. */
   const order = (relation: DiplomacyRelation, mission: SpyMissionCode) => {
@@ -163,9 +233,11 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
    * Доклад агентов — кнопка Report оригинала.
    *
    * В MOO II доклад приносит описание характера соперника, его союзы и войны, список его
-   * технологических достижений и чужих шпионов у нас. Здесь — то из этого, что игра
-   * знает: характер правителя, наши отношения с ним и его технологии, которых нет у нас.
-   * Чужих союзов и войн между третьими империями игра пока не показывает никому.
+   * технологических достижений и чужих шпионов у нас. Здесь — характер правителя, наши
+   * отношения с ним и его технологии, но ТОЛЬКО УВИДЕННЫЕ (п. 15, туман войны, решение
+   * хозяина проекта): стоявшие на его кораблях и в его колонии в бою или под сканерами
+   * флота. Изученного соседом игрок не знает. Чужих союзов и войн между третьими империями
+   * игра пока не показывает никому.
    */
   const requestReport = () => {
     if (!game || !credentials || !chosen) {
@@ -215,12 +287,24 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
                 <EmpireRow
                   key={relation.playerId}
                   relation={relation}
-                  spies={agentsOf(relation.playerId)}
                   selected={relation.playerId === selected}
                   busy={busy}
                   onSelect={() => setSelected(relation.playerId)}
                   onOrder={(mission) => order(relation, mission)}
                   report={report?.playerId === relation.playerId ? report.techs : null}
+                  lane={
+                    <AgentLane lane={`empire:${relation.playerId}`} label={t('races.lane.empire')}
+                               spies={agentsOf(relation.playerId)} held={held}
+                               hover={hoverLane === `empire:${relation.playerId}` && held?.from !== `empire:${relation.playerId}`}
+                               colorClass="text-accent" busy={busy}
+                               register={registerLane(`empire:${relation.playerId}`)} pick={pick} tipOf={tipOf}>
+                      {agentsOf(relation.playerId).length > 0 ? (
+                        <span className={'flex-none ' + figureLabelClass('note')}>
+                          {agentsOf(relation.playerId)[0].missionLabel}
+                        </span>
+                      ) : null}
+                    </AgentLane>
+                  }
                 />
               ))}
               {/*
@@ -244,48 +328,38 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
 
         {/* Восьмая клетка оригинала: надбавки, контрразведка, кнопки, возврат. */}
         <aside className="flex min-h-0 flex-col border border-space-700 bg-space-900/60">
+          {/* Короткие знаки людям партии — пункт 183; без других людей за столом панели нет. */}
+          <SignalsPanel />
           <section className="flex-none border-b border-space-700 px-3 py-2">
             <div className="panel-title mb-1">{t('races.espionage')}</div>
             <Fact label={t('races.points')} value={espionage?.points ?? 0} />
             <Fact label={t('races.perTurn')} value={espionage?.pointsPerTurn ?? 0} />
             <Fact label={t('races.fromRace')} value={espionage?.racePoints ?? 0} />
             <Fact label={t('races.counter')} value={espionage?.counterStrength ?? 0} />
-            <Fact label={t('races.agentsHome')} value={idle.length} />
           </section>
 
           <section className="min-h-0 flex-1 overflow-y-auto border-b border-space-700 px-3 py-2">
-            <div className="panel-title mb-1">{t('races.defence')}</div>
-            {defenders.length === 0 ? (
-              <p className="text-11 leading-relaxed text-ink-faint">
-                {t('races.noDefenders')}
-              </p>
+            {/*
+              Агенты — полосами, как жители колонии (09.10.2026, решение хозяина проекта): дома агент
+              копит очки разведки, на защите ловит чужих шпионов, а к соседу его переносят в полосу
+              этой империи слева. Щелчок берёт агента и всех правее, второй — кладёт группу.
+            */}
+            <div className="panel-title mb-1">{t('races.agents')}</div>
+            {agents.length === 0 ? (
+              <p className="text-11 leading-relaxed text-ink-faint">{t('races.noAgents')}</p>
             ) : (
-              <ul className="space-y-1 text-11">
-                {defenders.map((spy) => (
-                  <li key={spy.id} className="flex items-center justify-between gap-2">
-                    <span className="text-ink">{t('races.agentSince', { n: spy.createdTurn })}</span>
-                    <button
-                      type="button"
-                      className="link text-11"
-                      disabled={busy}
-                      onClick={() => assign(spy, 'HOME')}
-                    >
-                      {t('races.home')}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <div className="space-y-1.5">
+                <AgentLane lane="HOME" label={t('races.lane.HOME')} spies={laneAgents('HOME')} held={held}
+                           hover={hoverLane === 'HOME' && held?.from !== 'HOME'} colorClass="text-ink-soft"
+                           busy={busy} register={registerLane('HOME')} pick={pick} tipOf={tipOf} />
+                <AgentLane lane="COUNTER" label={t('races.lane.COUNTER')} spies={laneAgents('COUNTER')} held={held}
+                           hover={hoverLane === 'COUNTER' && held?.from !== 'COUNTER'} colorClass="text-good"
+                           busy={busy} register={registerLane('COUNTER')} pick={pick} tipOf={tipOf} />
+                <p className="text-11 leading-relaxed text-ink-faint">
+                  {t((relations?.length ?? 0) > 0 ? 'races.agent.sendHint' : 'races.agent.noTarget')}
+                </p>
+              </div>
             )}
-            {idle.length > 0 ? (
-              <button
-                type="button"
-                className="link mt-2 text-11"
-                disabled={busy}
-                onClick={() => assign(idle[0], 'COUNTER')}
-              >
-                {t('races.putOnDefence')}
-              </button>
-            ) : null}
           </section>
 
           <section className="flex-none space-y-1 px-3 py-2">
@@ -298,7 +372,10 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
             <Action disabled={busy || !chosen} onClick={requestReport}>
               {t('races.report')}
             </Action>
-            <Action disabled={busy || !chosen} onClick={declareWar}>
+            {/* Уже война или связывает пакт — кнопка гаснет с причиной (пункт 76). */}
+            <Action disabled={busy || !chosen || warRefusal(chosen) !== null}
+                    title={warRefusal(chosen) ? t(warRefusal(chosen)!, { name: chosen?.playerName ?? '' }) : undefined}
+                    onClick={declareWar}>
               {t('races.declareWar')}
             </Action>
             {/*
@@ -320,7 +397,7 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
 
           <p className="flex-none px-3 pb-2 text-11 leading-tight">
             {error ? (
-              <span className="text-danger">{error}</span>
+              <ActionError as="span" message={error} />
             ) : notice ? (
               <span className="text-accent">{notice}</span>
             ) : (
@@ -333,6 +410,7 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
           </p>
         </aside>
       </div>
+      {held ? <HeldAgents held={held} /> : null}
     </div>
   );
 }
@@ -340,15 +418,16 @@ export function RaceRelationsScreen({ onClose }: { onClose: () => void }) {
 /** Область сведений об одной империи: посол, сводка, её шпионы и полоса заданий. */
 function EmpireRow({
   relation,
-  spies,
   selected,
   busy,
   onSelect,
   onOrder,
   report,
+  lane,
 }: {
   relation: DiplomacyRelation;
-  spies: Spy[];
+  /** Полоса агентов у этой империи (`AgentLane`) — её рисует экран: он знает, куда легла группа. */
+  lane: ReactNode;
   selected: boolean;
   busy: boolean;
   onSelect: () => void;
@@ -406,30 +485,18 @@ function EmpireRow({
           {report ? (
             <p className={'mt-1 ' + figureLabelClass('note')}>
               {t('races.reportPrefix')}{' '}
-              {report.wanted.length === 0
+              {report.observed.length === 0
                 ? t('races.reportNothing')
-                : tf('races.reportList', { n: <Figure accent="note">{report.wanted.length}</Figure>, list: report.wanted
-                    .slice(0, 6)
+                : tf('races.reportList', { n: <Figure accent="note">{report.observed.length}</Figure>, list: report.observed
                     .map((technology) => technology.name)
-                    .join(', ') + (report.wanted.length > 6 ? '…' : '') })}
+                    .join(', ') })}
             </p>
           ) : null}
         </div>
       </div>
 
-      {/* Шпионы этой империи — под областью сведений, как в оригинале. */}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <span className={figureLabelClass('note')}>{t('races.spies')}</span>
-        {spies.length === 0 ? (
-          <span className={figureLabelClass('note')}>{t('common.none')}</span>
-        ) : (
-          spies.map((spy) => (
-            <span key={spy.id} className={'border border-space-700 px-2 py-0.5 ' + figureLabelClass('note')}>
-              ◆ {spy.missionLabel} · <Figure accent="note">{spy.points}/{spy.missionCost}</Figure>
-            </span>
-          ))
-        )}
-      </div>
+      {/* Шпионы этой империи — полосой под областью сведений, как в оригинале: сюда их и кладут. */}
+      <div className="mt-2" onPointerDown={(event) => event.stopPropagation()}>{lane}</div>
 
       {/* Полоса заданий разведки — три кнопки оригинала. */}
       <div className="mt-1 flex flex-wrap gap-2">

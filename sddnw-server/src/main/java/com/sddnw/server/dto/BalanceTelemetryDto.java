@@ -90,7 +90,27 @@ public record BalanceTelemetryDto(
             Integer nearbyPlanets,
             Double nearestRival,
             Map<String, Integer> used,
-            List<TurnRowDto> history) {
+            List<TurnRowDto> history,
+            /**
+             * Изученное с ходом изучения — field-backlog, пункт 92: из первых тридцати ходов
+             * этого списка (вместе с постройками {@code built} и числом колоний летописи)
+             * разбор собирает ДЕБЮТ империи. Ход изучения хранит сама строка изученного, как
+             * и постройка, поэтому партию снова не приходится опрашивать по ходам.
+             */
+            List<ResearchedDto> researched,
+            /**
+             * Ход первой встречи с каждой механикой — field-backlog, пункт 93: ключи те же, что у
+             * {@code used}. По ним видно, где в партии тянутся отрезки без нового.
+             */
+            Map<String, Integer> firstTurn,
+            String aiSkill) {
+    }
+
+    /**
+     * Изученный уровень: когда и что. {@code option} — выбранная технология уровня; у уровня,
+     * выданного целиком (общий уровень, изобретательная раса), строк столько, сколько технологий.
+     */
+    public record ResearchedDto(Integer turn, String category, Integer level, String option) {
     }
 
     /**

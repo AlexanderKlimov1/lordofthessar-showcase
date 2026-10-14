@@ -16,6 +16,25 @@ public record GalaxyMapDto(
         Integer widthParsecs,
         Integer heightParsecs,
         Double minStarDistanceParsecs,
-        List<StarSystemDto> systems
+        List<StarSystemDto> systems,
+        /** Чужие флоты, которые игрок видит (п. 15, туман войны): под глазами и сканерами. */
+        List<ForeignFleetDto> foreignFleets,
+        /**
+         * Клад особой звезды названным наполовину — field-backlog, пункт 135: «первому, кто
+         * поселится у звезды, — столько-то технологий Стражей», без названий самих технологий
+         * (какие — скажет сцена наследия). Пусто — клад уже взят или особой звезды нет.
+         */
+        Integer specialStarReward,
+        /**
+         * Метки наставника на карте этого игрока — field-backlog, пункт 184; пусто — наставника нет
+         * или он ничего не отметил.
+         */
+        List<MapMarkDto> mentorMarks
 ) {
+
+    /** Та же карта с метками наставника. */
+    public GalaxyMapDto withMentorMarks(List<MapMarkDto> marks) {
+        return new GalaxyMapDto(gameId, galaxySize, widthParsecs, heightParsecs, minStarDistanceParsecs,
+                systems, foreignFleets, specialStarReward, marks.isEmpty() ? null : marks);
+    }
 }

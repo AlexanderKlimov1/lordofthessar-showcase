@@ -31,15 +31,27 @@ public class CatalogTexts {
     /** Приставка ссылки на технологию. */
     public static final String TECH = "catalog.tech.";
 
+    /** Приставка ссылки на лидера — его имя на языке читателя (п. 6). */
+    public static final String LEADER = "catalog.leader.";
+
     /** Чем разделены ссылки, когда их в подстановке несколько. */
     private static final String LIST_SEPARATOR = ", ";
 
     private final BuildingCatalog buildings;
     private final ResearchCatalog research;
 
+    /** Лидеры — полем: справочник собирают и проверки, которым лидеры ни к чему. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LeaderCatalog leaders;
+
     public CatalogTexts(BuildingCatalog buildings, ResearchCatalog research) {
         this.buildings = buildings;
         this.research = research;
+    }
+
+    /** Ссылка на лидера для подстановки в отчёт хода. */
+    public static String leader(String code) {
+        return LEADER + code;
     }
 
     /** Ссылка на здание для подстановки в отчёт хода. */
@@ -73,6 +85,14 @@ public class CatalogTexts {
             String code = arg.substring(BUILDING.length());
             var building = buildings.byCode().get(code);
             return building == null ? code : building.name();
+        }
+        if (arg.startsWith(LEADER) && leaders != null) {
+            String code = arg.substring(LEADER.length());
+            try {
+                return leaders.require(code).name();
+            } catch (RuntimeException unknown) {
+                return code;
+            }
         }
         if (arg.startsWith(TECH)) {
             String code = arg.substring(TECH.length());

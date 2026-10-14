@@ -7,11 +7,14 @@ import { MAP_INSET_ATTRIBUTE, sidePanelWidthPx } from '../layout';
 import { findTechnology } from '../research/researchRules';
 import { ShipDefs, ShipSprite } from '../ship/shipArt';
 import { useModalEscape } from '../useModalEscape';
-import { isCombat, shipSlots } from './fleetShips';
+import { isCombat, shipSlots, toOrders } from './fleetShips';
 import { gameApi } from '../../api/client';
 import { t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
+import { FleetName } from './FleetName';
+import { fleetReach } from './fleetShips';
 
 /**
  * Флот в полёте — п. 8, сцена оригинала (`docs/moo2/fleet-send.png`).
@@ -32,11 +35,15 @@ import { figureLabelClass } from '../accent';
  * из-под окна, а закрытое окно возвращает её на место: карта оригинала прокручивается, и
  * путь там из-под окна выкатывают так же.
  *
- * **ALL — как в оригинале**: отбирает все корабли флота, и следующая звезда, указанная на
- * карте, становится новой целью. Окно при этом остаётся открытым, а отобранные ячейки
- * подсвечены — так и в MOO II курс меняют при открытом окне. Отбирается всегда весь флот:
- * в пути его не разделить (`FleetService.redirect`), поэтому ячейки поштучно не нажимаются.
- * Курс в пути меняется только с Hyperspace Communications; без неё ALL погашена, а под
+ * **Отправка — в этом же окне, как в оригинале** (08.10.2026, решение хозяина проекта): у
+ * стоящего флота все ячейки отобраны сразу, щелчок по ячейке снимает отбор — корабль останется
+ * на месте, — повторный щелчок отбирает снова. Следующая звезда, указанная на карте, сразу
+ * становится приказом для отобранных: окна подтверждения больше нет (`FleetDialog` остался
+ * только приказу, отданному мимо этого окна, — с клавиатуры). ALL отбирает весь флот заново.
+ * У летящего флота отбирается всегда весь: в пути его не разделить (`FleetService.redirect`),
+ * поэтому ячейки поштучно не нажимаются, а ALL включает смену курса.
+ * Курс в пути меняется с Hyperspace Communications, а без неё — только у своей звёздной базы
+ * (ближе парсека; тахионная связь — 3 пк, подпространственная — 6); иначе ALL погашена, а под
  * строкой состояния сказано, чего не хватает, — погашенная кнопка без причины читалась бы
  * поломкой.
  *
@@ -61,7 +68,11 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
 }) {
   const game = useGameStore((state) => state.game);
   const self = useGameStore(selectSelf);
-  const canRedirect = useGameStore((state) => state.fleet?.canRedirect ?? false);
+  // Слышит ли флот в пути приказ — по свежему флоту из хранилища (`orderable`, п. 8): у своей
+  // базы или с гиперпространственной связью.
+  const canRedirect = useGameStore((state) =>
+    (state.fleet?.fleets.find((group) => group.id === fleet.id) ?? fleet).orderable
+    ?? state.fleet?.canRedirect ?? false);
   const researchTree = useGameStore((state) => state.researchTree);
   const setTargetingFleet = useGameStore((state) => state.setTargetingFleet);
   /*
@@ -75,6 +86,17 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
   const credentials = useGameStore((state) => state.credentials);
   const espionage = useGameStore((state) => state.espionage);
   const setEmpire = useGameStore((state) => state.setEmpire);
+  const fleetOrder = useGameStore((state) => state.fleetOrder);
+  const setFleetOrder = useGameStore((state) => state.setFleetOrder);
+  const setEncounters = useGameStore((state) => state.setEncounters);
+  /*
+    Снятые с отправки ячейки — щелчком по ним (как в оригинале). Пусто — летят все: так окно и
+    открывается. Отбор живёт, пока жив состав: после каждого действия флот приходит заново, и
+    под тем же ключом может стоять уже другой корабль.
+  */
+  const [unpicked, setUnpicked] = useState<ReadonlySet<string>>(new Set());
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const [exploreBusy, setExploreBusy] = useState(false);
   const [exploreError, setExploreError] = useState<string | null>(null);
   /*
@@ -83,6 +105,20 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
     флота (стартовые разведчики стоят вместе с колониальным кораблём) сервер отделит их сам.
   */
   const canExplore = fleet.composition.some((ship) => ship.role === 'WARSHIP');
+  /*
+    Включить разведку, когда в пределах дальности не осталось неразведанных звёзд, сервер не даст
+    (`fleet.nothingToExplore`) — кнопка гаснет заранее (field-backlog, пункт 206). Правило то же,
+    что у сервера (`FleetService.continueExploring`): неразведанная, достижимая этим флотом и не
+    цель другого своего флота.
+  */
+  const empireFleet = useGameStore((state) => state.fleet);
+  const map = useGameStore((state) => state.map);
+  const heading = new Set((empireFleet?.fleets ?? [])
+    .filter((other) => other.id !== fleet.id && other.targetSystemId)
+    .map((other) => other.targetSystemId as string));
+  const unexplored = new Set((map?.systems ?? []).filter((system) => !system.explored).map((system) => system.id));
+  const nothingToExplore = !fleet.autoExplore && !fleetReach(empireFleet, fleet).reachableSystemIds
+    .some((id) => unexplored.has(id) && !heading.has(id));
   const toggleExplore = () => {
     if (!game || !credentials || exploreBusy) {
       return;
@@ -120,13 +156,76 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
   useEffect(() => () => gameEvents.emit('map:shift-back', undefined), []);
 
   const slots = shipSlots(fleet);
-  const shown = slots.length > MAX_CELLS ? slots.slice(0, MAX_CELLS - 1) : slots;
-  const hidden = slots.length - shown.length;
+  // Все ячейки на виду (сетка прокручивается): снять с отправки можно только видимый корабль.
+  const shown = slots;
   // Пустые ячейки дорисовываются до конца ряда, как в оригинале: флот из четырёх кораблей
   // там — шесть ячеек, две пустые, а не обрубок ряда.
-  const cells = Math.max(COLUMNS * 2, Math.ceil((shown.length + (hidden > 0 ? 1 : 0)) / COLUMNS) * COLUMNS);
+  const cells = Math.max(COLUMNS * 2, Math.ceil(shown.length / COLUMNS) * COLUMNS);
 
   const flying = Boolean(fleet.targetSystemId);
+  const slotKeys = slots.map((slot) => slot.key).join('|');
+  useEffect(() => {
+    setUnpicked(new Set());
+    setSendError(null);
+  }, [fleet.id, slotKeys]);
+  const picked = (key: string) => flying ? selected : !unpicked.has(key);
+  const pickedCount = flying ? slots.length : slots.filter((slot) => !unpicked.has(slot.key)).length;
+  const toggle = (key: string) => {
+    if (flying) {
+      return;
+    }
+    setUnpicked((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  /*
+    Звезда, выбранная на карте при открытом окне, — сразу приказ отобранным (без окна
+    подтверждения). Отказ сервера (дальность, «уже там») остаётся строкой в окне, а прицел —
+    включённым: можно указать другую звезду.
+  */
+  const orderTarget = fleetOrder?.fleetId === fleet.id ? fleetOrder.targetSystemId : null;
+  useEffect(() => {
+    if (!orderTarget || !game || !credentials || sending) {
+      return;
+    }
+    setFleetOrder(null);
+    const ships = flying ? [] : toOrders(slots, new Set(slots.filter((slot) => !unpicked.has(slot.key)).map((slot) => slot.key)));
+    if (!flying && ships.length === 0) {
+      setSendError(t('fleetFlight.nonePicked'));
+      setTargetingFleet(fleet.id);
+      return;
+    }
+    setSending(true);
+    setSendError(null);
+    gameApi
+      .moveFleet(game.id, fleet.id, credentials.accessToken, orderTarget, ships)
+      .then(async () => {
+        // Приказ меняет больше одного флота (откуда ушли и кто остался) и может свести флоты
+        // противников — поэтому обновляем и состав, и встречи.
+        const [fresh, encounters] = await Promise.all([
+          gameApi.getFleet(game.id, credentials.accessToken),
+          gameApi.getEncounters(game.id, credentials.accessToken),
+        ]);
+        setEmpire(espionage, fresh);
+        setEncounters(encounters);
+        setTargetingFleet(null);
+        onClose();
+      })
+      .catch((failure: Error) => {
+        setSendError(failure.message);
+        setTargetingFleet(fleet.id);
+      })
+      .finally(() => setSending(false));
+    // Отбор и состав читаются в миг приказа; перезапуск нужен только на новую цель.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderTarget]);
   const target = fleet.targetSystemName ?? t('fleetOps.unexploredStar');
   const turnsLeft = (fleet.arrivalTurn ?? 0) - (game?.turn ?? 0);
   const redirectTech = findTechnology(researchTree, REDIRECT_TECH)?.name ?? REDIRECT_TECH;
@@ -146,18 +245,29 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
         className="border border-space-600 bg-space-800 py-1 text-center text-14 tracking-[0.15em]"
         style={{ color: self?.color }}
       >
-        {t('fleetFlight.title', { race: self?.raceName ?? self?.name ?? '' })}
+        {/* Имя флота, данное игроком (пункт 141), стоит на месте «флота расы». */}
+        {fleet.name ?? t('fleetFlight.title', { race: self?.raceName ?? self?.name ?? '' })}
       </h2>
+      <FleetName fleet={fleet} />
 
-      <div className="grid grid-cols-3 gap-1 border border-space-700 bg-space-950 p-1">
+      <div className="grid max-h-[18rem] grid-cols-3 gap-1 overflow-y-auto border border-space-700 bg-space-950 p-1">
         {shown.map((slot) => (
-          <div
+          <button
+            type="button"
             key={slot.key}
-            title={`${slot.ship.designName}${slot.ship.hullName ? ` · ${slot.ship.hullName}` : ''}`}
-            className={`flex aspect-square items-center justify-center border ${
-              selected ? 'border-accent bg-space-800' : 'border-space-700 bg-space-900/60'
+            disabled={flying}
+            aria-pressed={picked(slot.key)}
+            title={`${slot.ship.designName}${slot.ship.hullName ? ` · ${slot.ship.hullName}` : ''}${
+              flying ? '' : ' — ' + t(picked(slot.key) ? 'fleetFlight.slot.unpick' : 'fleetFlight.slot.pick')}`}
+            onClick={() => toggle(slot.key)}
+            className={`relative flex aspect-square items-center justify-center border disabled:cursor-default ${
+              picked(slot.key) ? 'border-accent bg-space-800' : 'border-space-700 bg-space-900/60 opacity-50'
             }`}
           >
+            {/* Отбор — не только цветом (пункт 173): у отобранной ячейки галочка в углу. */}
+            {picked(slot.key) && !flying ? (
+              <span aria-hidden className="absolute right-0.5 top-0 text-accent">✓</span>
+            ) : null}
             {/* Силуэт корпуса того же размера, что в сетке экрана флота и на поле боя. */}
             <svg aria-hidden="true" viewBox="-50 -50 100 100"
                  style={{ width: `${(shipSize(slot.ship.hullSize ?? 1) / CELL) * 100}%`,
@@ -166,14 +276,9 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
               <ShipSprite hullCode={slot.ship.hullCode} hullSize={slot.ship.hullSize ?? 1} role={slot.ship.role}
                           color={isCombat(slot.ship) ? '#7dd3fc' : '#94a3b8'} cx={0} cy={0} size={100} />
             </svg>
-          </div>
+          </button>
         ))}
-        {hidden > 0 ? (
-          <div className={'flex aspect-square items-center justify-center border border-space-700 ' + figureLabelClass('note')}>
-            {tf('fleetFlight.more', { n: <Figure accent="note">{hidden + 1}</Figure> })}
-          </div>
-        ) : null}
-        {Array.from({ length: cells - shown.length - (hidden > 0 ? 1 : 0) }).map((_, index) => (
+        {Array.from({ length: cells - shown.length }).map((_, index) => (
           <div key={`empty-${index}`} className="aspect-square border border-space-800/70" />
         ))}
       </div>
@@ -194,7 +299,16 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
               ? 'border-accent bg-space-800 text-accent'
               : 'border-space-600 bg-space-800 text-ink hover:border-accent hover:text-accent'
           }`}
-          onClick={() => setTargetingFleet(selected ? null : fleet.id)}
+          onClick={() => {
+            // У стоящего флота ALL отбирает весь флот заново и держит прицел; у летящего — включает
+            // и выключает смену курса.
+            if (!flying) {
+              setUnpicked(new Set());
+              setTargetingFleet(fleet.id);
+              return;
+            }
+            setTargetingFleet(selected ? null : fleet.id);
+          }}
         >
           {t('fleetOps.all')}
         </button>
@@ -240,9 +354,9 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
         <button
           type="button"
           aria-pressed={Boolean(fleet.autoExplore)}
-          disabled={exploreBusy}
-          title={t('fleetFlight.explore.title')}
-          className={`border py-1 uppercase tracking-[0.2em] ${
+          disabled={exploreBusy || nothingToExplore}
+          title={nothingToExplore ? t('fleetFlight.explore.nothing') : t('fleetFlight.explore.title')}
+          className={`border py-1 uppercase tracking-[0.2em] disabled:cursor-not-allowed disabled:opacity-50 ${
             fleet.autoExplore
               ? 'border-accent bg-space-700 text-accent'
               : 'border-space-600 bg-space-800 text-ink hover:border-accent hover:text-accent'
@@ -252,7 +366,17 @@ export function FleetInFlightWindow({ fleet, course, onClose, onColonize }: {
           {fleet.autoExplore ? t('fleetFlight.explore.on') : t('fleetFlight.explore')}
         </button>
       ) : null}
-      {exploreError ? <p className="text-center text-danger">{exploreError}</p> : null}
+      {exploreError ? <ActionError className="text-center" message={exploreError} /> : null}
+      {!flying && slots.length > 0 ? (
+        <p className={'text-center ' + figureLabelClass('note')}>
+          {tf('fleetFlight.picked', {
+            n: <Figure accent="note">{pickedCount}</Figure>,
+            of: <Figure accent="note">{slots.length}</Figure>,
+          })}
+        </p>
+      ) : null}
+      {sending ? <p className="text-center text-ink-dim">{t('fleetOrder.sending')}</p> : null}
+      {sendError ? <ActionError className="text-center" message={sendError} /> : null}
       {/*
         Подсказка прицела — здесь, а не общей полосой по центру карты: та легла бы поверх
         окна, а в оригинале курс и так меняют при открытом окне флота.
@@ -376,9 +500,8 @@ const SHIFT_STEP = 8;
 /** Сколько отступов от края до пути хватает, чтобы угол счесть свободным: значок и звезда видны целиком. */
 const CLEAR_MARGINS = 4;
 
-/** Ячеек в ряду — как в оригинале — и сколько их влезает, прежде чем последняя станет «ещё N». */
+/** Ячеек в ряду — как в оригинале. */
 const COLUMNS = 3;
-const MAX_CELLS = 9;
 
 /**
  * Технология, без которой курс в полёте не сменить, — тот же код, что проверяет сервер

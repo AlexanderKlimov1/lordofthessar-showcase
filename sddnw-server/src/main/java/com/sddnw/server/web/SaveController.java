@@ -69,6 +69,32 @@ public class SaveController {
      * отвечает за сервер, а не первого встречного: раньше эндпоинт не спрашивал ничего,
      * и снести чужую партию мог кто угодно.
      */
+    /** Автосохранение партии — пункт 160: «партия сохранена на ходу N»; пусто — его ещё нет. */
+    @GetMapping("/auto/{gameId}")
+    public org.springframework.http.ResponseEntity<GameSaveDto> autosave(@PathVariable UUID gameId,
+                                                                         @AccountToken String accountToken) {
+        return gameSaveService.autosaveOf(gameId, accountService.require(accountToken).getId())
+                .map(org.springframework.http.ResponseEntity::ok)
+                .orElseGet(() -> org.springframework.http.ResponseEntity.noContent().build());
+    }
+
+    /** Слепок файлом — пункт 160; гостю сохранений не дают, и файла тоже. */
+    @GetMapping("/{saveId}/file")
+    public com.fasterxml.jackson.databind.node.ObjectNode exportFile(@PathVariable UUID saveId,
+                                                                    @AccountToken String accountToken) {
+        return gameSaveService.exportFile(saveId, accountService.requireRegistered(accountToken).getId());
+    }
+
+    /**
+     * Партия из файла — пункт 160: только одиночная, поднимает её принёсший файл. Только
+     * администратору и модератору (08.10.2026, решение хозяина проекта): файл мог быть поправлен.
+     */
+    @PostMapping("/import")
+    public CreateGameResponse importFile(@org.springframework.web.bind.annotation.RequestBody String content,
+                                         @AccountToken String accountToken) {
+        return gameService.importSave(content, accountService.requireStaff(accountToken).getId());
+    }
+
     @DeleteMapping("/{saveId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteSave(@PathVariable UUID saveId, @AccountToken String accountToken) {

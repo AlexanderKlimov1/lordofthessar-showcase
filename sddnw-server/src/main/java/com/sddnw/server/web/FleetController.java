@@ -14,11 +14,13 @@ import com.sddnw.server.service.EncounterService;
 import com.sddnw.server.service.FleetService;
 import com.sddnw.server.service.GameAccess;
 import com.sddnw.server.service.PlanetService;
+import com.sddnw.server.service.SalvageService;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -41,11 +43,14 @@ public class FleetController {
     private final FleetService fleetService;
     private final EncounterService encounterService;
     private final PlanetService planetService;
+    private final SalvageService salvageService;
 
     public FleetController(GameAccess gameAccess,
                            FleetService fleetService,
                            EncounterService encounterService,
-                           PlanetService planetService) {
+                           PlanetService planetService,
+                           SalvageService salvageService) {
+        this.salvageService = salvageService;
         this.gameAccess = gameAccess;
         this.fleetService = fleetService;
         this.encounterService = encounterService;
@@ -92,6 +97,18 @@ public class FleetController {
     }
 
     /**
+     * Имя флота — field-backlog, пункт 141: «Третья ударная». Пустое имя снимает его.
+     */
+    @PutMapping("/fleets/{fleetId}/name")
+    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public void rename(@PathVariable UUID gameId,
+                       @PathVariable UUID fleetId,
+                       @Valid @RequestBody com.sddnw.server.dto.FleetRenameRequest request) {
+        GameEntity game = gameAccess.requireRunningGame(gameId);
+        fleetService.rename(gameAccess.requirePlayer(game, request.accessToken()), fleetId, request.name());
+    }
+
+    /**
      * Списание кораблей — п. 8: экран флота и есть то место, откуда корабль убирают
      * из строя, как в MOO II. Возврата за списанное нет.
      */
@@ -100,7 +117,8 @@ public class FleetController {
                                      @PathVariable UUID fleetId,
                                      @Valid @RequestBody FleetScrapRequest request) {
         GameEntity game = gameAccess.requireRunningGame(gameId);
-        return fleetService.scrap(gameAccess.requirePlayer(game, request.accessToken()),
+        // Трофеи абордажа на сломе приносят технологию (п. 8) — потому через разбор.
+        return salvageService.scrap(game, gameAccess.requirePlayer(game, request.accessToken()),
                 fleetId, request.ships());
     }
 

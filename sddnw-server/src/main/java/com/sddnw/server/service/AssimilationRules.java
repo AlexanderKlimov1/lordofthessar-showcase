@@ -50,6 +50,23 @@ public class AssimilationRules {
         return Math.max(1, BASE_TURNS_PER_COLONIST * 100 / speed);
     }
 
+    /** Сколько ходов на подданного у колонии с центром управления чужими: «1 per 2 turns». */
+    public static final int MANAGED_TURNS_PER_COLONIST = 2;
+
+    /**
+     * За сколько ходов колония делает своим одного подданного — п. 7, п. 12.
+     * <p>
+     * Центр управления чужими перевоспитывает «at the rate of 1 per 2 turns, regardless of
+     * government». Обаяние и отталкивание оригинал прикладывает и к этой скорости; у нас они
+     * сложены со строем в один процент, и разделить их нечем, — поэтому центр даёт свои два
+     * хода, а империя, которая и без него быстрее, остаётся при своей скорости.
+     * <i>Реконструкция в этой оговорке.</i>
+     */
+    public Integer turnsPerColonist(RaceEffects race, Boolean managed) {
+        Integer turns = turnsPerColonist(race);
+        return Boolean.TRUE.equals(managed) ? Math.min(turns, MANAGED_TURNS_PER_COLONIST) : turns;
+    }
+
     /**
      * Сколько жителей достаётся победителю подданными — п. 12.
      * <p>

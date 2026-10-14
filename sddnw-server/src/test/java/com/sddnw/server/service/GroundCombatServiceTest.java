@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Правила наземного боя — п. 12. */
 class GroundCombatServiceTest {
 
-    private final GroundCombatService service = new GroundCombatService(null, null, null, null, null, null, null, new AssimilationRules(), null, null, new OrbitalDefenceRules());
+    private final GroundCombatService service = new GroundCombatService(null, null, null, null, null, null, null, new AssimilationRules(), null, null, new OrbitalDefenceRules(), null);
 
     private static RaceEffects race(int groundCombatPercent) {
         return new RaceEffects(

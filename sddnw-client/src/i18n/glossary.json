@@ -1,0 +1,74 @@
+{
+  "_about": "Глоссарий: одно слово для одного понятия — field-backlog, пункт 181. Новый текст берёт термин отсюда. tools/language_check.py ищет в словарях клиента и messages*.properties слова из avoid; исключения — там же, поимённо, с причиной.",
+  "terms": [
+    {
+      "concept": "деньги империи",
+      "ru": "gc (казна — то, что накоплено)",
+      "en": "gc (treasury — what is saved)",
+      "avoid": {
+        "ru": ["кредит(?!н)\\w*", "монет(?!к)\\w*"],
+        "en": ["\\bcredits?\\b", "\\bBC\\b"]
+      }
+    },
+    {
+      "concept": "застава",
+      "ru": "застава",
+      "en": "outpost",
+      "avoid": { "ru": ["аванпост\\w*"], "en": ["\\bforward base\\b"] }
+    },
+    {
+      "concept": "колония",
+      "ru": "колония",
+      "en": "colony",
+      "avoid": { "ru": ["\\bпоселени[ея] игрока\\b"], "en": ["\\bsettlement\\w*"] }
+    },
+    {
+      "concept": "флот",
+      "ru": "флот",
+      "en": "fleet",
+      "avoid": { "ru": ["эскадр\\w*"], "en": ["\\bsquadrons?\\b"] }
+    },
+    {
+      "concept": "знакомство империй",
+      "ru": "знакомство, знакомы",
+      "en": "contact, met",
+      "avoid": { "ru": ["\\bконтакт\\w*"], "en": ["\\bacquaint\\w*"] }
+    },
+    {
+      "concept": "проект корабля",
+      "ru": "проект (окно — «дизайн кораблей»)",
+      "en": "design",
+      "avoid": { "ru": ["чертёж\\w*", "чертеж\\w*"], "en": ["\\bblueprints?\\b"] }
+    },
+    {
+      "concept": "ход партии и круг боя",
+      "ru": "ход; в бою — круг",
+      "en": "turn; in battle — round",
+      "avoid": { "ru": ["\\bраунд\\w*", "\\bтур(?:а|ов)?\\b"], "en": [] }
+    },
+    {
+      "concept": "империя",
+      "ru": "империя",
+      "en": "empire",
+      "avoid": { "ru": ["держав\\w*"], "en": [] }
+    },
+    {
+      "concept": "чудище",
+      "ru": "чудище (особое — Страж)",
+      "en": "monster (the special one — the Guardian)",
+      "avoid": { "ru": ["\\bмонстр\\w*"], "en": [] }
+    },
+    {
+      "concept": "очки науки",
+      "ru": "очки исследований (ОИ)",
+      "en": "research points (RP)",
+      "avoid": { "ru": ["очк\\w* науки"], "en": ["\\bscience points\\b"] }
+    },
+    {
+      "concept": "десант и пехота на борту",
+      "ru": "десант — высадка на планету; морская пехота — на борту в бою (абордаж)",
+      "en": "troops — a landing; marines — aboard in battle (boarding)",
+      "avoid": { "ru": [], "en": [] }
+    }
+  ]
+}

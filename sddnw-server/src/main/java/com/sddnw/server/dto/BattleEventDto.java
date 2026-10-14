@@ -36,8 +36,23 @@ public record BattleEventDto(
         String text,
         Integer shots,
         Integer fromX,
-        Integer fromY
+        Integer fromY,
+        /**
+         * Причина гибели — только у DESTROYED (field-backlog, пункт 204; правило «потеря называет
+         * причину», backlog-promo, пункт 6): SHOT — последний удар корабля {@code targetShipId},
+         * BLAST — взорвался собственный разбитый двигатель, BLAST_HIT — задет взрывом корабля
+         * {@code targetShipId}, SELF_DESTRUCT — самоподрыв, STRANDED — не ушёл с поля с разбитым
+         * двигателем.
+         */
+        String cause
 ) {
+    /** Событие с клеткой вылета — ракета в полёте; причины гибели у него нет. */
+    public BattleEventDto(String type, UUID shipId, UUID targetShipId, Integer x, Integer y,
+                          Integer damage, WeaponKind weaponKind, String text, Integer shots,
+                          Integer fromX, Integer fromY) {
+        this(type, shipId, targetShipId, x, y, damage, weaponKind, text, shots, fromX, fromY, null);
+    }
+
 
     /** Залп от корабля — выстрел летит с его клетки. */
     public BattleEventDto(String type, UUID shipId, UUID targetShipId, Integer x, Integer y,

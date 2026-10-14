@@ -16,4 +16,10 @@ public interface EmpireHistoryRepository extends JpaRepository<EmpireHistoryEnti
      * сортировать на клиенте значило бы повторять там правило, которое и так есть здесь.
      */
     List<EmpireHistoryEntity> findAllByGameIdOrderByTurnAsc(UUID gameId);
+
+    /** Замер одного хода — место в «Ваших партиях» (field-backlog, пункт 109). */
+    List<EmpireHistoryEntity> findAllByGameIdAndTurn(UUID gameId, Integer turn);
+
+    /** Летопись нескольких последних ходов — для переломов (field-backlog, пункт 142). */
+    List<EmpireHistoryEntity> findAllByGameIdAndTurnBetween(UUID gameId, Integer from, Integer to);
 }

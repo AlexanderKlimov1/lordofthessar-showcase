@@ -71,7 +71,8 @@ public class PlayerRoster {
     public String bannerColor(BannerColor requested, String raceColor, Set<String> takenColors) {
         Set<String> taken = takenColors.stream()
                 .filter(color -> color != null)
-                .map(color -> color.toLowerCase(Locale.ROOT))
+                // Прежний оттенок знамени (пункт 168) занимает то же знамя, что и нынешний.
+                .map(color -> BannerColor.current(color).toLowerCase(Locale.ROOT))
                 .collect(Collectors.toSet());
         if (requested != null) {
             if (taken.contains(requested.hex())) {
@@ -142,7 +143,10 @@ public class PlayerRoster {
         List<PlayerEntity> aiPlayers = new ArrayList<>();
         int slot = nextFreeSlot(humans);
         for (int i = humans.size(); i < game.getTotalPlayers(); i++) {
-            RaceTraitCatalog.ReadyRace race = resolveRace(null, takenRaces);
+            // Готовую расу может назначить прогон (книга дебютов, пункт 9); иначе — первая свободная.
+            int seat = i - humans.size();
+            String wantedRace = designs != null && seat < designs.size() ? designs.get(seat).raceCode() : null;
+            RaceTraitCatalog.ReadyRace race = resolveRace(wantedRace, takenRaces);
             takenRaces.add(race.code());
             /*
               Имя империи ИИ — ОДНО название расы, без пометки «(ИИ)». Пометка жила в самом
@@ -159,11 +163,16 @@ public class PlayerRoster {
             takenColors.add(ai.getColor());
             ai.setGame(game);
             giveCharacter(ai, game, slot);
+            // Уровень игры — пункт 9: уровень партии, если прогон не назначил империи свой.
+            ai.setAiSkill(game.getAiSkill());
 
             int design = i - humans.size();
             if (designs != null && design < designs.size()) {
                 StartGameRequest.AiEmpireDesign wanted = designs.get(design);
                 applyRaceDesign(ai, wanted.name(), wanted.traits());
+                if (wanted.skill() != null) {
+                    ai.setAiSkill(com.sddnw.server.domain.enums.AiSkill.of(wanted.skill()).name());
+                }
                 if (wanted.name() != null && !wanted.name().isBlank()) {
                     ai.setName(wanted.name());
                 }

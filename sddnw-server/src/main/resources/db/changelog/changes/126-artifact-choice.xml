@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Артефакты — выбор одной из трёх (backlog-promo, пункт 34): кандидаты ждут выбора человека до
+        конца следующего хода. Таймер жалости (пункт 36): сколько разведанных подряд систем у империи
+        прошло без единой находки.
+    -->
+    <changeSet id="126-artifact-choice" author="sddnw">
+        <createTable tableName="artifact_choice">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_artifact_choice_game"
+                             references="game(id)" deleteCascade="true"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="star_system_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="options" type="varchar(512)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="picks" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="artifact_choice" indexName="ix_artifact_choice_game">
+            <column name="game_id"/>
+        </createIndex>
+        <addColumn tableName="player">
+            <column name="dry_explorations" type="int" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

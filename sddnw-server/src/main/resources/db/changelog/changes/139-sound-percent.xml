@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Громкость — процент 0…100 вместо ступени 0…3 (09.10.2026, ползунки под меню «Игра»).
+        Ступень переводится в ту же долю шкалы: 1 → 33, 2 → 67, 3 → 100; ноль и пусто не трогаются.
+    -->
+    <changeSet id="139-sound-percent" author="sddnw">
+        <sql>
+            UPDATE account SET music_volume = ROUND(music_volume * 100.0 / 3) WHERE music_volume BETWEEN 1 AND 3;
+            UPDATE account SET sfx_volume = ROUND(sfx_volume * 100.0 / 3) WHERE sfx_volume BETWEEN 1 AND 3;
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

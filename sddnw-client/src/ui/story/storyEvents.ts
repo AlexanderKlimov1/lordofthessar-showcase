@@ -31,8 +31,16 @@ export type Story =
       planetId?: string;
       attack?: number;
       defence?: number;
+      /** Как отбить — строка рычага того же хода (field-backlog, пункт 37). */
+      retake?: string;
     }
-  | { kind: 'guardians'; system: string; technologies: string[] };
+  | { kind: 'guardians'; system: string; technologies: string[] }
+  /** Находка на планете — backlog-promo, пункт 33: что лежит и где. */
+  | { kind: 'find'; system: string; planet: string; planetId?: string }
+  /** Наследие ушедших — пункт 33: выбранные (или взятые по сроку) технологии карточками. */
+  | { kind: 'legacy'; system: string; technologies: string[] }
+  /** Трофей — пункт 33: сколько кораблей врага взято абордажем. */
+  | { kind: 'trophy'; ships: number };
 
 /** Ссылка на технологию в подстановке события: `catalog.tech.<код>` — п. 3.5. */
 const TECH_PREFIX = 'catalog.tech.';
@@ -51,6 +59,12 @@ const COLONY_HELD: Record<string, [number, number] | null> = {
   'turn.invasion.repelledBy': [2, 3],
 };
 const GUARDIANS = 'turn.specialStar.claimed';
+/** Награды разведки и боя — backlog-promo, пункт 33. */
+const FOUND = 'turn.find.found';
+const LEGACY = 'turn.find.artifacts';
+const TROPHY = 'turn.battle.prizesTaken';
+/** Как отбить потерянную колонию — field-backlog, пункт 37. */
+const RETAKE = 'turn.lever.retake';
 
 /** Нейтральный цвет, когда империю по имени найти не удалось. */
 const UNKNOWN_COLOUR = '#8a94a8';
@@ -96,7 +110,22 @@ export function storiesOf(report: TurnReport | null, players: Player[], selfId?:
         planetId: event.planetId,
         defence: places ? Number(args[places[0]]) : undefined,
         attack: places ? Number(args[places[1]]) : undefined,
+        retake: lost ? report.events.find((one) => one.key === RETAKE && one.planetId === event.planetId)?.text
+          : undefined,
       });
+    } else if (key === FOUND) {
+      stories.push({ kind: 'find', system: args[0] ?? '', planet: args[1] ?? '', planetId: event.planetId });
+    } else if (key === LEGACY) {
+      stories.push({
+        kind: 'legacy',
+        system: args[0] ?? '',
+        technologies: (args[1] ?? '')
+          .split(', ')
+          .filter((one) => one.startsWith(TECH_PREFIX))
+          .map((one) => one.slice(TECH_PREFIX.length)),
+      });
+    } else if (key === TROPHY) {
+      stories.push({ kind: 'trophy', ships: Number(args[0]) || 0 });
     } else if (key === GUARDIANS) {
       stories.push({
         kind: 'guardians',
@@ -114,7 +143,11 @@ export function storiesOf(report: TurnReport | null, players: Player[], selfId?:
   // колонии — главное, наследие — награда напоследок.
   const rank = (story: Story) =>
     story.kind === 'war' || story.kind === 'contact' ? 0 : story.kind === 'colony' ? 1 : 2;
-  return stories.sort((first, second) => rank(first) - rank(second));
+  // Находок за ход бывает несколько — сценой показывается одна, первая: остальные стоят строкой
+  // итогов, а череда одинаковых сцен утомила бы (пункт 167).
+  const firstFind = stories.findIndex((story) => story.kind === 'find');
+  const pruned = stories.filter((story, index) => story.kind !== 'find' || index === firstFind);
+  return pruned.sort((first, second) => rank(first) - rank(second));
 }
 
 /**

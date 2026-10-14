@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Знак вкладки — галактика с ладони Хранителя (ui/brand/Logo.tsx): вся фигура на 16 точках не читается, а галактика с Тессаром в ядре узнаётся. -->
+  <rect width="64" height="64" rx="14" fill="#05070f"/>
+  <g transform="rotate(-16 32 32) translate(32 32) scale(1 .62) translate(-32 -32)">
+    <path d="M32.0,32.0 C43.1,24.6 54.3,32.0 50.6,43.1 C46.9,52.4 32.0,54.3 20.9,48.7" fill="none" stroke="rgb(240,190,120)" stroke-width="5.9" stroke-linecap="round"/>
+    <path d="M32.0,32.0 C20.9,39.4 9.7,32.0 13.4,20.9 C17.1,11.6 32.0,9.7 43.1,15.3" fill="none" stroke="rgb(240,190,120)" stroke-width="5.9" stroke-linecap="round"/>
+  </g>
+  <path d="M32,24 Q33.6,30.4 40,32 Q33.6,33.6 32,40 Q30.4,33.6 24,32 Q30.4,30.4 32,24Z" fill="rgb(240,190,120)"/>
+  <circle cx="32" cy="32" r="3" fill="#fff4e0"/>
+</svg>

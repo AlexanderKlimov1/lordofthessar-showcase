@@ -4,6 +4,8 @@ import { useModalEscape } from '../useModalEscape';
 import { tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
+import { QUEUE_LIMIT } from '../system/buildLimits';
 
 /**
  * Что заложить выделенным колониям — п. 10, список колоний.
@@ -36,6 +38,11 @@ export function ColoniesQueueDialog({
   useModalEscape(true, onClose);
 
   const common = commonProjects(planets);
+  // Колония с полной очередью приказа не примет (`colony.queueFull`), а приказ исполняется
+  // целиком или никак — поэтому такие колонии названы до нажатия (пункт 76). Колония на
+  // бесконечной стройке принимает и при полной очереди: выбранное встаёт на место домов.
+  const full = planets.filter((planet) => planet.colony !== undefined
+    && planet.colony.queue.length >= QUEUE_LIMIT && planet.colony.projectCost !== undefined);
   const selected = common.find((project) => project.code === selectedCode) ?? common[0] ?? null;
 
   return (
@@ -102,7 +109,12 @@ export function ColoniesQueueDialog({
           </div>
         )}
 
-        {error ? <p className="mt-3 text-19 text-danger">{error}</p> : null}
+        {full.length > 0 ? (
+          <p className="mt-3 text-19 text-warn">
+            {t('queueAll.full', { names: full.map((planet) => planet.name).join(', ') })}
+          </p>
+        ) : null}
+        {error ? <ActionError className="mt-3 text-19" message={error} /> : null}
 
         <div className="mt-4 flex items-center justify-end gap-5 border-t border-space-700 pt-3 text-20">
           <button type="button" className="link" onClick={onClose}>
@@ -111,7 +123,7 @@ export function ColoniesQueueDialog({
           <button
             type="button"
             className="link disabled:cursor-not-allowed disabled:text-ink-off"
-            disabled={saving || selected === null}
+            disabled={saving || selected === null || full.length > 0}
             onClick={() => selected && onEnqueue(selected)}
           >
             {t('queueAll.submit')}

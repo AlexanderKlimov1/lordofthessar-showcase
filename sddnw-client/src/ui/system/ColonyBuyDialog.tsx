@@ -3,6 +3,8 @@ import { useModalEscape } from '../useModalEscape';
 import { tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { FirstTimeNote } from '../FirstTimeNote';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Выкуп стройки — п. 10, окошком подтверждения из MOO II.
@@ -55,6 +57,8 @@ export function ColonyBuyDialog({
           <Figure accent="lead" tone={enough ? undefined : 'danger'}>{price}</Figure> {t('colony.buy.question.tail')}
         </p>
 
+        <FirstTimeNote meeting="buy" className="mt-3 text-14" />
+
         <dl className="mt-3 grid grid-cols-[auto_1fr] items-baseline gap-x-4 gap-y-1">
           <dt className={figureLabelClass('lead')}>{t('colony.buy.treasury')}</dt>
           <dd className={figureLabelClass('lead')}>{tf('common.credits', { n: <Figure accent="lead">{credits}</Figure> })}</dd>
@@ -72,7 +76,7 @@ export function ColonyBuyDialog({
             {t('colony.buy.early')}
           </p>
         ) : null}
-        {error ? <p className="mt-3 text-19 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mt-3 text-19" message={error} /> : null}
 
         <div className="mt-4 flex items-center justify-end gap-5 border-t border-space-700 pt-2 text-20">
           <button type="button" className="link-quiet" onClick={onClose}>

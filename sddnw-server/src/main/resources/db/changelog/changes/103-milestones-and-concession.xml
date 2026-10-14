@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Летопись главных моментов партии — field-backlog, пункт 34: первое знакомство, первая
+        выигранная битва, взятые и потерянные колонии, клад Стражей, совет, конец. Пересчитать
+        их потом нечем — отчёт хода живёт ход, — поэтому они пишутся строкой, когда случаются,
+        ключом словаря с подстановками (переводятся при чтении, как отчёт хода).
+    -->
+    <changeSet id="103-game-milestone" author="sddnw">
+        <createTable tableName="game_milestone">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_game_milestone_player"
+                             references="player(id)" deleteCascade="true"/>
+            </column>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="kind" type="varchar(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="message_key" type="varchar(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="args" type="varchar(1024)"/>
+        </createTable>
+        <createIndex tableName="game_milestone" indexName="ix_game_milestone_game">
+            <column name="game_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!--
+        Признанное поражение — field-backlog, пункт 81: ход, на котором человек признал
+        поражение. Его империю дальше ведёт ИИ, а вернуться за неё нельзя — это исход, а не уход.
+    -->
+    <changeSet id="103-player-conceded-turn" author="sddnw">
+        <addColumn tableName="player">
+            <column name="conceded_turn" type="int"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

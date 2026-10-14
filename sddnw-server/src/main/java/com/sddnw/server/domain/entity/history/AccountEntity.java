@@ -93,8 +93,64 @@ public class AccountEntity {
     @Column(name = "confirm_expires_at")
     private OffsetDateTime confirmExpiresAt;
 
+    /**
+     * Одноразовая ссылка сброса пароля — backlog-promo, пункт 45: тем же путём, что подтверждение,
+     * но живёт час, а не сутки, и после сброса стирается.
+     */
+    @Column(name = "reset_token")
+    private String resetToken;
+
+    @Column(name = "reset_expires_at")
+    private OffsetDateTime resetExpiresAt;
+
+    /**
+     * Новая почта, которую ещё не подтвердили — пункт 45: прежняя остаётся логином, пока по
+     * ссылке из письма на новую не перешли; иначе опечатка в адресе отнимала бы запись.
+     */
+    @Column(name = "pending_email")
+    private String pendingEmail;
+
+    public String getResetToken() {
+        return resetToken;
+    }
+
+    public void setResetToken(String resetToken) {
+        this.resetToken = resetToken;
+    }
+
+    public OffsetDateTime getResetExpiresAt() {
+        return resetExpiresAt;
+    }
+
+    public void setResetExpiresAt(OffsetDateTime resetExpiresAt) {
+        this.resetExpiresAt = resetExpiresAt;
+    }
+
+    public String getPendingEmail() {
+        return pendingEmail;
+    }
+
+    public void setPendingEmail(String pendingEmail) {
+        this.pendingEmail = pendingEmail;
+    }
+
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt = OffsetDateTime.now();
+
+    /**
+     * Когда запись последний раз видела объявления об изменениях — field-backlog, пункт 161;
+     * пусто — не видела ни разу, и тогда отсчёт идёт от её заведения.
+     */
+    @Column(name = "notices_seen_at")
+    private OffsetDateTime noticesSeenAt;
+
+    public OffsetDateTime getNoticesSeenAt() {
+        return noticesSeenAt;
+    }
+
+    public void setNoticesSeenAt(OffsetDateTime noticesSeenAt) {
+        this.noticesSeenAt = noticesSeenAt;
+    }
 
     /**
      * Язык игрока — п. 3.5: {@code en}, {@code ru} или пусто.
@@ -133,6 +189,138 @@ public class AccountEntity {
     @Column(name = "hotkeys", length = 512)
     private String hotkeys;
 
+    /**
+     * Нужны ли подсказки новичку — field-backlog, пункт 30: пусто — ещё не спрашивали, нет —
+     * ветеран, обучение и объяснения ему шум.
+     */
+    @Column(name = "novice_hints")
+    private Boolean noviceHints;
+
+    /**
+     * Подсказки, отклонённые «больше не показывать» — пункт 130: JSON-список ключей. Что
+     * значат ключи, знает клиент, — как и с раскладкой клавиш.
+     */
+    @Column(name = "dismissed_hints", length = 2048)
+    private String dismissedHints;
+
+    /**
+     * Окна, которые не открываются сами, — field-backlog, пункт 164: JSON-список ключей
+     * (разведанная система, наука после прорыва, сцены). Пусто — открываются все.
+     */
+    @Column(name = "quiet_windows", length = 512)
+    private String quietWindows;
+
+    /**
+     * Уникальный игровой код — личный кабинет: номер записи по порядку заведения, обычным
+     * счётчиком базы ({@code account_code_seq}, миграция 128). Выдаёт его сама база при вставке,
+     * поэтому сущность его не пишет; номер не переиспользуется и после удаления записи.
+     */
+    @org.hibernate.annotations.Generated
+    @Column(name = "player_code", insertable = false, updatable = false)
+    private Long playerCode;
+
+    /** Советник (пункт 23): да, нет или пусто — по умолчанию (выключен, в гостевой партии включён). */
+    @Column(name = "advisor")
+    private Boolean advisor;
+
+    /**
+     * Письма о ходе — field-backlog, пункты 22 и 113: только по согласию, пусто значит «нет».
+     * Ключ отписки ({@code notifyToken}) заводится вместе с согласием и стоит в каждом письме:
+     * отписаться можно одним нажатием, не входя в игру.
+     */
+    @Column(name = "notify_mail")
+    private Boolean notifyMail;
+
+    @Column(name = "notify_token", length = 64)
+    private String notifyToken;
+
+    public Boolean getNotifyMail() {
+        return notifyMail;
+    }
+
+    public void setNotifyMail(Boolean notifyMail) {
+        this.notifyMail = notifyMail;
+    }
+
+    public String getNotifyToken() {
+        return notifyToken;
+    }
+
+    public void setNotifyToken(String notifyToken) {
+        this.notifyToken = notifyToken;
+    }
+
+    /** Сцены, увиденные целиком (пункт 163): JSON-список ключей; что они значат, знает клиент. */
+    @Column(name = "seen_scenes", length = 512)
+    private String seenScenes;
+
+    public Long getPlayerCode() {
+        return playerCode;
+    }
+
+    public Boolean getAdvisor() {
+        return advisor;
+    }
+
+    public void setAdvisor(Boolean advisor) {
+        this.advisor = advisor;
+    }
+
+    public String getSeenScenes() {
+        return seenScenes;
+    }
+
+    public void setSeenScenes(String seenScenes) {
+        this.seenScenes = seenScenes;
+    }
+
+    /** Своё знамя (пункт 144): код цвета; пусто — не выбирал. */
+    @Column(name = "banner", length = 16)
+    private String banner;
+
+    public String getBanner() {
+        return banner;
+    }
+
+    public void setBanner(String banner) {
+        this.banner = banner;
+    }
+
+    /**
+     * Меньше движения — field-backlog, пункт 170: да, нет или пусто — «как в системе»
+     * ({@code prefers-reduced-motion}). Что убирать, решает клиент.
+     */
+    @Column(name = "reduce_motion")
+    private Boolean reduceMotion;
+
+    /**
+     * Знаки знамён у хозяев на карте — field-backlog, пункт 202: включены ли; пусто — нет, по
+     * умолчанию. Что именно рисуется, решает клиент.
+     */
+    @Column(name = "banner_glyphs")
+    private Boolean bannerGlyphs;
+
+    public Boolean getBannerGlyphs() {
+        return bannerGlyphs;
+    }
+
+    public void setBannerGlyphs(Boolean bannerGlyphs) {
+        this.bannerGlyphs = bannerGlyphs;
+    }
+
+    /**
+     * Громкость музыки ступенью 0…3; пусто — «игрок не трогал», то есть выключено.
+     * <p>
+     * Живёт здесь по той же причине, что язык и размер текста: выключенный однажды звук не
+     * должен заиграть снова на другой машине.
+     */
+    @Column(name = "music_volume")
+    private Integer musicVolume;
+
+    /** Громкость звуковых эффектов (бой) ступенью 0…3; пусто — выключено. */
+    @Column(name = "sfx_volume")
+    private Integer sfxVolume;
+
     public UUID getId() {
         return id;
     }
@@ -157,8 +345,56 @@ public class AccountEntity {
         this.textScale = textScale;
     }
 
+    public Integer getMusicVolume() {
+        return musicVolume;
+    }
+
+    public void setMusicVolume(Integer musicVolume) {
+        this.musicVolume = musicVolume;
+    }
+
+    public Integer getSfxVolume() {
+        return sfxVolume;
+    }
+
+    public void setSfxVolume(Integer sfxVolume) {
+        this.sfxVolume = sfxVolume;
+    }
+
     public String getHotkeys() {
         return hotkeys;
+    }
+
+    public Boolean getNoviceHints() {
+        return noviceHints;
+    }
+
+    public void setNoviceHints(Boolean noviceHints) {
+        this.noviceHints = noviceHints;
+    }
+
+    public Boolean getReduceMotion() {
+        return reduceMotion;
+    }
+
+    public void setReduceMotion(Boolean reduceMotion) {
+        this.reduceMotion = reduceMotion;
+    }
+
+    public String getQuietWindows() {
+        return quietWindows;
+    }
+
+    public void setQuietWindows(String quietWindows) {
+        this.quietWindows = quietWindows;
+    }
+
+    public String getDismissedHints() {
+        return dismissedHints;
+    }
+
+    public void setDismissedHints(String dismissedHints) {
+        this.dismissedHints = dismissedHints;
     }
 
     public void setHotkeys(String hotkeys) {

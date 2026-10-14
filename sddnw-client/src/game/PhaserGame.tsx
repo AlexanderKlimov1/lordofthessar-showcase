@@ -283,7 +283,12 @@ export function PhaserGame() {
 
   return (
     <>
-      <div ref={containerRef} className="absolute inset-0" />
+      {/*
+        Касания карты — её, а не браузера (field-backlog, пункт 60): без `touch-none` щипок
+        масштабировал бы всю страницу, а ведение пальцем прокручивало бы её, и Phaser получал
+        бы отмену касания вместо движения.
+      */}
+      <div ref={containerRef} className="absolute inset-0 touch-none" />
       {graphicsLost ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
           <div className="panel pointer-events-auto flex max-w-md flex-col gap-3 px-5 py-4 text-13">

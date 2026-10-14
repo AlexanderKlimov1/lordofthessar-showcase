@@ -6,6 +6,7 @@ import com.sddnw.server.domain.RaceEffects;
 import com.sddnw.server.domain.ColonyProject;
 import com.sddnw.server.domain.PopulationJobs;
 import com.sddnw.server.domain.enums.BuildingEffectType;
+import com.sddnw.server.domain.enums.PlanetClimate;
 import com.sddnw.server.domain.enums.PlanetFind;
 import com.sddnw.server.domain.enums.PlanetGravity;
 import com.sddnw.server.domain.entity.PlanetBuildingEntity;
@@ -81,15 +82,36 @@ public class ColonyService {
     private record Special(String key, Integer cost) {
     }
 
-    private static final Map<String, Special> SPECIALS = Map.of(
-            ColonyProject.HOUSING, new Special("housing", null),
-            ColonyProject.TRADE_GOODS, new Special("tradeGoods", null),
-            ColonyProject.SPY, new Special("spy", ColonyProject.SPY_COST),
-            ColonyProject.FREIGHTER, new Special("freighter", ColonyProject.FREIGHTER_COST),
-            ColonyProject.COLONY_BASE, new Special("colonyBase", ColonyProject.COLONY_BASE_COST),
-            ColonyProject.COLONY_SHIP, new Special("colonyShip", ColonyProject.COLONY_SHIP_COST),
-            ColonyProject.OUTPOST_SHIP, new Special("outpostShip", ColonyProject.OUTPOST_SHIP_COST),
-            ColonyProject.TRANSPORT, new Special("transport", ColonyProject.TRANSPORT_COST));
+    private static final Map<String, Special> SPECIALS = Map.ofEntries(
+            Map.entry(ColonyProject.HOUSING, new Special("housing", null)),
+            Map.entry(ColonyProject.TRADE_GOODS, new Special("tradeGoods", null)),
+            Map.entry(ColonyProject.SPY, new Special("spy", ColonyProject.SPY_COST)),
+            Map.entry(ColonyProject.FREIGHTER, new Special("freighter", ColonyProject.FREIGHTER_COST)),
+            Map.entry(ColonyProject.COLONY_BASE, new Special("colonyBase", ColonyProject.COLONY_BASE_COST)),
+            Map.entry(ColonyProject.COLONY_SHIP, new Special("colonyShip", ColonyProject.COLONY_SHIP_COST)),
+            Map.entry(ColonyProject.OUTPOST_SHIP, new Special("outpostShip", ColonyProject.OUTPOST_SHIP_COST)),
+            Map.entry(ColonyProject.TRANSPORT, new Special("transport", ColonyProject.TRANSPORT_COST)),
+            Map.entry(ColonyProject.TERRAFORM, new Special("terraform", TerraformRules.TERRAFORM_STEP_COST)),
+            Map.entry(ColonyProject.GAIA, new Special("gaia", TerraformRules.GAIA_COST)),
+            Map.entry(ColonyProject.ARTIFICIAL_PLANET, new Special("artificialPlanet", TerraformRules.ARTIFICIAL_PLANET_COST)),
+            Map.entry(ColonyProject.ANDROID_FARMER, new Special("androidFarmer", ColonyProject.ANDROID_COST)),
+            Map.entry(ColonyProject.ANDROID_WORKER, new Special("androidWorker", ColonyProject.ANDROID_COST)),
+            Map.entry(ColonyProject.ANDROID_SCIENTIST, new Special("androidScientist", ColonyProject.ANDROID_COST)));
+
+    /** Технология каждого вида андроидов — п. 4.1 (перенос MOO II). */
+    /**
+     * Есть ли у колонии место ещё на одного андроида — п. 4.1: либо не исчерпан запас сверх потолка по размеру
+     * планеты, либо есть свободное место жителя. Одно правило на список стройки, достройку и ИИ.
+     */
+    public Boolean androidRoom(PlanetEntity planet, ColonyContext context) {
+        return planet.androids() < ColonyProject.androidsBeyondCap(planet.getPlanetSize())
+                || maxPopulation(planet, context.effects(planet), context.race(planet)) > planet.getPopulation();
+    }
+
+    public static final Map<String, String> ANDROID_TECHS = Map.of(
+            ColonyProject.ANDROID_FARMER, "android-farmers",
+            ColonyProject.ANDROID_WORKER, "android-workers",
+            ColonyProject.ANDROID_SCIENTIST, "android-scientists");
 
     /**
      * Ключи текстов особых проектов — для проверки словарей ({@code ColonyProjectTextsTest}).
@@ -116,6 +138,7 @@ public class ColonyService {
     private final ShipDesignRules shipDesignRules;
     private final LeaderBonusService leaderBonuses;
     private final EmpireActivityService activity;
+    private final ResearchCatalog researchCatalog;
 
     /** Имена и описания особых проектов и кораблей — на языке запроса. */
     private final Messages messages;
@@ -134,8 +157,10 @@ public class ColonyService {
                          LeaderBonusService leaderBonuses,
                          AssimilationRules assimilationRules,
                          EmpireActivityService activity,
+                         ResearchCatalog researchCatalog,
                          Messages messages) {
         this.activity = activity;
+        this.researchCatalog = researchCatalog;
         this.messages = messages;
         this.assimilationRules = assimilationRules;
         this.planetRepository = planetRepository;
@@ -176,8 +201,95 @@ public class ColonyService {
              * система, а не планета. Пустая карта значит «лидеров нет» — так контекст
              * собирается и там, где лидеры ни при чём (карта галактики до найма).
              */
-            Map<UUID, Map<String, Integer>> leaderBonusBySystem
+            Map<UUID, Map<String, Integer>> leaderBonusBySystem,
+            /**
+             * Все населённые колонии владельцев — п. 10.1: столица одна на империю, и чтобы
+             * знать, есть ли она, нужно видеть колонии, а не только переданные планеты.
+             * Хозяин сверяется при каждом вопросе: колонию могли захватить посреди хода.
+             */
+            Map<UUID, List<PlanetEntity>> coloniesByOwner,
+            /**
+             * Что изученное даёт колониям владельца — п. 9 (13.10.2026, «достижения» MOO II:
+             * обмен галактической валюты, продвинутая планировка городов, повышенный
+             * интеллект, биоморфные грибы). Пары из поля {@code effects} дерева технологий,
+             * сложенные {@link ResearchCatalog#effectsOf}.
+             */
+            Map<UUID, BuildingEffects> techEffectsByOwner
     ) {
+
+        /** Контекст без действий технологий — так его собирают проверки правил столицы. */
+        public ColonyContext(Map<UUID, Set<String>> technologiesByOwner,
+                             Map<UUID, List<Building>> buildingsByPlanet,
+                             Map<UUID, RaceEffects> raceEffectsByOwner,
+                             Map<UUID, BuildingEffects> treatyEffectsByOwner,
+                             Map<String, Building> catalog,
+                             Map<UUID, Integer> deliveredFoodByPlanet,
+                             Map<UUID, List<ShipDesignService.ShipBuildOption>> shipDesignsByOwner,
+                             Map<UUID, Map<String, Integer>> leaderBonusBySystem,
+                             Map<UUID, List<PlanetEntity>> coloniesByOwner) {
+            this(technologiesByOwner, buildingsByPlanet, raceEffectsByOwner, treatyEffectsByOwner,
+                    catalog, deliveredFoodByPlanet, shipDesignsByOwner, leaderBonusBySystem,
+                    coloniesByOwner, Map.of());
+        }
+
+        /**
+         * Действия изученного на ЭТОЙ колонии — п. 9. Биоморфные грибы поднимают еду фермера
+         * только там, где климат её не даёт вовсе («from 0 to 1 per farmer» на токсичных,
+         * облучённых и бесплодных мирах), поэтому их эффект переводится в прибавку к фермеру
+         * лишь на таком климате, а на прочих отбрасывается.
+         */
+        public BuildingEffects technologyEffects(PlanetEntity planet) {
+            BuildingEffects owned = techEffectsByOwner.getOrDefault(planet.getOwnerPlayerId(), BuildingEffects.NONE);
+            if (owned.foodOnLifeless() <= 0) {
+                return owned;
+            }
+            Map<BuildingEffectType, Integer> amounts = new java.util.EnumMap<>(BuildingEffectType.class);
+            amounts.putAll(owned.amounts());
+            amounts.remove(BuildingEffectType.FOOD_ON_LIFELESS);
+            PlanetClimate climate = planet.getClimate();
+            if (climate != null && Boolean.TRUE.equals(climate.getColonizable()) && climate.getFoodPerFarmer() == 0) {
+                amounts.merge(BuildingEffectType.FOOD_PER_FARMER, Math.min(1, owned.foodOnLifeless()), Integer::sum);
+            }
+            return new BuildingEffects(Map.copyOf(amounts), owned.upkeep());
+        }
+
+        /**
+         * Есть ли у империи столица — п. 10.1: здание «Capitol» на её населённой колонии.
+         * Считается по построенному в контексте, поэтому отстроенная или потерянная этим же
+         * ходом столица видна сразу (см. {@link #built}, {@link #sold}).
+         */
+        public Boolean hasCapitol(UUID ownerId) {
+            if (ownerId == null) {
+                return Boolean.FALSE;
+            }
+            return coloniesByOwner.getOrDefault(ownerId, List.of()).stream()
+                    .filter(colony -> ownerId.equals(colony.getOwnerPlayerId()))
+                    .filter(colony -> colony.getPopulation() > 0)
+                    .anyMatch(colony -> buildings(colony).stream()
+                            .anyMatch(building -> CapitolRules.CODE.equals(building.code())));
+        }
+
+        /**
+         * Столица уже заказана на ДРУГОЙ колонии империи — п. 10.1: на стапеле или в очереди.
+         * Столица одна, и вторая, заложенная параллельно, ушла бы в пустоту.
+         */
+        public Boolean capitolOrderedElsewhere(PlanetEntity planet) {
+            UUID ownerId = planet.getOwnerPlayerId();
+            return coloniesByOwner.getOrDefault(ownerId, List.of()).stream()
+                    .filter(colony -> !colony.getId().equals(planet.getId()))
+                    .filter(colony -> ownerId.equals(colony.getOwnerPlayerId()))
+                    .anyMatch(colony -> CapitolRules.CODE.equals(colony.getProjectCode())
+                            || colony.getBuildQueue().contains(CapitolRules.CODE));
+        }
+
+        /**
+         * Империя без столицы, хотя строю она положена, — п. 10.1: штраф морали всем её
+         * колониям и остановка новых лидеров.
+         */
+        public Boolean capitolLost(UUID ownerId) {
+            RaceEffects government = raceEffectsByOwner.getOrDefault(ownerId, RaceEffects.NONE);
+            return Boolean.TRUE.equals(government.hasCapitol()) && !Boolean.TRUE.equals(hasCapitol(ownerId));
+        }
 
         /**
          * Процент прибавки колониального лидера этой колонии — п. 6.
@@ -252,13 +364,77 @@ public class ColonyService {
          * (п. 7). Раса работает как вечная постройка, поэтому расчёты колонии их не
          * различают — им достаточно суммы.
          */
+        /**
+         * Источники эффектов колонии ПО ОТДЕЛЬНОСТИ — field-backlog, пункт 40: «из чего
+         * сложилось». Это те же слагаемые, что складывает {@link #effects}, в том же составе:
+         * каждая постройка, раса, наследие, находка, тяжесть мира, мораль и договоры (с
+         * гостевыми правилами партии). Второго свода правил нет — сумма их и есть {@link #effects}.
+         */
+        public List<EffectSource> effectSources(PlanetEntity planet) {
+            List<EffectSource> sources = new ArrayList<>();
+            for (Building building : buildings(planet)) {
+                sources.add(new EffectSource("BUILDING", building.name(), BuildingEffects.sum(List.of(building))));
+            }
+            sources.add(new EffectSource("RACE", null, raceOfPopulation(planet)));
+            sources.add(new EffectSource("ARTIFACTS", null, artifacts(planet)));
+            sources.add(new EffectSource("FIND", null, find(planet)));
+            sources.add(new EffectSource("GRAVITY", null, gravity(planet)));
+            sources.add(new EffectSource("MORALE", null, morale(planet).effects()));
+            sources.add(new EffectSource("TREATIES", null,
+                    treatyEffectsByOwner.getOrDefault(planet.getOwnerPlayerId(), BuildingEffects.NONE)));
+            sources.add(new EffectSource("TECHNOLOGIES", null, technologyEffects(planet)));
+            sources.add(new EffectSource("ANDROIDS", null, androids(planet)));
+            return sources;
+        }
+
         public BuildingEffects effects(PlanetEntity planet) {
             return BuildingEffects.sum(buildings(planet))
                     .plus(raceOfPopulation(planet))
                     .plus(artifacts(planet))
                     .plus(find(planet))
                     .plus(gravity(planet))
-                    .plus(treatyEffectsByOwner.getOrDefault(planet.getOwnerPlayerId(), BuildingEffects.NONE));
+                    .plus(morale(planet).effects())
+                    .plus(treatyEffectsByOwner.getOrDefault(planet.getOwnerPlayerId(), BuildingEffects.NONE))
+                    .plus(technologyEffects(planet))
+                    .plus(androids(planet));
+        }
+
+        /**
+         * Андроиды колонии — п. 4.1 (перенос MOO II): каждый даёт 3 единицы своего дела, съедает
+         * единицу производства и занимает место жителя ({@code ColonyProject.ANDROID_OUTPUT}) — кроме первых,
+         * которых планета держит сверх потолка по своему размеру ({@code ColonyProject.androidsBeyondCap}).
+         */
+        private BuildingEffects androids(PlanetEntity planet) {
+            int all = planet.androids();
+            if (all <= 0) {
+                return BuildingEffects.NONE;
+            }
+            int output = ColonyProject.ANDROID_OUTPUT;
+            Map<BuildingEffectType, Integer> amounts = new java.util.EnumMap<>(BuildingEffectType.class);
+            amounts.put(BuildingEffectType.FOOD_FLAT, output * planet.getAndroidFarmers());
+            amounts.put(BuildingEffectType.PRODUCTION_FLAT, output * planet.getAndroidWorkers() - all);
+            amounts.put(BuildingEffectType.RESEARCH_FLAT, output * planet.getAndroidScientists());
+            // Первые андроиды встают сверх потолка населения (ColonyProject.androidsBeyondCap).
+            amounts.put(BuildingEffectType.MAX_POPULATION,
+                    -ColonyProject.androidsTakingRoom(all, planet.getPlanetSize()));
+            return new BuildingEffects(amounts, 0);
+        }
+
+        /**
+         * Мораль колонии — п. 10.1: строй с казармами, здания досуга, достижения, духовный
+         * лидер и подданные другой расы ({@link MoraleRules}). В {@link #effects} она входит
+         * четырьмя процентами — к еде, производству, науке и налогу.
+         * <p>
+         * Считается по ПОСТРОЙКАМ, а не по {@link #effects}: иначе мораль спрашивала бы сама
+         * себя. Строй — у хозяина, а не у подданных: правит колонией он.
+         */
+        public MoraleRules.Morale morale(PlanetEntity planet) {
+            if (planet.getOwnerPlayerId() == null || planet.getPopulation() <= 0) {
+                return MoraleRules.Morale.NONE;
+            }
+            return MoraleRules.morale(race(planet), BuildingEffects.sum(buildings(planet)),
+                    technologies(planet), leaderPercent(planet, MoraleRules.SPIRITUAL_ABILITY),
+                    planet.getAlienPopulation() > 0, capitolLost(planet.getOwnerPlayerId()));
         }
 
         /**
@@ -268,10 +444,26 @@ public class ColonyService {
          * не различает, откуда пришёл процент. Расе, привыкшей к такой тяжести, он равен
          * нулю — числа и правило в {@link PlanetGravity}.
          */
+        /**
+         * Штраф тяжести колонии в процентах производства, БЕЗ гравитационного генератора — п. 4.1: сколько
+         * снимет генератор. Ноль — штрафа нет (или тяжесть привычна расе), прибавка лёгкого мира — тоже ноль.
+         */
+        public Integer gravityPenaltyPercent(PlanetEntity planet) {
+            RaceEffects race = race(planet);
+            return Math.min(0, PlanetGravity.of(planet.getPlanetSize(), planet.getHomeworld())
+                    .productionPercent(race.gravityLow(), race.gravityHigh()));
+        }
+
         private BuildingEffects gravity(PlanetEntity planet) {
             RaceEffects race = race(planet);
             Integer percent = PlanetGravity.of(planet.getPlanetSize(), planet.getHomeworld())
                     .productionPercent(race.gravityLow(), race.gravityHigh());
+            // Гравитационный генератор снимает штраф тяжести целиком — п. 4.1 (перенос MOO II:
+            // «eliminates gravity penalties»). Прибавку непривычно лёгкого мира он не трогает.
+            if (percent < 0 && buildings(planet).stream()
+                    .anyMatch(building -> building.effects().containsKey(BuildingEffectType.GRAVITY_NORMAL))) {
+                percent = 0;
+            }
             return percent == 0
                     ? BuildingEffects.NONE
                     : new BuildingEffects(Map.of(BuildingEffectType.PRODUCTION_PERCENT, percent), 0);
@@ -338,6 +530,30 @@ public class ColonyService {
         }
     }
 
+    /**
+     * Наука гостевой партии вдвое (GuestGameRules.RESEARCH_MULTIPLIER): прибавка к выработке
+     * учёного, равная базе, — то есть удвоение ДО процентов, как и просил хозяин проекта.
+     * Ложится к договорам владельца, потому что это тоже действие «на всю империю»: так её
+     * видят все, кто считает науку по контексту колоний, — колония, ход, «Инфо» и ИИ.
+     */
+    private Map<UUID, BuildingEffects> withGuestResearch(Map<UUID, BuildingEffects> treaties,
+                                                         Set<UUID> owners) {
+        if (owners.isEmpty()) {
+            return treaties;
+        }
+        List<UUID> guests = playerRepository.findIdsInRichStartGames(owners);
+        if (guests.isEmpty()) {
+            return treaties;
+        }
+        BuildingEffects bonus = new BuildingEffects(Map.of(BuildingEffectType.RESEARCH_PER_SCIENTIST,
+                populationCalculator.researchPerScientist() * (GuestGameRules.RESEARCH_MULTIPLIER - 1)), 0);
+        Map<UUID, BuildingEffects> result = new HashMap<>(treaties);
+        for (UUID guest : guests) {
+            result.merge(guest, bonus, BuildingEffects::plus);
+        }
+        return result;
+    }
+
     /** Собирает контекст для набора планет: изученное владельцами и построенные здания. */
     public ColonyContext context(Collection<PlanetEntity> planets) {
         Set<UUID> owners = planets.stream()
@@ -386,7 +602,7 @@ public class ColonyService {
         // Одной выборкой на всех владельцев, а не запросом на игрока: контекст собирается
         // каждый ход, и три запроса на империю превращались в восемнадцать за ход изнутри
         // посчитанного хода — см. DiplomacyService.treatyEffects(Collection).
-        Map<UUID, BuildingEffects> treatyEffects = diplomacyService.treatyEffects(owners);
+        Map<UUID, BuildingEffects> treatyEffects = withGuestResearch(diplomacyService.treatyEffects(owners), owners);
 
         // Карта построенного меняется по ходу: производство дописывает в неё достроенное
         // (см. ColonyContext.built), поэтому она изменяемая, а не List.of()/Map.of().
@@ -408,10 +624,19 @@ public class ColonyService {
         // своей системы, и его прибавка нужна выработке, доходу и рождаемости.
         Map<UUID, Map<String, Integer>> leaderBonus = leaderBonusBySystem(owners);
 
+        // Колонии по владельцам — п. 10.1: столица одна на империю.
+        Map<UUID, List<PlanetEntity>> coloniesByOwner = imperial.stream()
+                .collect(Collectors.groupingBy(PlanetEntity::getOwnerPlayerId));
+
+        // Действия изученного — п. 9: считаются от уже взятых технологий, без новой выборки.
+        Map<UUID, BuildingEffects> techEffects = new HashMap<>();
+        technologies.forEach((owner, codes) -> techEffects.put(owner, researchCatalog.effectsOf(codes)));
+
         ColonyContext context = new ColonyContext(technologies, built, raceEffects, treatyEffects,
-                catalog, Map.of(), shipDesigns, leaderBonus);
+                catalog, Map.of(), shipDesigns, leaderBonus, coloniesByOwner, techEffects);
         return new ColonyContext(technologies, built, raceEffects, treatyEffects, catalog,
-                freightDeliveries(imperial, owners, context), shipDesigns, leaderBonus);
+                freightDeliveries(imperial, owners, context), shipDesigns, leaderBonus, coloniesByOwner,
+                techEffects);
     }
 
     /**
@@ -505,6 +730,23 @@ public class ColonyService {
         return context(List.of(planet));
     }
 
+    /**
+     * «Жители сами» — field-backlog, пункт 91: фермеров ровно на прокорм колонии, остальные — в доле
+     * рабочих и учёных, заданной игроком ({@link AutoJobsRules}). Еда считается тем же правилом, что
+     * и остаток колонии ({@link #foodBalance}), — без подвоза грузовиками.
+     */
+    public void applyAutoJobs(PlanetEntity planet, ColonyContext context) {
+        BuildingEffects effects = context.effects(planet);
+        RaceEffects race = context.race(planet);
+        PopulationJobs wanted = AutoJobsRules.jobs(planet.getPopulation(), jobs(planet),
+                farmers -> populationCalculator.food(planet.getClimate(), farmers, effects, race),
+                populationCalculator.foodConsumption(planet.getPopulation(), race),
+                Boolean.TRUE.equals(canFarm(planet, context)));
+        if (!wanted.equals(planet.getJobs())) {
+            planet.setJobs(wanted);
+        }
+    }
+
     /** Занятия жителей планеты, выправленные по её населению. */
     public PopulationJobs jobs(PlanetEntity planet) {
         return populationCalculator.normalize(planet.getClimate(), planet.getPopulation(), planet.getJobs());
@@ -554,8 +796,30 @@ public class ColonyService {
      * постройки первых грузовиков.
      */
     public Integer foodLack(PlanetEntity planet, ColonyContext context) {
+        return Math.max(0, rawFoodLack(planet, context) - replicated(planet, context));
+    }
+
+    /** Нехватка еды колонии после подвоза, но до репликаторов. */
+    private Integer rawFoodLack(PlanetEntity planet, ColonyContext context) {
         return Math.max(0, -foodBalance(planet, context.effects(planet), context.race(planet))
                 - context.delivered(planet));
+    }
+
+    /**
+     * Сколько еды колония сделала пищевыми репликаторами — п. 4.1.1 (перенос MOO II 1.50: «1 food
+     * costs 1 PP»): недостающее после подвоза, но не больше её производства. Столько же
+     * производства уходит со стройки.
+     */
+    public Integer replicated(PlanetEntity planet, ColonyContext context) {
+        BuildingEffects effects = context.effects(planet);
+        if (effects.amount(BuildingEffectType.FOOD_REPLICATOR) <= 0) {
+            return 0;
+        }
+        int lack = rawFoodLack(planet, context);
+        if (lack <= 0) {
+            return 0;
+        }
+        return Math.min(lack, net(planet, grossProduction(planet, context), effects, context.race(planet)));
     }
 
     /** Производство колонии за ход со всеми её зданиями. */
@@ -575,7 +839,7 @@ public class ColonyService {
     public Integer production(PlanetEntity planet, ColonyContext context) {
         BuildingEffects effects = context.effects(planet);
         RaceEffects race = context.race(planet);
-        return net(planet, grossProduction(planet, context), effects, race);
+        return net(planet, grossProduction(planet, context), effects, race) - replicated(planet, context);
     }
 
     /**
@@ -638,6 +902,77 @@ public class ColonyService {
         return populationCalculator.pollution(gross,
                 populationCalculator.cleanProduction(planet.getPopulation(), effects),
                 pollutionTolerance(planet, effects), effects.pollutionDivisor());
+    }
+
+    /** Сколько кредитов за ход приравнивается к единице производства в окупаемости — цена выкупа после половины стройки (п. 10). */
+    public static final int CREDITS_PER_PRODUCTION = PopulationCalculator.BUY_RATE_HALF_BUILT;
+
+    /**
+     * Что здание СНИМЕТ или ПРИБАВИТ этой колонии сверх прямой выработки, в единицах производства за ход —
+     * для окупаемости ({@code AiEmpireService.paybackTurns}, п. 10; 14.10.2026). Считается теми же функциями, что
+     * колония считает себя, а не второй формулой:
+     * <ul>
+     *   <li>уборка грязи: уборка сейчас минус уборка с действиями здания (переработчик, преобразователь,
+     *       наноразборщики);</li>
+     *   <li>тяжесть: гравитационный генератор возвращает отнятое штрафом производство;</li>
+     *   <li>деньги: прибавка налога от процента дохода (космопорт, биржа) за вычетом содержания, переведённая в
+     *       производство ценой выкупа ({@link #CREDITS_PER_PRODUCTION}).</li>
+     *   <li>мораль: процент от НАСТОЯЩЕЙ выработки и науки колонии вместо оценки «три с жителя», которую
+     *       знает статическая формула, — поправка заменяет оценку, а не добавляется к ней; строю без морали
+     *       (объединение, {@link MoraleRules#useless}) досуг не даёт ничего;</li>
+     *   <li>вместимость (биосферы): только у колонии, упёршейся в потолок, — столько, сколько даёт её средний
+     *       житель, на каждое новое место.</li>
+     * </ul>
+     * Поправка бывает отрицательной (мораль ниже оценки или бесполезна) — тогда она отнимает у оценки.
+     * Без этого окупаемость видела только прибавку к выработке, и ИИ не строил ни одного такого здания: замер
+     * {@code tools/ai_unused.py} — переработчик, преобразователь, генератор и биржу изучали шесть империй из семи.
+     */
+    public Integer reliefGain(PlanetEntity planet, ColonyContext context, Building building) {
+        if (building == null || planet.getPopulation() <= 0) {
+            return 0;
+        }
+        Map<BuildingEffectType, Integer> own = building.effects();
+        BuildingEffects effects = context.effects(planet);
+        int gain = 0;
+        if (own.containsKey(BuildingEffectType.POLLUTION_HALVINGS)
+                || own.containsKey(BuildingEffectType.POLLUTION_TOLERANCE_PERCENT)) {
+            Integer gross = grossProduction(planet, context);
+            BuildingEffects with = effects.plus(new BuildingEffects(own, 0));
+            gain += Math.max(0, pollution(planet, gross, effects) - pollution(planet, gross, with));
+        }
+        if (own.containsKey(BuildingEffectType.GRAVITY_NORMAL)) {
+            int penalty = -context.gravityPenaltyPercent(planet);
+            if (penalty > 0 && penalty < 100) {
+                gain += production(planet, context) * penalty / (100 - penalty);
+            }
+        }
+        Integer incomePercent = own.get(BuildingEffectType.INCOME_PERCENT);
+        if (incomePercent != null && incomePercent > 0) {
+            int tax = populationCalculator.taxIncome(planet.getPopulation(), effects.incomePercent() + incomePercent)
+                    - populationCalculator.taxIncome(planet.getPopulation(), effects.incomePercent());
+            int upkeep = building.upkeep() == null ? 0 : building.upkeep();
+            gain += Math.max(0, tax - upkeep) / CREDITS_PER_PRODUCTION;
+        }
+        Integer morale = own.get(BuildingEffectType.MORALE_PERCENT);
+        Integer room = own.get(BuildingEffectType.MAX_POPULATION);
+        if ((morale == null || morale <= 0) && (room == null || room <= 0)) {
+            return gain;
+        }
+        // Выработка колонии считается только здесь: зовут правило на каждое здание каждой колонии ИИ.
+        int workers = jobs(planet).workers();
+        int scientists = jobs(planet).scientists();
+        int output = production(planet, context) + populationCalculator.research(scientists, effects);
+        if (morale != null && morale > 0) {
+            int estimate = morale * AiEmpireService.MORALE_BASE_OUTPUT * (workers + scientists) / 100;
+            int real = Boolean.TRUE.equals(MoraleRules.useless(building, context.race(planet)))
+                    ? 0 : output * morale / 100;
+            gain += real - estimate;
+        }
+        if (room != null && room > 0
+                && planet.getPopulation() >= maxPopulation(planet, effects, context.race(planet))) {
+            gain += room * output / Math.max(1, planet.getPopulation());
+        }
+        return gain;
     }
 
     /** Уборка колонии за ход с учётом управляющего системы — для экрана колонии. */
@@ -733,12 +1068,14 @@ public class ColonyService {
         List<Building> buildings = context.buildings(planet);
         BuildingEffects effects = context.effects(planet);
         RaceEffects race = context.race(planet);
+        MoraleRules.Morale morale = context.morale(planet);
         PopulationJobs jobs = jobs(planet);
 
         // Земледелец и учёный поднимают выработку своих жителей во всей системе — п. 6.
+        // Пищевые репликаторы (п. 4.1.1) делают недостающую еду из производства — она уже в числе еды.
         Integer food = context.withLeader(
                 populationCalculator.food(planet.getClimate(), jobs.farmers(), effects, race),
-                planet, "FARMING");
+                planet, "FARMING") + replicated(planet, context);
         Integer production = production(planet, context);
         Integer consumption = populationCalculator.foodConsumption(planet.getPopulation(), race);
         Building project = context.catalog().get(planet.getProjectCode());
@@ -764,6 +1101,7 @@ public class ColonyService {
                                 + effects.productionPerWorker(), planet, "LABOR"),
                 effects.productionFlat(),
                 effects.productionPerColonist(),
+                effects.roboticFactories() * populationCalculator.roboticFactory(planet.getMinerals()),
                 context.withLeader(
                         populationCalculator.researchPerScientist()
                                 + effects.researchPerScientist(), planet, "SCIENCE"),
@@ -794,12 +1132,76 @@ public class ColonyService {
                 queue(planet, context),
                 planet.getRepeatBuild(),
                 planet.getAutoBuild(),
+                planet.getAutoJobs(),
                 buyCost(planet, projectCost(planet, project, context)),
                 planet.getSoldTurn(),
                 planet.getAlienPopulation(),
                 planet.getAlienPopulation() > 0
-                        ? assimilationRules.turnsPerColonist(race) - planet.getAssimilationPoints()
-                        : null);
+                        ? assimilationRules.turnsPerColonist(race, effects.alienManagement())
+                                - planet.getAssimilationPoints()
+                        : null,
+                morale.percent(),
+                morale.parts().stream()
+                        .map(part -> new ColonyDto.MoralePartDto(part.source().name(), part.percent()))
+                        .toList(),
+                morale.ignored(),
+                effects.foodPercent(),
+                effects.productionPercent(),
+                effects.researchPercent(),
+                outputParts(planet, context, race),
+                effects.amount(BuildingEffectType.FOOD_REPLICATOR) > 0);
+    }
+
+    /** Один источник эффектов колонии: род, имя (у постройки) и его эффекты — пункт 40. */
+    public record EffectSource(String source, String name, BuildingEffects effects) {
+    }
+
+    /**
+     * Слагаемые выработки колонии — field-backlog, пункт 40. База (климат и раса у еды, недра у
+     * производства, правило учёного у науки), каждый источник эффектов со своими «на жителя»,
+     * «твёрдо» и «процентом», лидер системы и уборка загрязнения. Числа берутся теми же
+     * функциями, что считают итог, — клиент их только показывает.
+     */
+    private List<ColonyDto.OutputPartDto> outputParts(PlanetEntity planet, ColonyContext context, RaceEffects race) {
+        List<ColonyDto.OutputPartDto> parts = new ArrayList<>();
+        parts.add(new ColonyDto.OutputPartDto("FOOD", "BASE", null,
+                populationCalculator.foodPerFarmer(planet.getClimate(), race), 0, 0, 0));
+        parts.add(new ColonyDto.OutputPartDto("PRODUCTION", "BASE", null,
+                planet.getMinerals().getProductionPerWorker(), 0, 0, 0));
+        parts.add(new ColonyDto.OutputPartDto("RESEARCH", "BASE", null,
+                populationCalculator.researchPerScientist(), 0, 0, 0));
+        for (EffectSource source : context.effectSources(planet)) {
+            BuildingEffects e = source.effects();
+            addPart(parts, "FOOD", source, e.foodPerFarmer(), e.foodFlat(), e.foodPercent(), 0);
+            // Роботизированный завод — твёрдая прибавка этого источника, посчитанная по недрам (п. 10).
+            addPart(parts, "PRODUCTION", source, e.productionPerWorker(),
+                    e.productionFlat() + e.roboticFactories() * populationCalculator.roboticFactory(planet.getMinerals()),
+                    e.productionPercent(), e.productionPerColonist());
+            addPart(parts, "RESEARCH", source, e.researchPerScientist(), e.researchFlat(), e.researchPercent(), 0);
+        }
+        addLeader(parts, "FOOD", context.leaderPercent(planet, "FARMING"));
+        addLeader(parts, "PRODUCTION", context.leaderPercent(planet, "LABOR"));
+        addLeader(parts, "RESEARCH", context.leaderPercent(planet, "SCIENCE"));
+        Integer pollution = pollution(planet, context);
+        if (pollution != null && pollution > 0) {
+            parts.add(new ColonyDto.OutputPartDto("PRODUCTION", "POLLUTION", null, 0, -pollution, 0, 0));
+        }
+        return parts;
+    }
+
+    private static void addPart(List<ColonyDto.OutputPartDto> parts, String resource, EffectSource source,
+                                Integer perUnit, Integer flat, Integer percent, Integer perColonist) {
+        if (perUnit == 0 && flat == 0 && percent == 0 && perColonist == 0) {
+            return;
+        }
+        parts.add(new ColonyDto.OutputPartDto(resource, source.source(), source.name(), perUnit, flat, percent,
+                perColonist));
+    }
+
+    private static void addLeader(List<ColonyDto.OutputPartDto> parts, String resource, Integer percent) {
+        if (percent != null && percent != 0) {
+            parts.add(new ColonyDto.OutputPartDto(resource, "LEADER", null, 0, 0, percent, 0));
+        }
     }
 
     /**
@@ -813,9 +1215,21 @@ public class ColonyService {
     public List<ColonyProjectDto> available(PlanetEntity planet, ColonyContext context) {
         // Занятое очередью из списка убирается: здание строится однажды, и предлагать его
         // второй раз значит обещать то, чего не будет, — п. 10.
-        Set<String> queued = planet.getBuildQueue().stream()
-                .filter(code -> !Boolean.TRUE.equals(ColonyProject.repeatable(code)))
-                .collect(Collectors.toSet());
+        // Стоящее на стапеле — тоже (06.10.2026): здание, поставленное первым в очередь, и есть
+        // текущая стройка, и в списке оно оставалось, хотя то же здание вторым местом уходило.
+        // Дома и товары остаются: ими колония только занята, и вернуться к ним — выбор из списка.
+        // Дома и товары, уже стоящие в очереди, второй раз не предлагаются (07.10.2026): дойдя
+        // до первых, колония на них и остаётся, и вторые не начнутся никогда — «Дома ×2» в
+        // очереди лишены смысла.
+        Set<String> queued = new HashSet<>(planet.getBuildQueue().stream()
+                .filter(code -> !Boolean.TRUE.equals(ColonyProject.repeatable(code))
+                        || Boolean.TRUE.equals(ColonyProject.endless(code)))
+                .toList());
+        String current = planet.getProjectCode();
+        if (current != null && !Boolean.TRUE.equals(ColonyProject.repeatable(current))
+                && !Boolean.TRUE.equals(ColonyProject.endless(current))) {
+            queued.add(current);
+        }
         // Колониальных баз колония заказывает столько, сколько в системе свободных планет:
         // база повторяемая, но каждая занимает планету, и заказанная сверх числа планет
         // осталась бы без места — п. 4.1. Считаются все заказанные: готовая, на стапеле и
@@ -890,6 +1304,30 @@ public class ColonyService {
         if (hasFreePlanet(planet)) {
             projects.add(special(ColonyProject.COLONY_BASE));
         }
+        // Переделка планеты — п. 4.1.2.1 (13.10.2026, перенос MOO II).
+        if (technologies.contains(TerraformRules.TERRAFORMING_TECH)
+                && TerraformRules.terraformed(planet.getClimate(), false).isPresent()) {
+            projects.add(special(ColonyProject.TERRAFORM, TerraformRules.terraformCost(planet.getTerraformCount())));
+        }
+        if (technologies.contains(TerraformRules.GAIA_TECH)
+                && planet.getClimate() == com.sddnw.server.domain.enums.PlanetClimate.TERRAN) {
+            projects.add(special(ColonyProject.GAIA));
+        }
+        if (technologies.contains(TerraformRules.ARTIFICIAL_PLANET_TECH) && artificialTarget(planet).isPresent()) {
+            projects.add(special(ColonyProject.ARTIFICIAL_PLANET));
+        }
+        // Андроиды (п. 4.1, перенос MOO II) — пока в колонии есть место ещё на одного: сверх потолка
+        // по размеру планеты, а дальше каждый занимает место жителя.
+        if (androidRoom(planet, context)) {
+            for (Map.Entry<String, String> android : List.of(
+                    Map.entry(ColonyProject.ANDROID_FARMER, ANDROID_TECHS.get(ColonyProject.ANDROID_FARMER)),
+                    Map.entry(ColonyProject.ANDROID_WORKER, ANDROID_TECHS.get(ColonyProject.ANDROID_WORKER)),
+                    Map.entry(ColonyProject.ANDROID_SCIENTIST, ANDROID_TECHS.get(ColonyProject.ANDROID_SCIENTIST)))) {
+                if (technologies.contains(android.getValue())) {
+                    projects.add(special(android.getKey()));
+                }
+            }
+        }
         /*
           Гражданские корабли — п. 4.1 и п. 12. В MOO II они стоят в списке стройки готовыми,
           со своей твёрдой ценой, и собирать их в окне дизайна нельзя. Верфи они не требуют:
@@ -914,11 +1352,41 @@ public class ColonyService {
             }
         }
         for (Building building : context.catalog().values()) {
-            if (!built.contains(building.code()) && researched(building, technologies)) {
-                projects.add(toProject(building));
+            if (!built.contains(building.code()) && researched(building, technologies)
+                    && (!CapitolRules.CODE.equals(building.code()) || capitolBuildable(planet, context))) {
+                projects.add(toProject(building, jobs(planet)));
             }
         }
         return projects;
+    }
+
+    /**
+     * Можно ли заложить столицу на этой колонии — п. 10.1: строю она положена, у империи её
+     * нет, и другая колония её не строит. В MOO II столицу строят только взамен утраченной.
+     */
+    private Boolean capitolBuildable(PlanetEntity planet, ColonyContext context) {
+        return Boolean.TRUE.equals(context.capitolLost(planet.getOwnerPlayerId()))
+                && !Boolean.TRUE.equals(context.capitolOrderedElsewhere(planet));
+    }
+
+    /**
+     * Захваченная или подчинённая колония теряет столицу — п. 10.1: «if the empire's capitol
+     * is captured or destroyed». Захватчику она не достаётся — престол чужой империи ему не
+     * престол, а у него может быть и свой. Зовут это все пути, которыми колония меняет
+     * хозяина силой: десант и подчинение телепатами.
+     *
+     * @param context контекст хода, если захват идёт внутри посчитанного хода; иначе пусто
+     */
+    public void loseCapitol(PlanetEntity planet, ColonyContext context) {
+        planetBuildingRepository.findAllByPlanetId(planet.getId()).stream()
+                .filter(row -> CapitolRules.CODE.equals(row.getBuildingCode()))
+                .forEach(row -> {
+                    planetBuildingRepository.delete(row);
+                    log.info("Колония {} потеряла столицу", planet.getName());
+                });
+        if (context != null) {
+            context.sold(planet, CapitolRules.CODE);
+        }
     }
 
     /**
@@ -1053,6 +1521,11 @@ public class ColonyService {
     public PlanetEntity sellBuilding(PlayerEntity player, UUID planetId,
                                      String buildingCode, Integer turn) {
         PlanetEntity planet = requireOwnPlanet(player, planetId);
+        // Столицу не продают — п. 10.1: в оригинале её теряют только с колонией, а проданная
+        // за сотню кредитов, она обрушила бы мораль всей империи одним нажатием.
+        if (CapitolRules.CODE.equals(buildingCode)) {
+            throw new ConflictException("colony.capitolNotForSale", planet.getName());
+        }
         if (turn.equals(planet.getSoldTurn())) {
             throw new ConflictException("colony.soldThisTurn", planet.getName());
         }
@@ -1060,7 +1533,8 @@ public class ColonyService {
         PlanetBuildingEntity built = planetBuildingRepository.findAllByPlanetId(planetId).stream()
                 .filter(row -> row.getBuildingCode().equals(buildingCode))
                 .findFirst()
-                .orElseThrow(() -> new ConflictException("colony.noSuchBuilding", planet.getName(), buildingCode));
+                .orElseThrow(() -> new ConflictException("colony.noSuchBuilding", planet.getName(),
+                        projectLabel(buildingCode)));
         Building building = buildingCatalog.byCode().get(buildingCode);
         if (building == null) {
             throw new ConflictException("colony.unknownBuilding", buildingCode);
@@ -1097,6 +1571,21 @@ public class ColonyService {
         log.info("Игрок {} продал {} на колонии {} за {} кр. и {} ед. в стройку",
                 player.getName(), building.name(), planet.getName(), paid, paid);
         return planet;
+    }
+
+    /** Сколько единиц лежит в стройке колонии — для журнала отмены выкупа (пункт 74). */
+    @Transactional(readOnly = true)
+    public Integer projectPointsOf(UUID planetId) {
+        return planetRepository.findById(planetId).map(PlanetEntity::getProjectPoints).orElse(0);
+    }
+
+    /** Ход постройки здания колонии — для журнала отмены продажи (пункт 74); пусто — нет такого. */
+    @Transactional(readOnly = true)
+    public Integer builtTurnOf(UUID planetId, String buildingCode) {
+        return planetBuildingRepository.findAllByPlanetId(planetId).stream()
+                .filter(row -> row.getBuildingCode().equals(buildingCode))
+                .map(PlanetBuildingEntity::getBuiltTurn)
+                .findFirst().orElse(0);
     }
 
     /**
@@ -1154,7 +1643,8 @@ public class ColonyService {
         ColonyProjectDto project = buildable(planet, context(planet)).stream()
                 .filter(candidate -> candidate.code().equals(request.projectCode()))
                 .findFirst()
-                .orElseThrow(() -> new ConflictException("colony.cannotBuild", planet.getName(), request.projectCode()));
+                .orElseThrow(() -> new ConflictException("colony.cannotBuild", planet.getName(),
+                        projectLabel(request.projectCode())));
 
         // У корабля код несёт проект, а планета хранит их раздельно: код стройки остаётся
         // «SHIP», проект уходит в свою колонку. Так переделка проекта в окне дизайна не
@@ -1228,7 +1718,7 @@ public class ColonyService {
      * @return колония с пополненной очередью
      */
     @Transactional
-    public PlanetEntity enqueueTemplate(PlayerEntity player, UUID planetId, List<String> codes) {
+    public TemplateOutcome enqueueTemplate(PlayerEntity player, UUID planetId, List<String> codes) {
         PlanetEntity planet = requireOwnPlanet(player, planetId);
         ColonyContext context = context(planet);
         Set<String> possible = available(planet, context).stream()
@@ -1236,11 +1726,17 @@ public class ColonyService {
                 .collect(Collectors.toSet());
 
         List<String> laid = new ArrayList<>();
+        // Пропущенное — с причиной (field-backlog, пункт 97): шаблон пишут до партии, и
+        // несбыточное в нём не ошибка, но игроку надо сказать, ЧТО не легло и почему.
+        List<Skip> skipped = new ArrayList<>();
         for (String code : codes) {
             if (planet.getBuildQueue().size() >= ColonyProject.QUEUE_LIMIT) {
-                break;
+                skipped.add(new Skip(projectLabel(code), new MessageKey("colony.template.queueFull")));
+                continue;
             }
             if (!possible.contains(code)) {
+                skipped.add(new Skip(projectLabel(code), new MessageKey(
+                        isKnownProject(code) ? "colony.template.notNow" : "colony.template.gone")));
                 continue;
             }
             try {
@@ -1263,6 +1759,7 @@ public class ColonyService {
                  */
                 log.info("Шаблон: {} колонии {} пропущен — {}", code, planet.getName(),
                         refused.getMessage());
+                skipped.add(new Skip(projectLabel(code), refused));
             }
             // Повторяемое можно класть снова, а здание из списка уходит: обновляем.
             if (!Boolean.TRUE.equals(ColonyProject.repeatable(code))) {
@@ -1272,8 +1769,27 @@ public class ColonyService {
         if (laid.isEmpty()) {
             throw new ConflictException("colony.templateEmpty", planet.getName());
         }
-        log.info("Колонии {} заложен шаблон: {}", planet.getName(), laid);
-        return planet;
+        log.info("Колонии {} заложен шаблон: {}, пропущено {}", planet.getName(), laid, skipped.size());
+        return new TemplateOutcome(planet, skipped);
+    }
+
+    /**
+     * Строка шаблона, не легшая в очередь: что (название или общее слово) и почему —
+     * ключом или самим отказом; на язык читателя их переводит {@code Messages}.
+     */
+    public record Skip(Object name, Object reason) {
+    }
+
+    /** Итог закладки шаблона — пункт 97: колония и пропущенное. */
+    public record TemplateOutcome(PlanetEntity planet, List<Skip> skipped) {
+    }
+
+    /**
+     * Знает ли игра такой проект вообще: здание справочника или особый проект колонии. Иначе
+     * строка шаблона ссылается на то, чего в игре больше нет, — и так и говорится.
+     */
+    private boolean isKnownProject(String code) {
+        return buildingCatalog.byCode().containsKey(code) || Boolean.TRUE.equals(ColonyProject.repeatable(code));
     }
 
     /**
@@ -1294,6 +1810,14 @@ public class ColonyService {
         }
         if (request.autoBuild() != null) {
             planet.setAutoBuild(request.autoBuild());
+        }
+        if (request.autoJobs() != null) {
+            planet.setAutoJobs(request.autoJobs());
+            // Включённое правило действует сразу, а не с конца хода: игрок видит, как колония
+            // встала, и решает, годится ли ему это.
+            if (Boolean.TRUE.equals(planet.getAutoJobs())) {
+                applyAutoJobs(planet, context(planet));
+            }
         }
         log.info("Колония {} игрока {}: повтор очереди {}, автострой {}",
                 planet.getName(), player.getName(), planet.getRepeatBuild(), planet.getAutoBuild());
@@ -1331,17 +1855,25 @@ public class ColonyService {
             return setProject(player, planetId, request);
         }
 
+        // То, что уже на стапеле, в очередь не ставят: здание строится однажды, и очередь
+        // просто отменила бы его на следующем ходу. Корабли и шпионов это не касается —
+        // их строят сколько угодно раз. Спрашивается ДО списка доступного: стоящее на
+        // стапеле из него убрано, и отказ иначе говорил бы «нельзя», а не «уже строится».
+        if (!Boolean.TRUE.equals(ColonyProject.repeatable(request.projectCode()))
+                && request.projectCode().equals(planet.getProjectCode())) {
+            throw new ConflictException("colony.alreadyBuilding", planet.getName(),
+                    projectLabel(request.projectCode()));
+        }
+        if (Boolean.TRUE.equals(ColonyProject.endless(request.projectCode()))
+                && planet.getBuildQueue().contains(request.projectCode())) {
+            throw new ConflictException("colony.alreadyQueued", planet.getName(),
+                    projectLabel(request.projectCode()));
+        }
         ColonyProjectDto project = available(planet, context(planet)).stream()
                 .filter(candidate -> candidate.code().equals(request.projectCode()))
                 .findFirst()
-                .orElseThrow(() -> new ConflictException("colony.cannotQueue", planet.getName(), request.projectCode()));
-        // То, что уже на стапеле, в очередь не ставят: здание строится однажды, и очередь
-        // просто отменила бы его на следующем ходу. Корабли и шпионов это не касается —
-        // их строят сколько угодно раз.
-        if (!Boolean.TRUE.equals(ColonyProject.repeatable(project.code()))
-                && project.code().equals(planet.getProjectCode())) {
-            throw new ConflictException("colony.alreadyBuilding", planet.getName(), project.name());
-        }
+                .orElseThrow(() -> new ConflictException("colony.cannotQueue", planet.getName(),
+                        projectLabel(request.projectCode())));
         if (planet.getBuildQueue().size() >= ColonyProject.QUEUE_LIMIT) {
             throw new ConflictException("colony.queueFull", planet.getName(), ColonyProject.QUEUE_LIMIT);
         }
@@ -1472,6 +2004,8 @@ public class ColonyService {
         // счётчик, знавший лишь о корабле, показывал ноль колоний на партии, где их было
         // с десяток.
         activity.record(player.getGame().getId(), player.getId(), EmpireActivityService.COLONIZED);
+        activity.moment(player.getGame().getId(), player, null, MilestoneService.COLONY_FOUNDED,
+                new MessageKey("milestone.colonyFounded", target.getName()));
         log.info("Игрок {} заселил {} колониальной базой с {}",
                 player.getName(), target.getName(), base.getName());
         return target;
@@ -1563,6 +2097,16 @@ public class ColonyService {
         return planet.getProjectCode();
     }
 
+    /**
+     * Чем назвать проект в отказе: здание — его названием на языке читателя, прочее (корабль,
+     * база, шпион) — общим словом. Код проекта («biospheres», «SHIP:…») — служебный язык, и в
+     * отказ он не попадает (field-backlog, пункт 198): отказ стройки игрок читает прямо в окне.
+     */
+    private Object projectLabel(String projectCode) {
+        Building building = buildingCatalog.byCode().get(projectCode);
+        return building != null ? building.name() : new MessageKey("colony.thisProject");
+    }
+
     private String projectName(PlanetEntity planet, Building building, ColonyContext context) {
         String projectCode = planet.getProjectCode();
         if (ColonyProject.isShip(projectCode)) {
@@ -1607,6 +2151,12 @@ public class ColonyService {
         if (ColonyProject.TRANSPORT.equals(projectCode)) {
             return ColonyProject.TRANSPORT_COST;
         }
+        if (ColonyProject.isReshape(projectCode)) {
+            return reshapeCost(planet);
+        }
+        if (ColonyProject.isAndroid(projectCode)) {
+            return ColonyProject.ANDROID_COST;
+        }
         return building == null ? null : building.cost();
     }
 
@@ -1624,7 +2174,7 @@ public class ColonyService {
                 messages.get("colony.project.ship.description", design.hullName(),
                         String.valueOf(design.attack()), String.valueOf(design.defense())),
                 design.cost(), 0, Boolean.TRUE, null,
-                ColonyProject.repeatable(ColonyProject.SHIP));
+                ColonyProject.repeatable(ColonyProject.SHIP), null, null);
     }
 
     /**
@@ -1636,13 +2186,82 @@ public class ColonyService {
      * именам, и текст ему не нужен вовсе.
      */
     private ColonyProjectDto special(String code) {
+        return special(code, SPECIALS.get(code).cost());
+    }
+
+    /** Особый проект с ценой, которая зависит от планеты, — терраформирование дорожает (п. 4.1.2.1). */
+    private ColonyProjectDto special(String code, Integer cost) {
         Special special = SPECIALS.get(code);
         return new ColonyProjectDto(
                 code,
                 messages.get("colony.project." + special.key() + ".name"),
                 messages.get("colony.project." + special.key() + ".description"),
-                special.cost(), 0, Boolean.TRUE, null,
-                ColonyProject.repeatable(code));
+                cost, 0, Boolean.TRUE, null,
+                ColonyProject.repeatable(code), null, null);
+    }
+
+    /** Цена переделки планеты, которую она строит сейчас, — п. 4.1.2.1. */
+    public Integer reshapeCost(PlanetEntity planet) {
+        String code = planet.getProjectCode();
+        if (ColonyProject.TERRAFORM.equals(code)) {
+            return TerraformRules.terraformCost(planet.getTerraformCount());
+        }
+        if (ColonyProject.GAIA.equals(code)) {
+            return TerraformRules.GAIA_COST;
+        }
+        return TerraformRules.ARTIFICIAL_PLANET_COST;
+    }
+
+    /**
+     * Тело своей системы, из которого можно сделать планету, — п. 4.1: газовый гигант или пояс
+     * астероидов, где никто не живёт (своя застава не мешает). Берётся ближайшее к звезде.
+     */
+    public Optional<PlanetEntity> artificialTarget(PlanetEntity planet) {
+        if (planet.getStarSystem() == null) {
+            return Optional.empty();
+        }
+        return planet.getStarSystem().getPlanets().stream()
+                .filter(body -> TerraformRules.convertible(body.getClimate()))
+                .filter(body -> body.getPopulation() <= 0)
+                .filter(body -> body.getOwnerPlayerId() == null
+                        || body.getOwnerPlayerId().equals(planet.getOwnerPlayerId()))
+                .min(java.util.Comparator.comparing(PlanetEntity::getOrbit));
+    }
+
+    /**
+     * Переделка планеты достроена — п. 4.1.2.1: климат на ступень лучше (или Гея), либо тело
+     * системы становится планетой. Вместимость записана на планете и меняется вместе с
+     * климатом, как в событии смены климата; лишние жители уходят сразу.
+     *
+     * @return ключ строки итогов хода; пусто — переделывать уже нечего (планету переделали раньше)
+     */
+    public Optional<MessageKey> reshape(PlanetEntity planet, Long gameSeed) {
+        String code = planet.getProjectCode();
+        if (ColonyProject.ARTIFICIAL_PLANET.equals(code)) {
+            return artificialTarget(planet).map(body -> {
+                String was = body.getClimate().name();
+                body.setPlanetSize(TerraformRules.artificialSize(body.getClimate()));
+                body.setClimate(com.sddnw.server.domain.enums.PlanetClimate.BARREN);
+                body.setMinerals(TerraformRules.artificialMinerals());
+                body.setMaxPopulation(populationCalculator.maxPopulation(body.getPlanetSize(), body.getClimate()));
+                return new MessageKey("turn.build.artificialPlanet", planet.getName(), body.getName(),
+                        "enum.PlanetClimate." + was);
+            });
+        }
+        Optional<com.sddnw.server.domain.enums.PlanetClimate> next = ColonyProject.GAIA.equals(code)
+                ? (planet.getClimate() == com.sddnw.server.domain.enums.PlanetClimate.TERRAN
+                        ? Optional.of(com.sddnw.server.domain.enums.PlanetClimate.GAIA) : Optional.empty())
+                : TerraformRules.terraformed(planet.getClimate(),
+                        TerraformRules.tundraRoll(gameSeed, planet.getName()));
+        return next.map(climate -> {
+            planet.setClimate(climate);
+            planet.setMaxPopulation(populationCalculator.maxPopulation(planet.getPlanetSize(), climate));
+            if (ColonyProject.TERRAFORM.equals(code)) {
+                planet.setTerraformCount(planet.getTerraformCount() + 1);
+            }
+            return new MessageKey(ColonyProject.GAIA.equals(code) ? "turn.build.gaia" : "turn.build.terraformed",
+                    planet.getName(), "enum.PlanetClimate." + climate.name());
+        });
     }
 
     /** Проект корабля, который строит колония; пусто — проект убран из ячейки. */
@@ -1663,6 +2282,16 @@ public class ColonyService {
      * сервере ({@code PopulationCalculator.sellValue}).
      */
     private ColonyProjectDto toProject(Building building) {
+        return toProject(building, null);
+    }
+
+    /**
+     * Здание строкой списка стройки — с окупаемостью на этой колонии (field-backlog, пункт 122).
+     * Число то же, по которому выбирают ИИ и автострой: второго расчёта нет. Построенным
+     * зданиям ({@code jobs == null}) окупаемость не считается — выбирать там нечего.
+     */
+    private ColonyProjectDto toProject(Building building, PopulationJobs jobs) {
+        Integer payback = jobs == null ? null : AiEmpireService.paybackTurns(building, jobs);
         return new ColonyProjectDto(
                 building.code(),
                 building.name(),
@@ -1673,6 +2302,44 @@ public class ColonyService {
                 populationCalculator.sellValue(building.cost()),
                 // Здание на планете одно: второй раз его не построить, и в очередь второй
                 // раз оно не встаёт.
-                Boolean.FALSE);
+                Boolean.FALSE,
+                payback,
+                jobs == null || payback != null ? null : purpose(building));
+    }
+
+    /**
+     * Ради чего строят здание без окупаемости в производстве — пункт 122: у обороны, щитов,
+     * казарм, ферм, биржи и морали срока нет, и выдумывать его нельзя, но назвать назначение
+     * можно — по его эффектам. Здания без эффектов — оборона: платформы и щиты бьются в бою, а
+     * не прибавляют колонии ничего.
+     */
+    static String purpose(Building building) {
+        java.util.Set<BuildingEffectType> types = building.effects().keySet();
+        if (types.isEmpty() || types.contains(BuildingEffectType.GROUND_DEFENCE_PERCENT)
+                || types.contains(BuildingEffectType.BARRACKS)) {
+            return "DEFENCE";
+        }
+        if (types.contains(BuildingEffectType.FOOD_FLAT) || types.contains(BuildingEffectType.FOOD_PER_FARMER)
+                || types.contains(BuildingEffectType.FOOD_PERCENT)) {
+            return "FOOD";
+        }
+        if (types.contains(BuildingEffectType.INCOME_PERCENT) || types.contains(BuildingEffectType.INCOME_FLAT)) {
+            return "INCOME";
+        }
+        if (types.contains(BuildingEffectType.MAX_POPULATION) || types.contains(BuildingEffectType.POPULATION_GROWTH_K)
+                || types.contains(BuildingEffectType.GROWTH_PERCENT)) {
+            return "GROWTH";
+        }
+        if (types.contains(BuildingEffectType.POLLUTION_HALVINGS) || types.contains(BuildingEffectType.POLLUTION_NONE)
+                || types.contains(BuildingEffectType.POLLUTION_TOLERANCE_PERCENT)) {
+            return "POLLUTION";
+        }
+        if (types.contains(BuildingEffectType.MORALE_PERCENT)) {
+            return "MORALE";
+        }
+        if (types.contains(BuildingEffectType.CAPITOL) || types.contains(BuildingEffectType.ALIEN_MANAGEMENT)) {
+            return "GOVERNANCE";
+        }
+        return "OTHER";
     }
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Отход из боя поштучно — п. 8 (06.10.2026): корабль получает приказ отходить и уходит
+        с поля в свой следующий ход. Пусто у всех — никто не отходит.
+    -->
+    <changeSet id="116-battle-ship-retreat" author="sddnw">
+        <addColumn tableName="battle_ship">
+            <column name="retreating" type="boolean"/>
+            <column name="retreated" type="boolean"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

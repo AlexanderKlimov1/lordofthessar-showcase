@@ -287,7 +287,7 @@ def decode(frame):
 
 
 # Какую долю кадров с самыми далёкими краями рамка не учитывает — см. action_box.
-CROP_SHARE = 0.15
+CROP_SHARE = 0.3
 
 
 def action_box(frames):

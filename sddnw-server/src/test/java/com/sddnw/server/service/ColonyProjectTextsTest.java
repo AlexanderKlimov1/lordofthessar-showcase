@@ -99,7 +99,8 @@ class ColonyProjectTextsTest {
     @Test
     @DisplayName("Таблица особых проектов не пуста — иначе проверке нечего проверять")
     void tableIsNotEmpty() {
-        // Все восемь: дома, товары, шпион, грузовик, база и три гражданских корабля.
-        assertEquals(8, ColonyService.specialTextKeys().size());
+        // Все одиннадцать: дома, товары, шпион, грузовик, база, три гражданских корабля и три
+        // переделки планет (терраформирование, Гея, искусственная планета).
+        assertEquals(14, ColonyService.specialTextKeys().size());
     }
 }

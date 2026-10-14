@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Хроника партии (field-backlog, пункт 138). game_milestone.peak: пик ли это для сцены конца.
+        Хроника хранит и повторные знакомства, войны, договоры, гибель империй — это «не пик».
+        Пусто у старых строк значит «пик»: до хроники писались только пики.
+    -->
+    <changeSet id="109-milestone-peak" author="sddnw">
+        <addColumn tableName="game_milestone">
+            <column name="peak" type="boolean"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

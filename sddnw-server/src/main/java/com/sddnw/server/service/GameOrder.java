@@ -71,7 +71,10 @@ public final class GameOrder {
     public static final Comparator<ShipDesignEntity> DESIGNS =
             Comparator.comparing(ShipDesignEntity::getSlot)
                     .thenComparing(ShipDesignEntity::getCreatedTurn)
-                    .thenComparing(ShipDesignEntity::getName);
+                    .thenComparing(ShipDesignEntity::getName)
+                    // Трофейная копия совпадает с исходником ячейкой, ходом и именем (14.10.2026) — свой прежде трофея.
+                    .thenComparing(design -> Boolean.TRUE.equals(design.getTrophy()))
+                    .thenComparing(ShipDesignEntity::getHullCode);
 
     /**
      * Флоты — по ходу прибытия, месту хозяина, звезде вылета и звезде назначения.
@@ -179,8 +182,12 @@ public final class GameOrder {
      *                построенное раньше
      */
     public static Comparator<FleetShipEntity> fleetShips(Map<UUID, ShipDesignEntity> designs) {
-        return Comparator.comparing(row -> designs.get(row.getDesignId()),
-                Comparator.nullsLast(DESIGNS));
+        // Строк одного проекта во флоте бывает несколько — с разным опытом экипажа (CrewRules, 14.10.2026):
+        // спор равных решают опыт и число кораблей, а не идентификатор строки.
+        return Comparator.<FleetShipEntity, ShipDesignEntity>comparing(row -> designs.get(row.getDesignId()),
+                        Comparator.nullsLast(DESIGNS))
+                .thenComparing(FleetShipEntity::getExperience)
+                .thenComparing(FleetShipEntity::getShips);
     }
 
     /**

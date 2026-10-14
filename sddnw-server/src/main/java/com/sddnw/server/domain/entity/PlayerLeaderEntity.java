@@ -72,6 +72,56 @@ public class PlayerLeaderEntity {
     @Column(name = "arrives_turn")
     private Integer arrivesTurn;
 
+    /**
+     * Послужной список — field-backlog, пункт 140: лидер с именем и званием уже почти персонаж,
+     * не хватает того, что он сделал. Корабельному — бои его флота, выигранные и проигранные
+     * (ничьи не в счёт); колониальному — ход и население системы на начало срока: рост за срок
+     * считается при показе по нынешнему населению.
+     */
+    @Column(name = "battles_won", nullable = false)
+    private Integer battlesWon = 0;
+
+    @Column(name = "battles_lost", nullable = false)
+    private Integer battlesLost = 0;
+
+    @Column(name = "term_start_turn")
+    private Integer termStartTurn;
+
+    @Column(name = "term_start_population")
+    private Integer termStartPopulation;
+
+    public Integer getBattlesWon() {
+        return battlesWon;
+    }
+
+    public void setBattlesWon(Integer battlesWon) {
+        this.battlesWon = battlesWon;
+    }
+
+    public Integer getBattlesLost() {
+        return battlesLost;
+    }
+
+    public void setBattlesLost(Integer battlesLost) {
+        this.battlesLost = battlesLost;
+    }
+
+    public Integer getTermStartTurn() {
+        return termStartTurn;
+    }
+
+    public void setTermStartTurn(Integer termStartTurn) {
+        this.termStartTurn = termStartTurn;
+    }
+
+    public Integer getTermStartPopulation() {
+        return termStartPopulation;
+    }
+
+    public void setTermStartPopulation(Integer termStartPopulation) {
+        this.termStartPopulation = termStartPopulation;
+    }
+
     public UUID getId() {
         return id;
     }

@@ -37,7 +37,7 @@ class ContactByRangeTest {
     private final DiplomacyRelationRepository relations = Mockito.mock(DiplomacyRelationRepository.class);
     private final PlayerTechnologyRepository technologies = Mockito.mock(PlayerTechnologyRepository.class);
     private final DiplomacyService diplomacy = new DiplomacyService(null, relations, null, null, null,
-            null, technologies, null, null, null);
+            null, technologies, null, null, null, null, null, null, null);
 
     private final PlayerEntity first = player(1);
     private final PlayerEntity second = player(2);

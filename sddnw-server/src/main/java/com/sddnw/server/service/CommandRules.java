@@ -49,6 +49,28 @@ public class CommandRules {
         return base * Math.max(0, 100 + race.commandPercent()) / 100;
     }
 
+    /** Тахионная связь — Physics (перенос MOO II): «increases the command points of these bases by +1». */
+    public static final String TACHYON_COMMUNICATIONS = "tachyon-communications";
+
+    /** Подпространственная связь — «increases the command points given by a base by +2». */
+    public static final String SUBSPACE_COMMUNICATIONS = "subspace-communications";
+
+    /** Гиперпространственная связь — «increases the command points of star bases … by +3 points». */
+    public static final String HYPERSPACE_COMMUNICATIONS = "hyperspace-communications";
+
+    /**
+     * Запас с прибавкой связи — п. 8 (перенос MOO II): каждая орбитальная база империи (звёздная
+     * база, станция, крепость) даёт +1 с тахионной связью, +2 с подпространственной и +3 с
+     * гиперпространственной (лучшая, не сумма). <i>Отступление</i>: сами базы командных очков у нас
+     * не дают. Приказы кораблям в пути у базы — {@link FlightRules#canOrder}.
+     */
+    public Integer capacity(Integer colonies, RaceEffects race, Integer bases, java.util.Set<String> technologies) {
+        int perBase = technologies.contains(HYPERSPACE_COMMUNICATIONS) ? 3
+                : technologies.contains(SUBSPACE_COMMUNICATIONS) ? 2
+                : technologies.contains(TACHYON_COMMUNICATIONS) ? 1 : 0;
+        return capacity(colonies, race) + Math.max(0, bases) * perBase;
+    }
+
     /**
      * Сколько казна платит за флот сверх запаса — п. 8.
      * <p>

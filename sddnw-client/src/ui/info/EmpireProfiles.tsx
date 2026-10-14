@@ -1,5 +1,7 @@
 import type { EmpireProfile } from '../../api/types';
-import { t } from '../../i18n';
+import { t, useT } from '../../i18n';
+import { useGameStore } from '../../state/gameStore';
+import { SkillLines, skillNameKey } from '../newgame/aiSkills';
 import { Figure } from '../Figure';
 import { figureLabelClass, signed } from '../accent';
 
@@ -16,6 +18,10 @@ import { figureLabelClass, signed } from '../accent';
  * безымянен.
  */
 export function EmpireProfiles({ empires }: { empires: EmpireProfile[] }) {
+  useT();
+  // Уровень сложности партии — пункт 87: у империи ИИ сказано, как она играет, теми же строками,
+  // что в окне новой игры. Прибавок нет — и это тоже сказано.
+  const aiSkill = useGameStore((state) => state.game?.aiSkill);
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {empires.map((empire) => (
@@ -32,7 +38,11 @@ export function EmpireProfiles({ empires }: { empires: EmpireProfile[] }) {
             <Fact label={t('profiles.government')} value={empire.government ?? t('profiles.notChosen')} />
             {/* Характер есть только у ИИ: за человека решает человек — п. 15. */}
             <Fact label={t('profiles.ruler')} value={empire.character ?? t('profiles.human')} />
+            {empire.character && !empire.own ? (
+              <Fact label={t('newGame.difficulty')} value={t(skillNameKey(aiSkill))} />
+            ) : null}
           </div>
+          {empire.character && !empire.own ? <SkillLines code={aiSkill} className="mb-2 space-y-0.5 text-11 text-ink-soft" /> : null}
 
           {empire.traits.length === 0 ? (
             <p className="text-11 text-ink-faint">

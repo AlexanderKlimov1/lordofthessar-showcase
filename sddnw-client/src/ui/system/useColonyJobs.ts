@@ -23,6 +23,9 @@ export function useColonyJobs(planet: Planet) {
 
   const [jobs, setJobs] = useState<Jobs>({ farmers: 0, workers: 0, scientists: 0 });
   const [error, setError] = useState<string | null>(null);
+  // Группа «на руках» (щелчок по фигурке, `useColonistPick`): взятые жители уже сняты с работы,
+  // и выработка колонии считается без них, пока их не положат — на новое место или обратно.
+  const [lifted, lift] = useState<{ from: keyof Jobs; count: number } | null>(null);
 
   useEffect(() => {
     setJobs({
@@ -31,6 +34,7 @@ export function useColonyJobs(planet: Planet) {
       scientists: colony?.scientists ?? 0,
     });
     setError(null);
+    lift(null);
   }, [planet.id, colony?.farmers, colony?.workers, colony?.scientists]);
 
   const own = planet.ownerPlayerId === credentials?.playerId;
@@ -61,5 +65,10 @@ export function useColonyJobs(planet: Planet) {
       });
   };
 
-  return { jobs, move, error, own };
+  /** Распределение без взятых на руки: от него считается выработка, пока группа в полёте. */
+  const working: Jobs = lifted
+    ? { ...jobs, [lifted.from]: Math.max(0, jobs[lifted.from] - lifted.count) }
+    : jobs;
+
+  return { jobs, working, lift, move, error, own };
 }

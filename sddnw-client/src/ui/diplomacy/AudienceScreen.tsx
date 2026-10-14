@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { gameApi } from '../../api/client';
+import { treatyRefusal, warRefusal } from './diplomacyRules';
 import type {
   DiplomacyActionCode,
   DiplomacyRelation,
@@ -10,6 +11,7 @@ import { useModalEscape } from '../useModalEscape';
 import { TechTradePanel } from './TechTradePanel';
 import { t, useT, type Key } from '../../i18n';
 import { RacePortrait } from '../race/RacePortrait';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Переговоры с послом — п. 15, экран Diplomacy MOO II
@@ -143,6 +145,11 @@ export function AudienceScreen({ onClose }: { onClose: () => void }) {
   const colour = partner.color ?? '#7d8aa3';
   const signed = new Set(partner.treaties);
   const negotiates = partner.negotiates !== false;
+  // Предыстория расы посла (пункт 43): кто перед игроком и чего он хочет — факты мира, а не
+  // строка из таблицы сторон.
+  const lore = useGameStore.getState().races.find((race) => race.code === partner.raceCode)?.lore;
+  // Посол говорит голосом своего правителя (пункт 43): у агрессора иначе, чем у миролюбца.
+  const greetingKey = (partner.personality ? `audience.greeting.${partner.personality}` : 'audience.greeting') as Key;
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-space-950">
@@ -152,6 +159,9 @@ export function AudienceScreen({ onClose }: { onClose: () => void }) {
       {/* Плашка с послом по центру сверху — цветом его империи, как в оригинале. */}
       <header className="relative py-4 text-center text-18" style={{ color: colour }}>
         {t('audience.title', { name: partner.playerName ?? partner.raceName ?? '' })}
+        {lore ? (
+          <p className="mx-auto mt-2 max-w-[min(48rem,90%)] text-13 italic leading-snug text-ink-soft">{lore}</p>
+        ) : null}
       </header>
 
       {/* Список предложений слева вверху: строки без рамок — так в оригинале. */}
@@ -168,9 +178,11 @@ export function AudienceScreen({ onClose }: { onClose: () => void }) {
               />
               {negotiates ? (
                 <>
+                  {/* Воюющим договоры не подписывают — пункт гаснет с причиной (пункт 76). */}
                   <Option
                     label="audience.proposeTreaty"
-                    disabled={busy || signed.size >= TREATIES.length}
+                    disabled={busy || signed.size >= TREATIES.length || treatyRefusal(partner) !== null}
+                    title={treatyRefusal(partner) ? t(treatyRefusal(partner)!) : undefined}
                     onClick={() => setMenu('treaty')}
                   />
                   <Option
@@ -192,7 +204,8 @@ export function AudienceScreen({ onClose }: { onClose: () => void }) {
               ) : null}
               <Option
                 label="audience.war"
-                disabled={busy || partner.stance === 'WAR'}
+                disabled={busy || warRefusal(partner) !== null}
+                title={warRefusal(partner) ? t(warRefusal(partner)!, { name: partner.playerName ?? '' }) : undefined}
                 onClick={() => act('DECLARE_WAR')}
               />
               <Option label="audience.bye" disabled={false} onClick={onClose} />
@@ -257,7 +270,7 @@ export function AudienceScreen({ onClose }: { onClose: () => void }) {
       <footer className="relative px-8 pb-8 text-center">
         <p className="mx-auto max-w-[min(56rem,90%)] text-16 leading-snug text-good">
           {speech
-            ?? t('audience.greeting', {
+            ?? t(greetingKey, {
               name: partner.playerName ?? partner.raceName ?? '',
               race: partner.raceName ?? '',
             })}
@@ -267,7 +280,7 @@ export function AudienceScreen({ onClose }: { onClose: () => void }) {
           {partner.treatyLabels.length > 0 ? ' · ' + partner.treatyLabels.join(' · ') : ''}
           {partner.character ? ' · ' + partner.character : ''}
         </p>
-        {error ? <p className="mt-2 text-12 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mt-2 text-12" message={error} /> : null}
       </footer>
     </div>
   );
@@ -285,14 +298,17 @@ const TREATIES: { code: TreatyCode; label: Key }[] = [
 function Option({
   label,
   disabled,
+  title,
   onClick,
 }: {
   label: Key;
   disabled: boolean;
+  /** Почему пункт погашен — пункт 76. */
+  title?: string;
   onClick: () => void;
 }) {
   return (
-    <li>
+    <li title={title}>
       <Line disabled={disabled} onClick={onClick}>
         {t(label)}
       </Line>

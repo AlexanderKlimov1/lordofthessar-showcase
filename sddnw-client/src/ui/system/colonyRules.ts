@@ -43,19 +43,33 @@ export const pollution = (colony: Colony, produced: number, clean: number): numb
  * осталось колонии после уборки. Стройке достаётся второе, а первое нужно, чтобы было
  * видно, откуда взялась разница.
  */
+/**
+ * Процент строя, тяжести и морали — п. 7, п. 10.1: берётся от выработки всех работников
+ * разом и отбрасывает дробь, как на сервере (`PopulationCalculator.percent`). Твёрдые
+ * прибавки зданий под него не попадают.
+ */
+const withPercent = (amount: number, percent: number | undefined): number =>
+  percent ? Math.trunc((amount * (100 + percent)) / 100) : amount;
+
 export const output = (colony: Colony, jobs: Jobs) => {
   // Переработка рециклотрона идёт с каждого жителя, а не с рабочего, — п. 10, и она же
   // вместе с твёрдым производством зданий составляет чистую часть добычи.
   const people = jobs.farmers + jobs.workers + jobs.scientists;
   const clean = colony.productionFlat + people * colony.productionPerColonist;
-  const mined = jobs.workers * colony.productionPerWorker + clean;
+  const mined = withPercent(jobs.workers * colony.productionPerWorker, colony.productionPercent) + clean
+    + (colony.productionDirtyFlat ?? 0);
   const waste = pollution(colony, mined, clean);
+  const grown = withPercent(jobs.farmers * colony.foodPerFarmer, colony.foodPercent) + colony.foodFlat;
+  // Пищевые репликаторы (`ColonyService.replicated`): недостающее после подвоза делается из
+  // производства, единица за единицу, но не больше его самого.
+  const lack = Math.max(0, colony.foodConsumption - grown - colony.foodDelivered);
+  const replicated = colony.foodReplicator ? Math.min(lack, Math.max(0, mined - waste)) : 0;
   return {
-    food: jobs.farmers * colony.foodPerFarmer + colony.foodFlat,
+    food: grown + replicated,
     mined,
     pollution: waste,
-    production: mined - waste,
-    research: jobs.scientists * colony.researchPerScientist + colony.researchFlat,
+    production: mined - waste - replicated,
+    research: withPercent(jobs.scientists * colony.researchPerScientist, colony.researchPercent) + colony.researchFlat,
   };
 };
 

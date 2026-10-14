@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Предложение человеку ждёт его ответа (field-backlog, пункт 182): мир, договор, обмен и дань,
+        адресованные живому игроку, решает он сам, а не доверие за него. Строка живёт до итога.
+    -->
+    <changeSet id="123-diplomacy-proposal" author="sddnw">
+        <createTable tableName="diplomacy_proposal">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_diplomacy_proposal_game"
+                             references="game(id)" deleteCascade="true"/>
+            </column>
+            <column name="from_player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="to_player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="action" type="varchar(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="treaty" type="varchar(32)"/>
+            <column name="offered_tech" type="varchar(128)"/>
+            <column name="requested_tech" type="varchar(128)"/>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="accepted" type="boolean"/>
+        </createTable>
+        <createIndex tableName="diplomacy_proposal" indexName="ix_diplomacy_proposal_game">
+            <column name="game_id"/>
+        </createIndex>
+        <createIndex tableName="diplomacy_proposal" indexName="ix_diplomacy_proposal_to">
+            <column name="to_player_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

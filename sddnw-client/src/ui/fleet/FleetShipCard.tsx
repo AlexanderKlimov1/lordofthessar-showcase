@@ -1,4 +1,5 @@
 import type { FleetGroup, FleetShip } from '../../api/types';
+import type { Key } from '../../i18n';
 import { t, tf } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
@@ -41,6 +42,12 @@ export function FleetShipCard({ ship, fleet }: { ship: FleetShip | null; fleet: 
         <Value label={t('shipCard.attack')} value={ship.attack} />
         <Value label={t('shipCard.defence')} value={ship.defense} />
       </div>
+
+      {/* Звание экипажа (п. 8): опыт копится в боях и у космической академии. */}
+      <p className={'mt-1 ' + figureLabelClass('note')}>
+        {t(`shipCard.crew.${ship.crewLevel ?? 0}` as Key)}
+        {ship.crewBonus ? tf('shipCard.crewBonus', { n: <Figure accent="note">{ship.crewBonus}</Figure> }) : ''}
+      </p>
 
       {/* Строка назначения стоит только у флота в пути — как и в оригинале. */}
       {fleet?.targetSystemId ? (

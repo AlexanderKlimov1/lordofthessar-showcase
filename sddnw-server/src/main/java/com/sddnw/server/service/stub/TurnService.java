@@ -1,5 +1,6 @@
 package com.sddnw.server.service.stub;
 
+import com.sddnw.server.service.GameEventPublisher;
 import com.sddnw.server.service.GameOrder;
 import com.sddnw.server.domain.entity.GameEntity;
 import com.sddnw.server.domain.entity.PlanetEntity;
@@ -8,6 +9,7 @@ import com.sddnw.server.domain.entity.StarSystemEntity;
 import com.sddnw.server.repository.PlayerRepository;
 import com.sddnw.server.repository.StarSystemRepository;
 import com.sddnw.server.service.ColonyService;
+import com.sddnw.server.service.MilestoneService;
 import com.sddnw.server.service.PlayerEventService;
 import com.sddnw.server.service.TurnContext;
 import com.sddnw.server.service.TurnReport;
@@ -16,8 +18,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -40,12 +44,24 @@ public class TurnService {
     private final PlayerRepository playerRepository;
     private final ColonyService colonyService;
     private final PlayerEventService playerEvents;
+    private final MilestoneService milestones;
+    private final GameEventPublisher eventPublisher;
+
+    /**
+     * С какого мига хода показывать его этапы — field-backlog, пункт 100: ход короче доли
+     * секунды этапов не показывает вовсе, иначе слова мелькали бы быстрее, чем их прочтёшь.
+     */
+    static final long PHASES_SHOWN_AFTER_NANOS = 300_000_000L;
 
     public TurnService(List<TurnPhase> phases,
                        StarSystemRepository starSystemRepository,
                        PlayerRepository playerRepository,
                        ColonyService colonyService,
-                       PlayerEventService playerEvents) {
+                       PlayerEventService playerEvents,
+                       MilestoneService milestones,
+                       GameEventPublisher eventPublisher) {
+        this.milestones = milestones;
+        this.eventPublisher = eventPublisher;
         this.phases = phases.stream()
                 .sorted(Comparator.comparing(TurnPhase::order))
                 .toList();
@@ -61,15 +77,23 @@ public class TurnService {
      * @return что изменилось за ход у каждого игрока
      */
     public TurnReport endTurn(GameEntity game) {
+        Map<String, Long> thisTurn = new LinkedHashMap<>();
         long readStarted = System.nanoTime();
         TurnContext context = context(game);
-        record(CONTEXT, System.nanoTime() - readStarted);
+        record(CONTEXT, System.nanoTime() - readStarted, thisTurn);
 
         for (TurnPhase phase : phases) {
             log.debug("Фаза конца хода: {}", phase.name());
             long started = System.nanoTime();
+            // Работа конца хода — на виду (пункт 100): настоящая фаза, а не изображение работы.
+            if (started - readStarted >= PHASES_SHOWN_AFTER_NANOS) {
+                eventPublisher.turnPhase(game, phase.getClass().getSimpleName());
+            }
             phase.apply(context);
-            record(phase.name(), System.nanoTime() - started);
+            record(phase.name(), System.nanoTime() - started, thisTurn);
+        }
+        synchronized (lastTurnByGame) {
+            lastTurnByGame.put(game.getId(), thisTurn);
         }
         if (turnsCounted.incrementAndGet() % PROFILE_EVERY == 0) {
             logProfile();
@@ -79,6 +103,9 @@ public class TurnService {
         // захват колонии, — копилось строками и теперь ложится в те же итоги хода.
         // Иначе события соседа игрок не увидел бы вовсе: они происходят не по его нажатию.
         playerEvents.drainInto(game.getId(), context.report());
+        // Главные моменты хода — в летопись партии (field-backlog, пункт 34): после очереди
+        // событий, потому что знакомство, война и потерянная колония приходят именно оттуда.
+        milestones.fromReport(context);
 
         game.setTurn(game.getTurn() + 1);
         return context.report();
@@ -103,6 +130,24 @@ public class TurnService {
                 colonies,
                 colonyService.context(colonies),
                 new TurnReport(game.getTurn()));
+    }
+
+    /**
+     * Фазы ПОСЛЕДНЕГО посчитанного хода партии, в миллисекундах, в порядке хода — field-backlog,
+     * пункт 166: проверка бюджета хода ({@code tools/turn_budget.py}) называет провал разбивкой
+     * по фазам, а сводка раз в пятьсот ходов смешивает все партии сервера. Пусто — ход этой
+     * партии с запуска сервера не считался.
+     */
+    public Map<String, Double> lastTurnProfile(UUID gameId) {
+        Map<String, Long> row;
+        synchronized (lastTurnByGame) {
+            row = lastTurnByGame.get(gameId);
+        }
+        Map<String, Double> millis = new LinkedHashMap<>();
+        if (row != null) {
+            row.forEach((phase, nanos) -> millis.put(phase, nanos / 1_000_000.0));
+        }
+        return millis;
     }
 
     public List<String> registeredPhases() {
@@ -140,7 +185,20 @@ public class TurnService {
 
     private final AtomicLong turnsCounted = new AtomicLong();
 
-    private void record(String phase, long nanos) {
+    /** Сколько партий помнят свой последний ход: память на партию — горсть чисел, но не вечно. */
+    private static final int PROFILED_GAMES = 64;
+
+    /** Фазы последнего хода по партиям; старейшая партия вытесняется (порядок доступа). */
+    private final Map<UUID, Map<String, Long>> lastTurnByGame =
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<UUID, Map<String, Long>> eldest) {
+                    return size() > PROFILED_GAMES;
+                }
+            };
+
+    private void record(String phase, long nanos, Map<String, Long> thisTurn) {
+        thisTurn.merge(phase, nanos, Long::sum);
         long[] row = spentByPhase.computeIfAbsent(phase, one -> new long[2]);
         // Синхронизация по самой строке: ходы считаются в десять потоков, а два числа
         // рядом иначе разъезжаются. Спор за строку тут ничтожен — она держится наносекунды.

@@ -60,6 +60,19 @@ public class ExplorationService {
     private final DiplomacyService diplomacyService;
     private final RaceService raceService;
 
+    /**
+     * Особенность галактики партии (пункт 94: «тёмная галактика» укорачивает сканеры). Полем, а не
+     * параметром конструктора: службу собирают руками юнит-тесты, а у игрока на карте партия —
+     * ленивая ссылка, читать признак с неё вне сессии нельзя (правила проекта, грабли).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.sddnw.server.repository.GameRepository games;
+
+    private String galaxyFeature(PlayerEntity player) {
+        return games == null ? null : games.findById(player.getGame().getId())
+                .map(com.sddnw.server.domain.entity.GameEntity::getGalaxyFeature).orElse(null);
+    }
+
     public ExplorationService(PlayerExploredSystemRepository exploredRepository,
                               PlayerTechnologyRepository technologyRepository,
                               FleetRepository fleetRepository,
@@ -274,7 +287,7 @@ public class ExplorationService {
                 .findAllByPlayerIdOrderByCategoryCodeAscLevelOrderAsc(player.getId()).stream()
                 .map(PlayerTechnologyEntity::getOptionCode)
                 .collect(Collectors.toSet());
-        return ScannerTech.bestRange(technologies);
+        return ScannerTech.bestRange(technologies, galaxyFeature(player));
     }
 
     /**
@@ -293,6 +306,67 @@ public class ExplorationService {
                 .filter(system -> owns(system, player.getId())
                         || system.getId().equals(player.getHomeSystemId())
                         || withOwnFleets.contains(system.getId()))
+                .toList();
+    }
+
+    /**
+     * Чьи неразведанные системы игрок знает — п. 15, туман войны (09.10.2026, решение хозяина
+     * проекта). Знакомство иначе ничего не показывало на карте: сосед «встречен», а где он —
+     * не видно. Поэтому хозяин (только хозяин — не состав системы, за ним по-прежнему летят
+     * разведчики) известен:
+     * <ul>
+     *   <li>у БЛИЖАЙШЕЙ к игроку системы каждой знакомой империи — с неё знакомство и началось
+     *       (дальность меряется от своих систем, как и само знакомство);</li>
+     *   <li>у систем знакомых империй в дальности сканеров: сканер видел там присутствие, а
+     *       знакомство называет, чьё оно. Незнакомца сканер по-прежнему видит лишь «кем-то».</li>
+     * </ul>
+     * Хозяева идут по порядку орбит, без повторов — как карта красит разведанную систему.
+     */
+    public Map<UUID, List<UUID>> knownOwnersBy(List<StarSystemEntity> systems, PlayerEntity player,
+                                              Set<UUID> explored, Set<UUID> scanned) {
+        Set<UUID> contacts = diplomacyService.contacts(player.getId());
+        if (contacts.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, List<UUID>> known = new HashMap<>();
+        for (StarSystemEntity system : systems) {
+            if (explored.contains(system.getId()) || !scanned.contains(system.getId())) {
+                continue;
+            }
+            List<UUID> owners = contactOwners(system, contacts);
+            if (!owners.isEmpty()) {
+                known.put(system.getId(), owners);
+            }
+        }
+        List<StarSystemEntity> anchors = systems.stream()
+                .filter(system -> owns(system, player.getId())
+                        || system.getId().equals(player.getHomeSystemId()))
+                .toList();
+        if (anchors.isEmpty()) {
+            return known;
+        }
+        for (UUID contact : contacts) {
+            systems.stream()
+                    .filter(system -> owns(system, contact))
+                    .min(java.util.Comparator.<StarSystemEntity>comparingDouble(system -> anchors.stream()
+                                    .mapToDouble(anchor -> distanceSquared(anchor, system))
+                                    .min()
+                                    .orElse(Double.MAX_VALUE))
+                            .thenComparing(GameOrder.SYSTEMS))
+                    .filter(system -> !explored.contains(system.getId()))
+                    .ifPresent(system -> known.computeIfAbsent(system.getId(),
+                            id -> contactOwners(system, contacts)));
+        }
+        return known;
+    }
+
+    /** Знакомые хозяева планет системы — по порядку орбит, без повторов. */
+    private List<UUID> contactOwners(StarSystemEntity system, Set<UUID> contacts) {
+        return system.getPlanets().stream()
+                .sorted(java.util.Comparator.comparing(PlanetEntity::getOrbit))
+                .map(PlanetEntity::getOwnerPlayerId)
+                .filter(owner -> owner != null && contacts.contains(owner))
+                .distinct()
                 .toList();
     }
 

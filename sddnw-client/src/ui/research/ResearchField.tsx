@@ -1,10 +1,13 @@
+import { progressKey } from '../progressLabel';
 import type {
   PlayerResearch,
   ResearchCategory,
   ResearchLevel,
   ResearchOption,
 } from '../../api/types';
-import { givesWholeLevel, isAcquired, isCurrent, isCurrentLevel, nextLevel } from './researchRules';
+import { givesWholeLevel, isAcquired, isCurrent, isCurrentLevel, nextLevel, showsRecommendation } from './researchRules';
+import { RecommendedMark } from './RecommendedMark';
+import { hoverOnly, previewFirst } from '../touch';
 import { t, useT } from '../../i18n';
 
 /**
@@ -27,6 +30,7 @@ export function ResearchField({
   onChoose,
   onOpenList,
   onHighlight,
+  highlightedCode,
 }: {
   category: ResearchCategory;
   research: PlayerResearch;
@@ -40,6 +44,8 @@ export function ResearchField({
    * нажатия игрок выбирал вслепую.
    */
   onHighlight: (option: ResearchOption) => void;
+  /** Код технологии, чьё описание сейчас показано: касание выбирает её вторым нажатием. */
+  highlightedCode?: string;
 }) {
   useT();
   const level = nextLevel(category, research);
@@ -124,6 +130,7 @@ export function ResearchField({
                 const current = wholeLevel
                   ? isCurrentLevel(research, category.code, level.order)
                   : isCurrent(research, category.code, option.code);
+                const recommended = showsRecommendation(research, level, option);
                 return (
                   <li key={option.code}>
                     <button
@@ -140,20 +147,25 @@ export function ResearchField({
                         (busy ? ' cursor-default' : '')
                       }
                       disabled={busy}
-                      onClick={() => onChoose(option)}
+                      // Касание (пункт 60): первое показывает описание слева, второе выбирает.
+                      onClick={() => previewFirst(highlightedCode === option.code,
+                        () => onHighlight(option), () => onChoose(option))}
                       // Описание показывает левый сегмент экрана, и показывает сразу —
                       // курсором или переходом с клавиатуры. Правый щелчок при этом
                       // отдан браузеру: своего окошка с описанием больше нет.
-                      onMouseEnter={() => onHighlight(option)}
-                      onFocus={() => onHighlight(option)}
+                      onMouseEnter={hoverOnly(() => onHighlight(option))}
+                      onFocus={hoverOnly(() => onHighlight(option))}
                       title={
                         wholeLevel
                           ? t('research.allAtOnce.title', { description: option.description })
-                          : option.description
+                          : recommended
+                            ? `${t('research.recommended')} — ${option.description}`
+                            : option.description
                       }
                     >
                       {current ? '▸ ' : acquired ? '✓ ' : '· '}
                       {option.name}
+                      {recommended ? <RecommendedMark /> : null}
                     </button>
                   </li>
                 );
@@ -195,7 +207,11 @@ function LevelProgress({
   }
   return (
     <>
-      {t('research.progress', { points: research.researchPoints, cost: level.cost })}
+      {(() => {
+        // До половины — «сделано», с половины — «осталось» (пункт 52).
+        const label = progressKey(research.researchPoints, level.cost, { done: 'research.progress', left: 'research.left' });
+        return t(label.key, { points: research.researchPoints, left: label.left, cost: level.cost });
+      })()}
     </>
   );
 }

@@ -74,6 +74,30 @@ export const figureIconClass = (accent: Accent, tone?: Tone): string =>
 export const figureLabelClass = (accent: Accent): string =>
   `${ACCENTS[accent].type} ${accent === 'note' ? 'text-ink-faint' : 'text-ink-soft'}`;
 
+/**
+ * Знак беды при числе — field-backlog, пункт 169: «никакая информация не передаётся только
+ * цветом». Красное число БЕЗ минуса (нехватка казны, перерасход места, «вне дальности») для
+ * дальтоника выглядит обычным, поэтому `danger` ставит перед ним ▼. Число с минусом знак уже
+ * несёт само — второго ему не нужно. Жёлтое `warn` знака не получает: это «обрати внимание»
+ * при словах, а не состояние, и знак у каждого такого числа стал бы шумом.
+ */
+export const toneGlyph = (tone: Tone | undefined, content: unknown): string | null => {
+  if (tone !== 'danger') {
+    return null;
+  }
+  // «{signed(n)}%» приходит списком детей: знак стоит у первого.
+  if (Array.isArray(content)) {
+    return toneGlyph(tone, content[0]);
+  }
+  if (typeof content === 'number' && content < 0) {
+    return null;
+  }
+  if (typeof content === 'string' && /^\s*[−-]/.test(content)) {
+    return null;
+  }
+  return '▼';
+};
+
 /** Тон по знаку: минус — беда, остальное молчит. Самое частое правило, поэтому одно на игру. */
 export const signTone = (n: number): Tone | undefined => (n < 0 ? 'danger' : undefined);
 

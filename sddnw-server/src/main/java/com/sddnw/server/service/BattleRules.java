@@ -77,7 +77,7 @@ public class BattleRules {
      * Сколько очков перевеса меткости над защитой удваивают отношение шансов — MOO II,
      * знаменатель 16 в формуле попадания.
      */
-    private static final int HIT_RATING_STEP = 16;
+    public static final int HIT_RATING_STEP = 16;
 
     /** Половина: столько даёт кривая попадания при равных меткости и защите. */
     private static final double EVEN_ODDS_PERCENT = 50.0;
@@ -89,13 +89,13 @@ public class BattleRules {
      * десятой доле за каждые три клетки — 90 % на 3–5, 80 % на 6–8 и так далее, — и ниже
      * {@link #MIN_DAMAGE_PERCENT} не опускается.
      */
-    private static final int DISSIPATION_PERCENT_PER_STEP = 10;
+    public static final int DISSIPATION_PERCENT_PER_STEP = 10;
 
     /** Клеток в одной ступени ослабления. */
-    private static final int DISSIPATION_STEP_CELLS = 3;
+    public static final int DISSIPATION_STEP_CELLS = 3;
 
     /** Слабее этого луч не становится: 35 % оригинала на 21–23 клетках. */
-    private static final int MIN_DAMAGE_PERCENT = 35;
+    public static final int MIN_DAMAGE_PERCENT = 35;
 
     /** Код модификации ближней обороны: ею сбивают чужие ракеты — п. 8. */
     private static final String POINT_DEFENCE = "point-defense";
@@ -190,23 +190,76 @@ public class BattleRules {
      * оригинала на мелких кораблях не работало бы вовсе.
      */
     public Integer repaired(Integer now, Integer full) {
+        return repaired(now, full, CYBERNETIC_REPAIR_PERCENT);
+    }
+
+    /**
+     * То же, но с названной долей — ремонтный модуль (п. 8, 13.10.2026): «repairs up to 20% of
+     * a ship's armor or structure per combat turn». Чинит вдвое быстрее кибернетики, и оба
+     * правила складываются ({@code TacticalBattleService.repair}).
+     */
+    public Integer repaired(Integer now, Integer full, Integer percent) {
         if (now >= full) {
             return full;
         }
-        return Math.min(full, now + Math.max(1, full * CYBERNETIC_REPAIR_PERCENT / 100));
+        if (percent <= 0) {
+            return now;
+        }
+        return Math.min(full, now + Math.max(1, full * percent / 100));
+    }
+
+    /**
+     * Сколько действия этого вида дают уцелевшие системы корабля — п. 8: сумма по составу.
+     * Модули, выбитые в бою, в состав уже не входят ({@link #partsLeft}), поэтому разбитый
+     * фокусировщик или поглотитель перестаёт действовать сам собой.
+     */
+    public Integer special(List<ShipDesignRules.Item> items, ShipEffectType type) {
+        int total = 0;
+        for (ShipDesignRules.Item item : items) {
+            total += item.component().amount(type) * item.count();
+        }
+        return total;
+    }
+
+    /**
+     * «Лучевое» оружие в смысле оригинала — п. 8: лучи и снаряды (масс-драйвер и пушка Гаусса
+     * у MOO II числятся лучами, «machine-gun» weapons). Ракеты и торпеды — нет. На такое
+     * оружие действуют фокусировщик энергии, прицелы дальнего боя и «Ахилл».
+     */
+    public Boolean beamLike(Shot shot) {
+        return shot.kind() == WeaponKind.BEAM || shot.kind() == WeaponKind.PROJECTILE;
+    }
+
+    /**
+     * Урон луча с фокусировщиком энергии — п. 8: «+50%» к урону лучевого оружия; к ракетам
+     * не прибавляет.
+     */
+    public Integer focused(Shot shot, Integer damage, Integer beamPercent) {
+        return beamPercent > 0 && Boolean.TRUE.equals(beamLike(shot))
+                ? damage * (100 + beamPercent) / 100
+                : damage;
     }
 
     /**
      * Инициатива корабля — п. 8: по ней строится очередь хода.
      * <p>
-     * Реконструкция: в MOO II очередь задают двигатели и приборы корабля. Скорость взята
-     * с весом сто, прицельный компьютер добавляется процентами — так быстрый разведчик
-     * всегда ходит раньше тяжёлого корабля, а из двух одинаково быстрых первым стреляет
-     * тот, у кого лучше прицел.
+     * Реконструкция: в MOO II очередь задают двигатели и приборы корабля. Боевая скорость
+     * взята с весом двадцать пять (то есть сто на клетку хода), прицельный компьютер
+     * добавляется процентами — так быстрый разведчик всегда ходит раньше тяжёлого корабля,
+     * а из двух одинаково быстрых первым стреляет тот, у кого лучше прицел.
+     * <p>
+     * <b>Боевая, а не скорость полёта</b> (13.10.2026, баг хозяина проекта: «фрегат всегда
+     * ходит первым и уходит от чудищ»). Прежде здесь стояла скорость полёта по карте, а у
+     * чудища её нет вовсе — плавники дают только боевую (14, быстрее ядерного двигателя). Его
+     * инициатива была нулём, и любой корабль ходил раньше: фрегат успевал уйти с поля, пока
+     * амёба не шевельнулась. В оригинале чудища часто убивают фрегат первым ходом.
      */
     public Integer initiative(ShipStats stats, List<ShipDesignRules.Item> items) {
-        return stats.speed() * 100 + attackPercent(items);
+        return stats.combatSpeed() * INITIATIVE_PER_COMBAT_SPEED + attackPercent(items);
     }
+
+    /** Вес единицы боевой скорости в инициативе: сто на клетку хода (клетка — четыре единицы). */
+    static final int INITIATIVE_PER_COMBAT_SPEED = 25;
 
     /** Прибавка приборов к прицелу в процентах: компьютер, сканер, анализатор. */
     public Integer attackPercent(List<ShipDesignRules.Item> items) {
@@ -296,7 +349,22 @@ public class BattleRules {
                         * Клеток за круг у ракеты в полёте ({@link #missileFlightSpeed}); у
                         * луча и снаряда — ноль: они долетают в тот же миг.
                         */
-                       Integer flightSpeed) {
+                       Integer flightSpeed,
+                       /**
+                        * Сколько очков урона сквозь щит убивают одного пехотинца на борту цели —
+                        * нейтронный бластер (п. 8, абордаж); ноль — пехоту ствол не трогает.
+                        */
+                       Integer marineKill) {
+
+        /** Выстрел без убийства пехоты — прежняя запись, так её читают и старые залпы. */
+        public Shot(WeaponKind kind, Integer damage, Integer attackPercent,
+                    Boolean piercesArmour, Boolean piercesShield, Boolean halvesEvasion,
+                    Integer missileArmourPercent, Integer missileSpeed, Boolean hitsEngine,
+                    Integer range, Boolean envelops, Boolean noRangePenalty, Integer flightSpeed) {
+            this(kind, damage, attackPercent, piercesArmour, piercesShield, halvesEvasion,
+                    missileArmourPercent, missileSpeed, hitsEngine, range, envelops, noRangePenalty,
+                    flightSpeed, 0);
+        }
 
         /** Выстрел без переделок — так собираются простые стволы в проверках. */
         public Shot(WeaponKind kind, Integer damage, Integer attackPercent,
@@ -343,7 +411,8 @@ public class BattleRules {
         List<Shot> shots = new ArrayList<>();
         for (ShipDesignRules.Item item : items) {
             ShipComponent component = item.component();
-            if (component.slot() != ShipComponentSlot.WEAPON) {
+            if (component.slot() != ShipComponentSlot.WEAPON || component.weaponKind() == WeaponKind.BOMB) {
+                // Бомба по кораблям не бьёт — пункт 25: её цель только планета.
                 continue;
             }
             // Число выстрелов берётся у состава: разделяющаяся ракета (MIRV) несёт четыре
@@ -362,7 +431,8 @@ public class BattleRules {
                         item.noRangePenalty(),
                         kind == WeaponKind.MISSILE
                                 ? missileFlightSpeed(combatSpeed, item.missileSpeed())
-                                : 0));
+                                : 0,
+                        component.amount(ShipEffectType.KILLS_MARINES)));
             }
         }
         return shots;
@@ -493,6 +563,295 @@ public class BattleRules {
     }
 
     /**
+     * Строки оружия с ближней обороной — номера в том же счёте, что у {@link #partsLeft}:
+     * место ствола среди оружия проекта. Ими ИИ бьёт по ракетам в полёте (backlog-promo,
+     * пункт 30); ракетная строка сюда не входит — ракетой ракету не сбить.
+     */
+    public Set<Integer> pointDefenceRows(List<ShipDesignRules.Item> items) {
+        Set<Integer> rows = new java.util.TreeSet<>();
+        int row = 0;
+        for (ShipDesignRules.Item item : items) {
+            if (item.component().slot() != ShipComponentSlot.WEAPON) {
+                continue;
+            }
+            if (item.component().weaponKind() != WeaponKind.MISSILE
+                    && item.modifications().stream()
+                            .anyMatch(modification -> POINT_DEFENCE.equals(modification.code()))) {
+                rows.add(row);
+            }
+            row++;
+        }
+        return rows;
+    }
+
+    /** С какого расстояния берут на абордаж: только вплотную, с соседней клетки. */
+    public static final int BOARDING_RANGE = 1;
+
+    /** Сколько морской пехоты на корабле — правило одно с окном дизайна ({@link ShipDesignRules#marines}). */
+    public Integer marines(ShipHull hull, List<ShipDesignRules.Item> items) {
+        return DESIGN.marines(hull, items);
+    }
+
+    private static final ShipDesignRules DESIGN = new ShipDesignRules();
+
+    /** Класс корпуса 1..6: фрегат … Левиафан — столько тяговых лучей его и держит. */
+    public int sizeClass(ShipHull hull) {
+        return Math.max(1, Math.min(6, hull.sortOrder()));
+    }
+
+    /** Дальность телепорта корабля в клетках; ноль — телепорта нет (п. 8, абордаж). */
+    public Integer transporterRange(List<ShipDesignRules.Item> items) {
+        int best = 0;
+        for (ShipDesignRules.Item item : items) {
+            best = Math.max(best, item.component().amount(ShipEffectType.TRANSPORTER));
+        }
+        return best;
+    }
+
+    /** С какого расстояния корабль идёт на абордаж: вплотную или телепортом. */
+    public Integer boardingRange(List<ShipDesignRules.Item> items) {
+        return Math.max(BOARDING_RANGE, transporterRange(items));
+    }
+
+    /**
+     * Докуда достаёт тяговый луч, в клетках — п. 8. <b>Реконструкция:</b> оригинал числа не
+     * называет; взято расстояние, на котором луч ещё бьёт почти в полную силу.
+     */
+    public static final int TRACTOR_RANGE = 8;
+
+    /** Сколько тяговых лучей стоит на корабле. */
+    public Integer tractorBeams(List<ShipDesignRules.Item> items) {
+        int total = 0;
+        for (ShipDesignRules.Item item : items) {
+            total += item.component().amount(ShipEffectType.TRACTOR) * item.count();
+        }
+        return total;
+    }
+
+    /**
+     * Сколько клеток корабль проходит под тяговыми лучами — п. 8: луч на класс корпуса
+     * обездвиживает, меньше лучей — замедляют долей («greatly reduces the target's combat
+     * speed»).
+     */
+    public Integer tractoredSpeed(Integer speed, Integer beams, ShipHull hull) {
+        int size = sizeClass(hull);
+        if (beams <= 0) {
+            return speed;
+        }
+        return Math.max(0, speed * (size - Math.min(size, beams)) / size);
+    }
+
+    /** Пехоты в одном штурмовом шаттле — реконструкция. */
+    public static final int SHUTTLE_MARINES = 2;
+
+    /** Сколько шаттлов уходит с корабля за залп. */
+    public Integer shuttles(List<ShipDesignRules.Item> items) {
+        int total = 0;
+        for (ShipDesignRules.Item item : items) {
+            total += item.component().amount(ShipEffectType.SHUTTLE_BAY) * item.count();
+        }
+        return total;
+    }
+
+    /**
+     * Скорость штурмового шаттла, клеток за круг, — число оригинала: «2 + (2 × the number of
+     * parsecs their empire's drive can travel per turn)».
+     */
+    public Integer shuttleSpeed(List<ShipDesignRules.Item> items) {
+        int parsecs = 0;
+        for (ShipDesignRules.Item item : items) {
+            if (item.component().slot() == ShipComponentSlot.ENGINE) {
+                parsecs = Math.max(parsecs, item.component().amount(ShipEffectType.SPEED));
+            }
+        }
+        return 2 + 2 * parsecs;
+    }
+
+    /**
+     * Шаттлы залпа — как ракеты в полёте: их сбивает ближняя оборона, а броня у шаттла
+     * крепче ракетной (у оригинала прочность 3 + броня), отсюда вдвое труднее сбить.
+     */
+    public List<Shot> shuttleShots(int count, int speed) {
+        List<Shot> shots = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            shots.add(new Shot(WeaponKind.MISSILE, 0, 0, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE,
+                    100, 0, Boolean.FALSE, speed * MISSILE_FUEL_TURNS, Boolean.FALSE, Boolean.FALSE,
+                    speed, 0));
+        }
+        return shots;
+    }
+
+    /** Перехватчики — род звена отсека истребителей (п. 8). */
+    public static final int INTERCEPTORS = 1;
+
+    /** Бомбардировщики — род звена (п. 8). */
+    public static final int BOMBERS = 2;
+
+    /** Тяжёлые истребители — род звена (п. 8). */
+    public static final int HEAVY_FIGHTERS = 3;
+
+    /** Наибольший урон пульсара на класс корпуса цели — число MOO II («1-24 points per size class»). */
+    public static final int PULSAR_DAMAGE_PER_CLASS = 24;
+
+    /** Наибольший урон гиродестабилизатора на класс корпуса цели — число MOO II («1-4»). */
+    public static final int GYRO_DAMAGE_PER_CLASS = 4;
+
+    /** Плазменная сеть: урон за круг от 5 до 25, тает на 5 за круг — числа MOO II. */
+    public static final int PLASMA_WEB_MIN = 5;
+    public static final int PLASMA_WEB_MAX = 25;
+    public static final int PLASMA_WEB_DECAY = 5;
+
+    /** Урон «по размеру»: от 1 до {@code perClass} на каждый класс корпуса цели. */
+    public int sizedDamage(java.util.random.RandomGenerator random, int perClass, int sizeClass) {
+        return (1 + random.nextInt(perClass)) * Math.max(1, sizeClass);
+    }
+
+    /** Машин в звене — число MOO II: «launches four Interceptors». */
+    public static final int FIGHTERS_PER_BAY = 4;
+
+    /**
+     * Сколько кругов звено держится в полёте — реконструкция (п. 8): истребитель MOO II не ракета,
+     * он идёт за целью, пока не ударит, и через всё поле (32 клетки) за два ракетных круга со
+     * скоростью 10 не долетал вовсе. Четыре круга — поле насквозь даже у перехватчика без
+     * двигателя лучше ядерного.
+     */
+    public static final int FIGHTER_FUEL_TURNS = 4;
+
+    /**
+     * Через сколько кругов звено снова на борту — <i>реконструкция</i> (14.10.2026): MOO II говорит лишь, что
+     * звено «can make 4 shots before needing to return and recharge», а сроков не публикует (неизвестно даже,
+     * пополняет ли отсек звено вовсе). Прежде звено взлетало каждый круг, и фрегат с отсеком в 5 клеток бил
+     * три таких же без него; с возвратом через 2 круга бой решало первое же звено. Четыре круга — шаг
+     * «вдвое» (правила проекта, пункт 89): за обычный бой отсек выпускает одно-два звена.
+     */
+    public static final int FIGHTER_REARM_ROUNDS = 4;
+
+    /** Прибавка истребителя к меткости — число MOO II: «Beam Attack is a base +50». */
+    public static final int FIGHTER_ATTACK = 50;
+
+    /**
+     * Скорость звена, клеток за круг, — числа оригинала: перехватчики «8 + (2 x the number of
+     * parsecs their empire's drive can travel per turn)», бомбардировщики и тяжёлые «4 + (4 x …)».
+     */
+    public Integer fighterSpeed(List<ShipDesignRules.Item> items, int kind) {
+        int parsecs = 0;
+        for (ShipDesignRules.Item item : items) {
+            if (item.component().slot() == ShipComponentSlot.ENGINE) {
+                parsecs = Math.max(parsecs, item.component().amount(ShipEffectType.SPEED));
+            }
+        }
+        return kind == INTERCEPTORS ? 8 + 2 * parsecs : 4 + 4 * parsecs;
+    }
+
+    /**
+     * Удары одного звена — таблица оригинала: перехватчик 4 атаки по лучу, бомбардировщик 1 атака
+     * бомбой, тяжёлый истребитель 2 атаки лучом и бомбой; машин в звене четыре. Луч у истребителя
+     * — лучший с модификацией ближней обороны, «normal damage +1 (Mass Drivers being the
+     * exception)»; бомба — лучшая из изученных. Летят звеном как ракеты: их сбивает ближняя
+     * оборона, и тем труднее, чем прочнее машина ({@link #fighterSturdyPercent}).
+     *
+     * @param beam урон луча истребителя; ноль — подходящего луча нет
+     * @param bomb урон бомбы; ноль — бомб нет
+     * @param armour множитель лучшей брони империи (титан 1, тритан 2 … — {@code ARMOUR} брони / 4)
+     */
+    public List<Shot> fighterShots(int kind, int beam, int bomb, int speed, int armour) {
+        int beams = kind == INTERCEPTORS ? 4 : kind == HEAVY_FIGHTERS ? 2 : 0;
+        int bombs = kind == BOMBERS ? 1 : kind == HEAVY_FIGHTERS ? 2 : 0;
+        int sturdy = fighterSturdyPercent(kind, armour);
+        List<Shot> shots = new ArrayList<>();
+        for (int craft = 0; craft < FIGHTERS_PER_BAY; craft++) {
+            for (int i = 0; beam > 0 && i < beams; i++) {
+                shots.add(new Shot(WeaponKind.MISSILE, beam, 0, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE,
+                        sturdy, 0, Boolean.FALSE, speed * MISSILE_FUEL_TURNS, Boolean.FALSE, Boolean.TRUE,
+                        speed, 0));
+            }
+            for (int i = 0; bomb > 0 && i < bombs; i++) {
+                shots.add(new Shot(WeaponKind.MISSILE, bomb, 0, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE,
+                        sturdy, 0, Boolean.FALSE, speed * MISSILE_FUEL_TURNS, Boolean.FALSE, Boolean.TRUE,
+                        speed, 0));
+            }
+        }
+        return shots;
+    }
+
+    /** Удары звена при титановой броне — прежняя запись, так её читают проверки. */
+    public List<Shot> fighterShots(int kind, int beam, int bomb, int speed) {
+        return fighterShots(kind, beam, bomb, speed, 1);
+    }
+
+    /**
+     * Прочность машины звена — MOO II 1.50: у перехватчика «3 + (armor multiplier) in structure» (4–13).
+     * Тяжёлым и бомбардировщикам классика даёт 5 очков против 2 у перехватчика — <i>реконструкция</i>: у них
+     * 6 + множитель (14.10.2026).
+     */
+    public int fighterHitPoints(int kind, int armour) {
+        return (kind == INTERCEPTORS ? 3 : 6) + Math.max(1, armour);
+    }
+
+    /** Прочность, при которой машину сбивает одно попадание ближней обороны: перехватчик с титановой бронёй. */
+    static final int FIGHTER_REFERENCE_HP = 4;
+
+    /**
+     * Насколько труднее сбить машину звена, в процентах, — тем же счётом, что крепость ракеты (ARM): каждое
+     * очко прочности сверх {@link #FIGHTER_REFERENCE_HP} — плюс четверть. <i>Реконструкция</i>: ближняя
+     * оборона у нас бьёт ракету числом попаданий, а не уроном, и прочность переводится в шанс.
+     */
+    public int fighterSturdyPercent(int kind, int armour) {
+        return Math.max(0, fighterHitPoints(kind, armour) - FIGHTER_REFERENCE_HP) * 100 / FIGHTER_REFERENCE_HP;
+    }
+
+    /** На сколько процентов слабеют противоракеты за каждую клетку до залпа — число MOO II. */
+    public static final int ANTI_MISSILE_STEP_PERCENT = 3;
+
+    /**
+     * Шанс противоракет в упор, в процентах, — модуль {@code anti-missile-rockets}
+     * (backlog-promo, пункт 30); ноль — противоракет на корабле нет. Берётся сильнейший
+     * модуль, а не сумма: особый модуль ставится один ({@code ship.specialOnce}).
+     */
+    public Integer antiMissilePercent(List<ShipDesignRules.Item> items) {
+        int best = 0;
+        for (ShipDesignRules.Item item : items) {
+            best = Math.max(best, item.component().amount(ShipEffectType.ANTI_MISSILE));
+        }
+        return best;
+    }
+
+    /**
+     * Шанс противоракеты сбить одну ракету залпа на этом расстоянии — правило MOO II
+     * дословно: «60% chance to destroy enemy missiles, decreasing by 3% with each square from
+     * launched position». Меткость корабля и скорость ракеты сюда не входят: у оригинала их
+     * нет, противоракета — своя ракета со своим наведением. Ноль — не достают: при 60 % это
+     * дальше двадцати клеток.
+     */
+    public Integer antiMissileChancePercent(Integer basePercent, Integer distance) {
+        return Math.max(0, Math.min(95, basePercent - ANTI_MISSILE_STEP_PERCENT * distance));
+    }
+
+    /**
+     * Сколько ракет залпа корабль ждёт сбить выстрелом по нему — в сотых долях ракеты.
+     * По этому числу ИИ решает, стоит ли тратить ход на залп в полёте, а не на корабль
+     * (backlog-promo, пункт 30). Сначала по ракетам бьют противоракеты, остаток — стволы.
+     */
+    public Integer expectedDownsCentis(Integer antiMissileChance, List<Integer> gunChances, Integer rockets) {
+        double left = rockets;
+        double downed = 0;
+        if (antiMissileChance > 0) {
+            double hit = left * antiMissileChance / 100.0;
+            downed += hit;
+            left -= hit;
+        }
+        for (Integer chance : gunChances) {
+            if (left <= 0) {
+                break;
+            }
+            double hit = Math.min(1.0, left) * chance / 100.0;
+            downed += hit;
+            left -= hit;
+        }
+        return (int) Math.round(downed * 100);
+    }
+
+    /**
      * Шанс сбить чужую ракету ближней обороной, в процентах, — п. 8.
      * <p>
      * <b>Реконструкция.</b> В MOO II ракета летит по полю, и стволы ближней обороны бьют
@@ -553,6 +912,39 @@ public class BattleRules {
      */
     public Integer damageThroughShield(Integer shotDamage, Integer shield) {
         return Math.max(0, shotDamage - shield);
+    }
+
+    /**
+     * Удар по щиту оригинала — п. 8 (13.10.2026): класс срезает урон с выстрела, не тратя запаса
+     * («negates N points of damage from each weapon... it does not even weaken the shield»), а
+     * остаток поглощает запас, пока не кончится («absorbs... before failing»). Упавший щит
+     * держит только класс — до конца круга, пока запас не восстановится.
+     *
+     * @param shieldClass класс щита; ноль — генератор разбит или его нет
+     * @param pool        запас щита сейчас
+     * @return урон, дошедший до брони, и запас после удара
+     */
+    public ShieldHit shieldHit(Integer damage, Integer shieldClass, Integer pool) {
+        int left = Math.max(0, damage - Math.max(0, shieldClass));
+        int absorbed = Math.min(Math.max(0, pool), left);
+        return new ShieldHit(left - absorbed, Math.max(0, pool) - absorbed);
+    }
+
+    /** Итог удара по щиту: что прошло к броне и сколько запаса осталось. */
+    public record ShieldHit(Integer through, Integer pool) {
+    }
+
+    /**
+     * Сколько запаса щита восстанавливается за круг — п. 8, число MOO II: «Regenerates 30% of its
+     * maximum strength per combat turn». Щитовой конденсатор утраивает это («triples the shield
+     * recharge rate»).
+     */
+    public static final int SHIELD_RECHARGE_PERCENT = 30;
+
+    /** Запас щита после восстановления круга; {@code multiplier} — 3 у щитового конденсатора. */
+    public Integer recharged(Integer pool, Integer max, Integer multiplier) {
+        int gain = max * SHIELD_RECHARGE_PERCENT * Math.max(1, multiplier) / 100;
+        return Math.min(max, Math.max(0, pool) + Math.max(gain, max > 0 ? 1 : 0));
     }
 
     /**
@@ -642,21 +1034,33 @@ public class BattleRules {
      * <p>
      * Дальнее всего, на котором залп ещё бьёт в полную силу: луч слабеет каждые
      * {@link #DISSIPATION_STEP_CELLS} клетки, и лучевой корабль, остановившийся на краю
-     * досягаемости, бил бы на треть силы. Ракета считается «в полную силу» только там, где
-     * долетает за один круг: дальше её успевают перехватить или от неё уйти. Снаряды не
-     * слабеют — корабль с одними снарядами бьёт с предела.
+     * досягаемости, бил бы на треть силы. Ракета считается «в полную силу» только в
+     * пределах ПОЛОВИНЫ своего пути за круг: дальше её успевают перехватить или от неё уйти,
+     * а ближняя оборона бьёт по ней на всём пути, и чем путь короче, тем меньше чужих
+     * защитников он минует. Снаряды не слабеют — корабль с одними снарядами бьёт с предела.
      * <p>
      * Прежде ИИ подходил ровно до предела самого дальнобойного ствола, и бой стоял: эскадры
      * перестреливались с краёв поля, а корабль с ракетами не трогался с места вовсе.
      */
     public Integer preferredDistance(List<Shot> shots) {
+        return preferredDistance(shots, Boolean.TRUE);
+    }
+
+    /**
+     * То же, но с оглядкой на цель (пункт 30, 03.10.2026): если сбивать ракеты ей НЕЧЕМ — ни
+     * ближней обороны, ни противоракет, — ракета бьёт в полную силу на всём своём пути, и
+     * ракетчику выгодно стоять на пределе, подальше от чужих лучей. Подходить на полпути за
+     * круг стоит только к тому, кто умеет перехватывать: там короткий путь — это меньше
+     * бросков перехвата. Заодно в бою появляются залпы в полёте, и перехват становится виден.
+     */
+    public Integer preferredDistance(List<Shot> shots, Boolean targetIntercepts) {
         if (shots.isEmpty()) {
             return 1;
         }
         int best = 0;
-        int full = volleyAt(shots, 0);
+        int full = volleyAt(shots, 0, targetIntercepts);
         for (int distance = 1; distance <= Math.max(FIELD_WIDTH, FIELD_HEIGHT); distance++) {
-            if (volleyAt(shots, distance) < full) {
+            if (volleyAt(shots, distance, targetIntercepts) < full) {
                 break;
             }
             best = distance;
@@ -665,11 +1069,13 @@ public class BattleRules {
     }
 
     /** Урон залпа на этом расстоянии, если попадёт всё, — для выбора дистанции. */
-    private int volleyAt(List<Shot> shots, int distance) {
+    private int volleyAt(List<Shot> shots, int distance, Boolean targetIntercepts) {
         int total = 0;
         for (Shot shot : shots) {
             boolean reaches = shot.kind() == WeaponKind.MISSILE
-                    ? distance <= Math.max(1, shot.flightSpeed())
+                    ? distance <= (Boolean.TRUE.equals(targetIntercepts)
+                            ? Math.max(1, shot.flightSpeed() / 2)
+                            : rangeOf(shot))
                     : shotReaches(shot, distance);
             if (reaches) {
                 total += damageAtRange(shot, distance);
@@ -845,7 +1251,15 @@ public class BattleRules {
 
     /** Попадание по корпусу выбило систему? */
     public Boolean rollSystemHit(RandomGenerator random) {
-        return rollHit(random, SYSTEM_HIT_PERCENT);
+        return rollSystemHit(random, 1);
+    }
+
+    /**
+     * То же, но с множителем — прицел «Ахилл» (п. 8): «triples the chance to damage weapons
+     * and other essential systems». Выше сотни шанс не поднимается.
+     */
+    public Boolean rollSystemHit(RandomGenerator random, Integer odds) {
+        return rollHit(random, Math.min(100, SYSTEM_HIT_PERCENT * Math.max(1, odds)));
     }
 
     /** Разбитый двигатель взорвал корабль? */

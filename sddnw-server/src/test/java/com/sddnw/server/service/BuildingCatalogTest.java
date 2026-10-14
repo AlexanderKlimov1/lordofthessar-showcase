@@ -37,7 +37,7 @@ class BuildingCatalogTest {
     @DisplayName("Справочник читается целиком, коды не повторяются")
     void catalogReads() {
         List<Building> buildings = catalog.all();
-        assertEquals(32, buildings.size());
+        assertEquals(42, buildings.size());
         assertEquals(buildings.size(), buildings.stream().map(Building::code).distinct().count());
 
         for (Building building : buildings) {
@@ -97,14 +97,17 @@ class BuildingCatalogTest {
     @Test
     @DisplayName("Здание без технологии доступно с начала партии")
     void buildingWithoutTechIsAlwaysAvailable() {
-        // Таких зданий в MOO II ровно два, и оба стоят на родном мире с первого хода:
-        // звёздная база (верфь, п. 8) и казармы морской пехеты (оборона колонии, п. 12) —
-        // «Marine Barracks is a starting tech». Всё остальное открывается технологией.
+        // Таких зданий в MOO II три, и все стоят на родном мире с первого хода: звёздная
+        // база (верфь, п. 8), казармы морской пехоты (оборона колонии, п. 12) — «Marine
+        // Barracks is a starting tech» — и столица (п. 10.1), которую отстраивают взамен
+        // утраченной. Всё остальное открывается технологией.
         assertNull(catalog.require("star-base").requiredTechCode());
         assertNull(catalog.require("marine-barracks").requiredTechCode());
+        assertNull(catalog.require(CapitolRules.CODE).requiredTechCode());
         assertTrue(catalog.all().stream()
                         .filter(building -> !"star-base".equals(building.code()))
                         .filter(building -> !"marine-barracks".equals(building.code()))
+                        .filter(building -> !CapitolRules.CODE.equals(building.code()))
                         .allMatch(building -> building.requiredTechCode() != null),
                 "остальные здания в справочнике открываются технологией");
         assertNull(new Building("x", LocalizedText.of("x"), LocalizedText.of(""), 1, 0, null, Map.of()).requiredTechCode());

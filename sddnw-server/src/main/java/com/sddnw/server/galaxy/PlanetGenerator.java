@@ -77,9 +77,18 @@ public class PlanetGenerator {
      * партию с самоцветами под боком, — это не трудность и не удача, а испорченный замер.
      */
     public void populate(StarSystemEntity system, Random random) {
-        for (PlanetSpec spec : layout(random)) {
+        populate(system, random, PlanetFind.SHARE_PERCENT);
+    }
+
+    /**
+     * То же с долей находок партии — field-backlog, пункт 94: у «руин повсюду» она выше. Число
+     * бросков жребия от доли не зависит, поэтому прочая галактика с тем же зерном выходит той же
+     * до первой находки, которой в обычной партии не было бы.
+     */
+    public void populate(StarSystemEntity system, Random random, int findSharePercent) {
+        for (PlanetSpec spec : layout(random, system.getStarColor())) {
             PlanetEntity planet = planet(system.getName(), spec);
-            planet.setFind(find(planet.getMaxPopulation(), random));
+            planet.setFind(find(planet.getMaxPopulation(), random, findSharePercent));
             system.addPlanet(planet);
         }
     }
@@ -91,8 +100,8 @@ public class PlanetGenerator {
      * Годность планеты смотрится ДО жребия о виде находки: на газовом гиганте золото —
      * это находка, которой никто никогда не воспользуется, селиться там нельзя.
      */
-    private PlanetFind find(Integer maxPopulation, Random random) {
-        boolean lucky = random.nextInt(100) < PlanetFind.SHARE_PERCENT;
+    private PlanetFind find(Integer maxPopulation, Random random, int sharePercent) {
+        boolean lucky = random.nextInt(100) < sharePercent;
         List<Weighted<PlanetFind>> fitting = PlanetFind.all().stream()
                 .filter(one -> one.fits(maxPopulation))
                 .map(one -> new Weighted<>(one, one.getWeight()))
@@ -108,6 +117,29 @@ public class PlanetGenerator {
      * них тянется один на партию, а потом накладывается на каждую родную звезду
      * ({@code HomeworldAllocator}).
      */
+    /**
+     * Чертёж системы у звезды этого цвета — field-backlog, пункт 132: климаты и недра сдвинуты по
+     * цвету ({@link StarColorOdds}). Стартовая система идёт прежним {@link #layout(Random)}: её
+     * чертёж один на партию и от цвета родной звезды не зависит.
+     */
+    public List<PlanetSpec> layout(Random random, com.sddnw.server.domain.enums.StarColor color) {
+        List<Weighted<PlanetClimate>> climates = color == null ? CLIMATE_WEIGHTS
+                : CLIMATES_BY_COLOR.computeIfAbsent(color, key -> StarColorOdds.climates(CLIMATE_WEIGHTS, key));
+        List<Weighted<MineralRichness>> minerals = color == null ? MINERAL_WEIGHTS
+                : MINERALS_BY_COLOR.computeIfAbsent(color, key -> StarColorOdds.minerals(MINERAL_WEIGHTS, key));
+        int count = MIN_PLANETS + random.nextInt(MAX_PLANETS - MIN_PLANETS + 1);
+        List<PlanetSpec> specs = new ArrayList<>(count);
+        for (int orbit = 1; orbit <= count; orbit++) {
+            specs.add(new PlanetSpec(orbit, pick(SIZE_WEIGHTS, random), pick(climates, random), pick(minerals, random)));
+        }
+        return specs;
+    }
+
+    private static final java.util.Map<com.sddnw.server.domain.enums.StarColor, List<Weighted<PlanetClimate>>>
+            CLIMATES_BY_COLOR = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Map<com.sddnw.server.domain.enums.StarColor, List<Weighted<MineralRichness>>>
+            MINERALS_BY_COLOR = new java.util.concurrent.ConcurrentHashMap<>();
+
     public List<PlanetSpec> layout(Random random) {
         int count = MIN_PLANETS + random.nextInt(MAX_PLANETS - MIN_PLANETS + 1);
         List<PlanetSpec> specs = new ArrayList<>(count);
@@ -160,6 +192,7 @@ public class PlanetGenerator {
         return weights.getLast().value();
     }
 
-    private record Weighted<T>(T value, Integer weight) {
+    /** Вес варианта жребия; виден пакету — веса по цвету звезды собирает {@link StarColorOdds}. */
+    record Weighted<T>(T value, Integer weight) {
     }
 }

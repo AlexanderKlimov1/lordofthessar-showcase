@@ -130,9 +130,9 @@ export function OrionometerScreen({ onClose }: { onClose: () => void }) {
 
           <p className="mt-3 text-11 text-ink-faint">{t('orionometer.brainNote')}</p>
 
-          {failure ? <div className="mt-3 text-13 text-danger">{failure}</div> : null}
+          {failure ? <div className="mt-3 text-13 text-danger"><span aria-hidden className="mr-1">⚠</span>{failure}</div> : null}
           {state?.failure ? (
-            <div className="mt-2 text-13 text-danger">{state.failure}</div>
+            <div className="mt-2 text-13 text-danger"><span aria-hidden className="mr-1">⚠</span>{state.failure}</div>
           ) : null}
 
           <div className="mt-6 text-center">

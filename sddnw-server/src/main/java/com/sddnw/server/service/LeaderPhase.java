@@ -45,8 +45,14 @@ public class LeaderPhase implements TurnPhase {
     public void apply(TurnContext context) {
         Map<UUID, RaceEffects> races = raceService.effectsByPlayer(
                 context.players().stream().map(PlayerEntity::getId).toList());
+        // Без столицы новые лидеры не приходят — п. 6, п. 10.1: «no new leaders will appear
+        // until you build a new Capitol». Нанятые служат дальше.
+        java.util.Set<UUID> withoutCapitol = context.players().stream()
+                .map(PlayerEntity::getId)
+                .filter(id -> Boolean.TRUE.equals(context.colonyContext().capitolLost(id)))
+                .collect(java.util.stream.Collectors.toSet());
         Map<UUID, Integer> money = leaderService.advance(context.players(), context.turn(), races,
-                context.game().getSeed());
+                context.game().getSeed(), withoutCapitol);
 
         for (PlayerEntity player : context.players()) {
             Integer balance = money.getOrDefault(player.getId(), 0);

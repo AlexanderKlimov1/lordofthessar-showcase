@@ -16,7 +16,7 @@
 настоящих. Убирается по домену `@example.test` — он зарезервирован стандартом под
 проверки, и ничего, кроме прогона, его здесь не заводит.
 """
-import collections, io, json, math, os, re, sys, threading, time, urllib.request, urllib.error, uuid
+import collections, datetime, io, json, math, os, re, subprocess, sys, threading, time, urllib.request, urllib.error, uuid
 
 # Печатаем по-русски, а консоль Windows отдаёт скрипту кодовую страницу, в которую
 # кириллица не влезает: первое же сообщение о причине отказа роняло весь прогон
@@ -55,6 +55,48 @@ account_token = None
 timing = {}
 
 
+#: Тексты, которые игра СОБРАЛА для показа, — field-backlog, пункт 198: события итогов хода и
+#: отказы по правилам, по дороге всего прогона, с языком запроса. Ключ и подстановки по
+#: отдельности бывают чисты, а собранная фраза — нет (идентификатор системы вместо названия
+#: в отчёте о червоточине нашёлся только глазами). В конце прогона их проверяет
+#: `tools/language_check.py`.
+shown_texts = []
+SHOWN_TEXTS_LIMIT = 20000
+
+
+def _collect_shown(req, path, answer, status):
+    """Положить в shown_texts то, что из этого ответа увидел бы игрок."""
+    if len(shown_texts) >= SHOWN_TEXTS_LIMIT:
+        return
+    lang = (req.get_header('Accept-language') or 'en')[:2]
+    if status is not None:
+        # Отказ по правилу игры: 403, 404, 409, 429 — их текст клиент показывает как есть.
+        # 400 и 500 сюда не идут: первый — ответ на запрос, посланный прогоном мимо клиента
+        # нарочно, второй клиент подменяет сообщением о сбое (пункт 156).
+        body = answer.get('body') if isinstance(answer, dict) else None
+        if status in (403, 404, 409, 429) and isinstance(body, dict) and body.get('message'):
+            shown_texts.append((lang, f'отказ {status} {path.split("?")[0]}', body['message']))
+        return
+    if not isinstance(answer, dict):
+        return
+    for holder in (answer, answer.get('report')):
+        if isinstance(holder, dict) and isinstance(holder.get('events'), list):
+            for event in holder['events']:
+                if isinstance(event, dict) and isinstance(event.get('text'), str):
+                    shown_texts.append((lang, f'итоги хода {event.get("key") or event.get("code")}', event['text']))
+    # Итоги хода — тем же запросом и по-английски: прогон читает по-русски, а у читателя
+    # другого языка собранная фраза своя (так нашлось «Saurath (ИИ)» в английском отчёте).
+    if '/turn/report' in path and lang == 'ru':
+        twin = urllib.request.Request(req.full_url, method=req.get_method(),
+                                      headers={**dict(req.header_items()), 'Accept-Language': 'en'})
+        try:
+            with urllib.request.urlopen(twin) as r:
+                text = r.read().decode('utf-8')
+            _collect_shown(twin, path + '#en', json.loads(text) if text else None, None)
+        except (urllib.error.URLError, ValueError):
+            pass
+
+
 def _timed(req, path):
     """Запрос с секундомером: ответ тот же, что и был, плюс строка в timing."""
     key = re.sub(r'/[0-9a-fA-F-]{8,}', '/{id}', path.split('?')[0])
@@ -62,9 +104,13 @@ def _timed(req, path):
     try:
         with urllib.request.urlopen(req) as r:
             text = r.read().decode('utf-8')
-            return json.loads(text) if text else None
+            answer = json.loads(text) if text else None
+        _collect_shown(req, path, answer, None)
+        return answer
     except urllib.error.HTTPError as e:
-        return {'ERROR': e.code, 'body': json.loads(e.read().decode('utf-8'))}
+        answer = {'ERROR': e.code, 'body': json.loads(e.read().decode('utf-8'))}
+        _collect_shown(req, path, answer, e.code)
+        return answer
     finally:
         row = timing.setdefault(key, [0, 0.0])
         row[0] += 1
@@ -208,6 +254,16 @@ def end_turn(game_id, *tokens):
     result = None
     for token in tokens:
         result = call('POST', f'/api/games/{game_id}/turn/end', {'accessToken': token})
+    watch = CONTACT_WATCH.get(game_id)
+    if watch:
+        # Пока meet_by_range ждёт знакомства, итоги смотрятся ПОСЛЕ КАЖДОГО хода: сервер отдаёт
+        # итоги только последнего, а знакомство случается и посреди постройки и перелёта заставы.
+        watch_token, known = watch
+        now = {r['playerId'] for r in call_auth('GET', f'/api/games/{game_id}/diplomacy', watch_token)}
+        if now - known:
+            report = call_auth('GET', f'/api/games/{game_id}/turn/report', watch_token)
+            CONTACT_REPORTED.append(any(e['code'] == 'DIPLOMACY' for e in report.get('events', [])))
+        CONTACT_WATCH[game_id] = (watch_token, now)
     return result
 
 
@@ -217,7 +273,8 @@ _tree_cache = {}
 def study(game_id, token, refs, max_turns=60):
     """
     Изучить уровни дерева, как это сделал бы игрок, — п. 9: цель на уровень, конец хода, пока
-    уровень не изучен. Ссылки — «раздел:номер» (`power:1`), по порядку.
+    уровень не изучен. Ссылки — «раздел:номер» (`power:1`), по порядку; у уровня с выбором
+    технологию называют третьей частью (`force_fields:1:mass-driver`), иначе берётся первая.
 
     Стартовых технологий нет с 01.10.2026 (решение хозяина проекта): первые уровни тоже
     исследуются. Проверке, которой нужен корабль, лазер или грузовик, приходится сперва их
@@ -233,18 +290,35 @@ def study(game_id, token, refs, max_turns=60):
             {t['optionCode'] for t in rs.get('acquired', [])}
 
     for ref in refs:
-        code, order = ref.split(':')
+        code, order, *option = ref.split(':')
         order = int(order)
         level = next(lv for cat in tree_['categories'] if cat['code'] == code
                      for lv in cat['levels'] if lv['order'] == order)
+        wanted = option[0] if option else level['options'][0]['code']
         for _ in range(max_turns):
-            if (code, order) in acquired()[0]:
+            got_levels, got_codes = acquired()
+            if (code, order) in got_levels and (not option or wanted in got_codes):
                 break
             call('POST', f'/api/games/{game_id}/research',
                  {'accessToken': token, 'categoryCode': code, 'levelOrder': order,
-                  'optionCode': level['options'][0]['code']})
+                  'optionCode': wanted})
             end_turn(game_id, token)
     return acquired()[1]
+
+
+def auto_saves(game_id, turn=None, tries=40):
+    """
+    Автосохранения партии — п. 3. Слепок пишется ЗА ответом конца хода, в фоне
+    (`GameService.autoSaves`, 12.10.2026), поэтому сразу после хода его может ещё не быть:
+    проверка ждёт, пока он появится (и, если назван ход, — на этом ходу), до двух секунд.
+    """
+    autos = []
+    for _ in range(tries):
+        autos = [x for x in (call('GET', '/api/saves') or []) if x['gameId'] == game_id and x['auto']]
+        if autos and (turn is None or autos[0]['turn'] == turn):
+            return autos
+        time.sleep(0.05)
+    return autos
 
 
 def ship_project(game_id, token, planet_id):
@@ -299,8 +373,12 @@ def research_civil_ships(game_id, token, *others, limit=140):
     acquired = call_auth('GET', f'/api/games/{game_id}/research', token)['acquired']
     if any(x['optionCode'] == option for x in acquired):
         return True
-    call('POST', f'/api/games/{game_id}/research',
-         {'accessToken': token, 'categoryCode': 'power', 'levelOrder': 2, 'optionCode': option})
+    # Второй уровень Power — только после первого: стартовых технологий нет (01.10.2026).
+    research_shipbuilding(game_id, token, *others)
+    target = call('POST', f'/api/games/{game_id}/research',
+                  {'accessToken': token, 'categoryCode': 'power', 'levelOrder': 2, 'optionCode': option})
+    if 'ERROR' in target:
+        return False
     for _ in range(limit):
         end_turn(game_id, token, *others)
         acquired = call_auth('GET', f'/api/games/{game_id}/research', token)['acquired']
@@ -309,7 +387,7 @@ def research_civil_ships(game_id, token, *others, limit=140):
     return False
 
 
-def build_civil(game_id, token, planet_id, project, role, *others, limit=40):
+def build_civil(game_id, token, planet_id, project, role, *others, limit=80):
     """
     Строит колонией гражданский корабль и ждёт его готовности — п. 4.1, п. 8, п. 12.
 
@@ -318,6 +396,9 @@ def build_civil(game_id, token, planet_id, project, role, *others, limit=40):
     с готовым кораблём или None.
 
     Сперва изучается сам корабль (Cold Fusion): до него его нет в списке стройки.
+
+    Ждёт до восьмидесяти ходов (08.10.2026): по составам рас MOO II 1.50 у Церебри нет богатого
+    родного мира, и корабль-застава с исследованием его технологии строится дольше сорока.
     """
     research_civil_ships(game_id, token, *others)
     call('POST', f'/api/games/{game_id}/planets/{planet_id}/project',
@@ -325,7 +406,8 @@ def build_civil(game_id, token, planet_id, project, role, *others, limit=40):
     for _ in range(limit):
         end_turn(game_id, token, *others)
         fleets = call_auth('GET', f'/api/games/{game_id}/fleets', token)
-        for fleet in fleets:
+        # Отказ сервера (предел частоты, перезапуск) — не флоты: пропускаем ход, а не падаем.
+        for fleet in fleets if isinstance(fleets, list) else []:
             if any(ship['role'] == role and ship['ships'] > 0 for ship in fleet['composition']):
                 return fleet
         # Стройку могло сбить событие или смена проекта — ставим её заново.
@@ -358,8 +440,15 @@ def research_fuel(game_id, token, *others, limit=140):
     acquired = call_auth('GET', f'/api/games/{game_id}/research', token)['acquired']
     if any(x['optionCode'] == option for x in acquired):
         return True
-    call('POST', f'/api/games/{game_id}/research',
-         {'accessToken': token, 'categoryCode': 'chemistry', 'levelOrder': 2, 'optionCode': option})
+    # Второй уровень химии — только после первого: стартовых технологий нет (01.10.2026).
+    # Прежде цель ставилась сразу на второй, сервер честно отказывал, а помощник отказа не
+    # смотрел и ждал 140 ходов технологию, которую никто не изучал, — партия «Отталкивающие»
+    # тянулась так до 321-го хода, и знакомство в ней случалось лишь чудом расселения ИИ.
+    research_shipbuilding(game_id, token, *others)
+    target = call('POST', f'/api/games/{game_id}/research',
+                  {'accessToken': token, 'categoryCode': 'chemistry', 'levelOrder': 2, 'optionCode': option})
+    if 'ERROR' in target:
+        return False
     for _ in range(limit):
         end_turn(game_id, token, *others)
         acquired = call_auth('GET', f'/api/games/{game_id}/research', token)['acquired']
@@ -410,26 +499,32 @@ def meet_by_range(game_id, token, planet_id, target_id, other_ids, *others, hops
     coords = {st['id']: (st['x'], st['y'])
               for st in call_auth('GET', f'/api/games/{game_id}/map?revealAll=true', token)['systems']}
     tx, ty = coords[target_id]
-    research_fuel(game_id, token, *others)
-    for _ in range(hops):
+    # Итоги знакомства сверяет end_turn после каждого хода (CONTACT_WATCH), включая ходы
+    # изучения топлива, постройки и перелёта заставы.
+    CONTACT_WATCH[game_id] = (token, {r['playerId']
+                                      for r in call_auth('GET', f'/api/games/{game_id}/diplomacy', token)})
+    try:
+        research_fuel(game_id, token, *others)
+        for _ in range(hops):
+            known = {r['playerId'] for r in call_auth('GET', f'/api/games/{game_id}/diplomacy', token)}
+            if set(other_ids) <= known:
+                return True
+            if not plant_outpost_towards(game_id, token, planet_id, tx, ty, *others):
+                return False
+            # Знакомство считается в конце хода, по положению на его конец.
+            end_turn(game_id, token, *others)
         known = {r['playerId'] for r in call_auth('GET', f'/api/games/{game_id}/diplomacy', token)}
-        if set(other_ids) <= known:
-            return True
-        if not plant_outpost_towards(game_id, token, planet_id, tx, ty, *others):
-            return False
-        # Знакомство считается в конце хода, по положению на его конец.
-        end_turn(game_id, token, *others)
-        now = {r['playerId'] for r in call_auth('GET', f'/api/games/{game_id}/diplomacy', token)}
-        if now - known:
-            report = call_auth('GET', f'/api/games/{game_id}/turn/report', token)
-            CONTACT_REPORTED.append(any(e['code'] == 'DIPLOMACY' for e in report.get('events', [])))
-    known = {r['playerId'] for r in call_auth('GET', f'/api/games/{game_id}/diplomacy', token)}
-    return set(other_ids) <= known
+        return set(other_ids) <= known
+    finally:
+        CONTACT_WATCH.pop(game_id, None)
 
 
 #: Попало ли знакомство в итоги хода, на котором оно случилось, — по разу на знакомство,
 #: замеченное помощником meet_by_range сразу после конца хода.
 CONTACT_REPORTED = []
+
+#: Партии, где meet_by_range ждёт знакомства: пропуск игрока и его знакомые на прошлый ход.
+CONTACT_WATCH = {}
 
 
 def plant_outpost_towards(game_id, token, planet_id, tx, ty, *others):
@@ -569,6 +664,23 @@ def research_shipbuilding(game_id, token, *others, limit=40):
     return call_auth('GET', f'/api/games/{game_id}/research', token)['acquired']
 
 
+def research_option(game_id, token, category, level, option, *others, limit=80):
+    """
+    Изучает одну технологию уровня с выбором — п. 9; ход идёт, когда закончили все названные
+    игроки. Масс-драйвер так и изучают (12.10.2026): с первого хода он больше не дан, а дуэлям
+    боя он нужен как простая пушка, которая не слабеет с расстоянием.
+    """
+    for _ in range(limit):
+        if any(x['optionCode'] == option
+               for x in call_auth('GET', f'/api/games/{game_id}/research', token)['acquired']):
+            return True
+        call('POST', f'/api/games/{game_id}/research',
+             {'accessToken': token, 'categoryCode': category, 'levelOrder': level,
+              'optionCode': option})
+        end_turn(game_id, token, *others)
+    return False
+
+
 # След по проверкам: `SDDNW_TRACE=1` печатает каждую пройденную проверку сразу, в stderr.
 # Заведено после того, как прогон завис НАСМЕРТЬ и узнать, на чём именно, было нечем:
 # отчёт пишется одним куском в самом конце, сервер при этом не обрабатывал ни одного
@@ -593,7 +705,10 @@ denied = call('POST', '/api/games', {'name': 'Без входа', 'playerName': 
 check('без учётной записи партия не создаётся — п. 3.1', denied.get('ERROR') == 403,
       str(denied.get('body', {}).get('message')))
 
-admin_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'admin.txt')
+# Свой файл — у сервера с другой базой (свежая установка, проверка комплекта deploy/):
+# пароль администратора там другой, и admin.txt проекта к нему не подходит.
+admin_file = os.environ.get('SDDNW_ADMIN_FILE') or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'admin.txt')
 admin_password = None
 if os.path.exists(admin_file):
     for line in io.open(admin_file, encoding='utf-8'):
@@ -770,11 +885,749 @@ if guest_token:
               after.get('game', {}).get('wardenholdTurnsLeft') is None
               and after.get('game', {}).get('turn') == 2,
               str(after.get('game', {}))[:200])
+
+        # ГОСТЬ СТАНОВИТСЯ ИГРОКОМ, НЕ ТЕРЯЯ ПАРТИИ — field-backlog, пункт 1. Та же запись
+        # получает почту и пароль, гостем остаётся до подтверждения, а после него — игрок, и
+        # сыгранная гостем партия по-прежнему его («Ваши партии»).
+        guest_mail = f'guest-{uuid.uuid4().hex[:10]}{TEST_MAIL_DOMAIN}'
+        upgraded = call_account('POST', '/api/auth/guest/register', guest_token,
+                                dict({'email': guest_mail, 'name': 'Бывший гость',
+                                      'password': 'orion-2026'}, **solved_challenge()))
+        check('гость регистрируется, не выходя из записи — field-backlog, п. 1',
+              isinstance(upgraded, dict) and not upgraded.get('ERROR')
+              and upgraded.get('login') == guest_mail, str(upgraded)[:200])
+        pending = call_account('GET', '/api/auth/me', guest_token) or {}
+        check('до подтверждения почты запись остаётся гостевой, и пропуск гостя жив',
+              pending.get('role') == 'GUEST' and pending.get('id') == guest_account.get('id')
+              and pending.get('email') == guest_mail, str(pending)[:200])
+        check('до подтверждения вход по почте закрыт',
+              call('POST', '/api/auth/login', {'login': guest_mail, 'password': 'orion-2026'})
+              .get('ERROR') == 403)
+        call('POST', f"/api/auth/accounts/{guest_account['id']}/confirm")
+        became = call_account('GET', '/api/auth/me', guest_token) or {}
+        check('подтверждённый гость — игрок, и запись та же — field-backlog, п. 1',
+              became.get('role') == 'PLAYER' and became.get('id') == guest_account.get('id'),
+              str(became)[:200])
+        relogged = call('POST', '/api/auth/login', {'login': guest_mail, 'password': 'orion-2026'})
+        mine_after = call_account('GET', '/api/games/mine', relogged.get('token') or '') or []
+        check('сыгранная гостем партия осталась за ним — «Ваши партии»',
+              gg['id'] in [g.get('id') for g in mine_after if isinstance(g, dict)],
+              str([g.get('name') for g in mine_after if isinstance(g, dict)])[:200])
+        check('зарегистрированного второй раз так не регистрируют',
+              call_account('POST', '/api/auth/guest/register', guest_token,
+                           dict({'email': 'again-' + guest_mail, 'name': 'Снова',
+                                 'password': 'orion-2026'}, **solved_challenge())).get('ERROR') == 409)
         call('DELETE', f"/api/games/{gg['id']}/admin")
     if foreign_id:
         call('DELETE', f'/api/games/{foreign_id}/admin')
     if guest_account.get('id'):
         call('DELETE', f"/api/auth/accounts/{guest_account['id']}")
+
+# СТОРОЖ У СТАРТА — field-backlog, пункты 190 и 105: в гостевой партии ближайшую к родной звезде
+# систему сторожит ослабленная амёба — первый бой на поле случается рано. И ОТЗЫВ ПОСЛЕ ПАРТИИ —
+# пункты 46 и 187: сцена конца спрашивает оценку у первой же законченной партии записи, ответ
+# записывается один раз, а читает отзывы только администратор.
+saved_token, account_token = account_token, None
+critic = call('POST', '/api/auth/guest')
+account_token = saved_token
+critic_token = (critic or {}).get('token') if isinstance(critic, dict) else None
+critic_id = ((critic or {}).get('account') or {}).get('id')
+if critic_token:
+    cgame = call_account('POST', '/api/games', critic_token, {'name': 'Регресс отзыв', 'playerName': 'Guest'})
+    cg_id = ((cgame or {}).get('game') or {}).get('id')
+    cg_tok3 = ((cgame or {}).get('credentials') or {}).get('accessToken')
+    if cg_id:
+        started = call('POST', f'/api/games/{cg_id}/start', {'accessToken': cg_tok3}) or {}
+        me = next((pl for pl in started.get('players', []) if pl.get('id') == cgame['credentials'].get('playerId')), {})
+        seen = call_auth('GET', f'/api/games/{cg_id}/map?revealAll=true', cg_tok3) or {}
+        stars = seen.get('systems') or []
+        homes = {pl.get('homeSystemId') for pl in started.get('players', [])}
+        home = next((st for st in stars if st.get('id') == me.get('homeSystemId')), None)
+        near = None
+        if home:
+            near = min((st for st in stars if st.get('id') not in homes and st.get('planets')),
+                       key=lambda st: ((st['x'] - home['x']) ** 2 + (st['y'] - home['y']) ** 2, st.get('name')),
+                       default=None)
+        check('ближайшую к родной звезде гостя систему сторожит чудище — пункты 190 и 105',
+              bool(near) and bool(near.get('monster')),
+              str({k: (near or {}).get(k) for k in ('name', 'monster')}))
+        # Сторож виден на карте с первого хода (пункт 105) — памятью империи, а система остаётся
+        # неразведанной: её состав — награда за бой.
+        fogged = call_auth('GET', f'/api/games/{cg_id}/map', cg_tok3) or {}
+        # Ближайшей к дому может оказаться система дикого чудища, а сторож старта стоит в
+        # ближайшей СВОБОДНОЙ от чудищ — поэтому ищется любой сторож на неразведанной звезде.
+        lair_seen = next((st for st in fogged.get('systems') or [] if st.get('monster') and not st.get('explored')), {})
+        check('сторож у старта виден на карте до разведки, а система не разведана — пункт 105',
+              bool(lair_seen.get('monster')) and lair_seen.get('explored') is False and not lair_seen.get('planets'),
+              str({k: lair_seen.get(k) for k in ('monster', 'explored')}))
+        # Клад Тессара назван наполовину (пункт 135): число — с сервера, из правила клада.
+        check('карта называет, сколько технологий Стражей ждёт первого поселенца Тессара — пункт 135',
+              fogged.get('specialStarReward') == 3, str(fogged.get('specialStarReward')))
+        before = call_account('GET', f'/api/feedback/ask?gameId={cg_id}', critic_token) or {}
+        check('пока партия идёт, отзыв не спрашивают — пункт 46', before.get('ask') is False, str(before))
+        call('POST', f'/api/games/{cg_id}/concede', {'accessToken': cg_tok3})
+        asked = call_account('GET', f'/api/feedback/ask?gameId={cg_id}', critic_token) or {}
+        check('после первой законченной партии отзыв спрашивают — пункт 46', asked.get('ask') is True, str(asked))
+        marker = 'regress-' + uuid.uuid4().hex[:8]
+        sent = call_account('POST', '/api/feedback', critic_token,
+                            {'gameId': cg_id, 'rating': 4, 'liked': 'DISCOVERY', 'comment': marker}) or {}
+        again = call_account('GET', f'/api/feedback/ask?gameId={cg_id}', critic_token) or {}
+        check('отзыв записан, и об этой партии больше не спрашивают — пункты 46 и 187',
+              sent.get('saved') is True and again.get('ask') is False, str(sent)[:200])
+        check('об одной партии отвечают один раз',
+              (call_account('POST', '/api/feedback', critic_token, {'gameId': cg_id, 'rating': 5}) or {})
+              .get('ERROR') == 409)
+        listed = call('GET', '/api/feedback') or []
+        mine = next((row for row in listed if isinstance(row, dict) and row.get('comment') == marker), {})
+        check('администратор видит отзыв с партией, на которой он оставлен, — пункты 46 и 187',
+              mine.get('rating') == 4 and mine.get('liked') == 'DISCOVERY' and mine.get('outcome') == 'CONCEDED'
+              and mine.get('galaxySize') == 'SMALL', str(mine)[:300])
+        check('отзывы читает только администратор',
+              (call_account('GET', '/api/feedback', critic_token) or {}).get('ERROR') == 403)
+        call('DELETE', f'/api/games/{cg_id}/admin')
+    # ЗОВ ВНЕ ИГРЫ — пункт 22: письма только с почтой, подписка браузера — только на службу
+    # уведомлений браузера, отписка из письма открывается без входа.
+    notify = call_account('GET', '/api/notify', critic_token) or {}
+    check('сервер отдаёт ключ для подписки браузера на зов о ходе — пункт 22',
+          len(notify.get('pushKey') or '') == 87 and notify.get('subscribed') is False
+          and notify.get('notifyMail') is False and notify.get('hasEmail') is False, str(notify)[:200])
+    check('без почты письма о ходе не включить — пункт 22',
+          (call_account('PUT', '/api/notify/mail', critic_token, {'notifyMail': True}) or {}).get('ERROR') == 409)
+    check('подписка на чужой адрес отвергнута: сервер шлёт зов только службам уведомлений браузеров',
+          (call_account('POST', '/api/notify/push', critic_token,
+                        {'endpoint': 'https://example.com/hook', 'p256dh': 'x', 'auth': 'y'}) or {}).get('ERROR') == 400)
+    try:
+        with urllib.request.urlopen(BASE + '/api/notify/unsubscribe/no-such-token') as page:
+            unsubscribe_ok = page.status == 200 and 'text/html' in (page.headers.get('Content-Type') or '')
+    except urllib.error.HTTPError:
+        unsubscribe_ok = False
+    check('ссылка отписки из письма открывается страницей без входа — пункт 22', unsubscribe_ok)
+    if critic_id:
+        call('DELETE', f'/api/auth/accounts/{critic_id}')
+
+# ПРИГЛАШЕНИЕ ПО ССЫЛКЕ — field-backlog, пункты 15 и 61: участник партии берёт код, пришедший по
+# ссылке видит, куда его зовут, и входит гостем — в лобби свободным местом, в идущую партию — за
+# империю, которую вёл ИИ. И ОТПУСК — пункт 177: отпускника партия не ждёт, вернуться можно сразу.
+def fresh_guest():
+    global account_token
+    saved, account_token = account_token, None
+    session = call('POST', '/api/auth/guest')
+    account_token = saved
+    return ((session or {}).get('token') if isinstance(session, dict) else None,
+            ((session or {}).get('account') or {}).get('id'))
+
+
+# ЗАКРЫТАЯ ПАРТИЯ — пункт 67: в списке открытых её нет, прямой вход отказывает, по ссылке — входят.
+closed_game = call('POST', '/api/games', {'name': 'Регресс закрытая', 'playerName': 'Хозяин',
+                                          'galaxySize': 'SMALL', 'totalPlayers': 3, 'inviteOnly': True,
+                                          'galacticEvents': False, 'seed': 20261008})
+cg67 = ((closed_game or {}).get('game') or {}).get('id')
+cg67_tok = ((closed_game or {}).get('credentials') or {}).get('accessToken')
+if cg67:
+    open_list = call('GET', '/api/games?openOnly=true') or []
+    check('закрытой партии нет в списке открытых — пункт 67',
+          isinstance(open_list, list) and all(g.get('id') != cg67 for g in open_list if isinstance(g, dict)),
+          str(len(open_list) if isinstance(open_list, list) else open_list)[:200])
+    direct = call('POST', f'/api/games/{cg67}/join', {'playerName': 'Чужой'}) or {}
+    check('прямой вход в закрытую партию отказывает — пункт 67', direct.get('ERROR') == 403, str(direct)[:200])
+    cg67_code = (call('GET', f'/api/games/{cg67}/invite?accessToken={cg67_tok}') or {}).get('code')
+    closed_guest, _ = fresh_guest()
+    by_link = call_account('POST', f'/api/invites/{cg67_code}/join', closed_guest, {'playerName': 'Свой'}) or {} \
+        if closed_guest and cg67_code else {}
+    check('по ссылке в закрытую партию входят — пункт 67', len(by_link.get('players', [])) == 2, str(by_link)[:200])
+    # ЗНАКИ У ИМЁН — пункты 147, 50, 174: у новичка без прав и без доигранных вместе партий знаков нет.
+    marks = [(p.get('earlyBird'), p.get('companions')) for p in by_link.get('players', [])]
+    check('у новых игроков нет ни знака раннего доступа, ни знака спутника — пункты 147, 174',
+          bool(marks) and all(early is False and companions == 0 for early, companions in marks), str(marks))
+    call('DELETE', f'/api/games/{cg67}/admin')
+
+host_game = call('POST', '/api/games', {'name': 'Регресс приглашение', 'playerName': 'Хозяин',
+                                        'galaxySize': 'SMALL', 'totalPlayers': 3,
+                                        'galacticEvents': False, 'seed': 20261007})
+hg = ((host_game or {}).get('game') or {}).get('id')
+hg_tok = ((host_game or {}).get('credentials') or {}).get('accessToken')
+friend_token, friend_id = fresh_guest()
+late_token, late_id = fresh_guest()
+if hg and friend_token and late_token:
+    code = (call('GET', f'/api/games/{hg}/invite?accessToken={hg_tok}') or {}).get('code')
+    again_code = (call('GET', f'/api/games/{hg}/invite?accessToken={hg_tok}') or {}).get('code')
+    check('код приглашения выдаётся участнику и не меняется — пункт 15',
+          bool(code) and code == again_code, str(code))
+    preview = call_account('GET', f'/api/invites/{code}', '') or {}
+    check('приглашение видно без входа: партия и место в лобби — пункт 15',
+          preview.get('gameName') == 'Регресс приглашение' and preview.get('seat') == 'LOBBY'
+          and preview.get('host'), str(preview)[:300])
+    check('чужой код не находится', (call_account('GET', '/api/invites/nosuchcode', '') or {}).get('ERROR') == 404)
+    joined = call_account('POST', f'/api/invites/{code}/join', friend_token, {'playerName': 'Друг'}) or {}
+    friend_tok = (joined.get('credentials') or {}).get('accessToken')
+    check('гость входит в лобби друга по приглашению, без регистрации — пункты 15 и 61',
+          bool(friend_tok) and len(joined.get('players', [])) == 2, str(joined)[:300])
+    call('POST', f'/api/games/{hg}/start', {'accessToken': hg_tok})
+    preview2 = call_account('GET', f'/api/invites/{code}', '') or {}
+    check('в идущей партии приглашение предлагает империю, которую ведёт ИИ — пункт 15',
+          preview2.get('seat') == 'EMPIRE' and preview2.get('empire'), str(preview2)[:300])
+    # Выбор империи (пункт 66): приглашение перечисляет все империи ИИ, которые можно взять, с
+    # колониями и пометкой войны с пригласившим; чужой выбор — отказ словами, а не чужое место.
+    choices = preview2.get('empires') or []
+    check('приглашение в идущую партию перечисляет империи ИИ на выбор — пункт 66',
+          len(choices) >= 1 and all('atWarWithHost' in one and one.get('colonies', 0) > 0 for one in choices)
+          and preview2.get('empire') in [one.get('name') for one in choices], str(choices)[:300])
+    wrong = call_account('POST', f'/api/invites/{code}/join', late_token,
+                         {'playerName': 'Опоздавший', 'empirePlayerId': hg}) or {}
+    check('выбрать можно только свободную империю ИИ — пункт 66', wrong.get('ERROR') == 409, str(wrong)[:200])
+    taken = call_account('POST', f'/api/invites/{code}/join', late_token,
+                         {'playerName': 'Опоздавший',
+                          'empirePlayerId': choices[0]['playerId'] if choices else None}) or {}
+    late_player = next((pl for pl in taken.get('players', [])
+                        if pl.get('id') == (taken.get('credentials') or {}).get('playerId')), {})
+    check('пришедший в идущую партию берёт империю ИИ и становится её игроком — пункт 15',
+          late_player.get('playerType') == 'HUMAN'
+          and sum(1 for pl in taken.get('players', []) if pl.get('playerType') == 'HUMAN') == 3,
+          str(late_player)[:300])
+    full = call_account('GET', f'/api/invites/{code}', '') or {}
+    check('когда империи ИИ кончились, мест по приглашению нет',
+          full.get('seat') is None, str(full)[:200])
+    rejoined = call_account('POST', f'/api/invites/{code}/join', late_token, {'playerName': 'Опоздавший'}) or {}
+    check('повторный вход по тому же приглашению — возврат на своё место, а не второе',
+          (rejoined.get('credentials') or {}).get('playerId') == late_player.get('id'), str(rejoined)[:200])
+    check('пришедший взял ту империю, которую выбрал — пункт 66',
+          not choices or late_player.get('id') == choices[0]['playerId'], str(late_player.get('id')))
+
+    # КОРОТКИЕ ЗНАКИ (пункт 183): готовая реплика всем людям или одному, кодом; предел частоты; ИИ
+    # и себе — отказ.
+    late_tok0 = (taken.get('credentials') or {}).get('accessToken')
+    sent = call('POST', f'/api/games/{hg}/signals', {'accessToken': hg_tok, 'code': 'GREET'}) or []
+    heard = call('GET', f'/api/games/{hg}/signals?accessToken={late_tok0}') or []
+    check('реплика всем доходит до другого человека партии кодом — пункт 183',
+          isinstance(heard, list) and any(x.get('code') == 'GREET' and not x.get('toPlayerId') for x in heard),
+          str(heard)[:200])
+    check('реплика чаще предела — отказ — пункт 183',
+          (call('POST', f'/api/games/{hg}/signals', {'accessToken': hg_tok, 'code': 'THANKS'}) or {}).get('ERROR') == 429)
+    check('выдуманной реплики нет — пункт 183',
+          (call('POST', f'/api/games/{hg}/signals', {'accessToken': late_tok0, 'code': 'HELLO WORLD'}) or {}).get('ERROR') == 400)
+    ai_one = next((pl for pl in (call('GET', f'/api/games/{hg}') or {}).get('players', [])
+                   if pl.get('playerType') == 'AI'), None)
+    if ai_one:
+        check('реплика империи ИИ — отказ — пункт 183',
+              (call('POST', f'/api/games/{hg}/signals', {'accessToken': late_tok0, 'code': 'PEACE',
+                                                         'toPlayerId': ai_one['id']}) or {}).get('ERROR') == 409)
+    check('«тем же составом» в идущей партии — отказ словами — пункт 149',
+          (call_account('POST', f'/api/games/{hg}/rematch', late_token) or {}).get('ERROR') == 409)
+
+    # Отпуск: друг уезжает на три дня — партия его не ждёт, и ход считается без него.
+    check('отпуск длиннее предела не берётся — пункт 177',
+          (call('POST', f'/api/games/{hg}/vacation', {'accessToken': friend_tok, 'days': 30}) or {}).get('ERROR') == 400)
+    away = call('POST', f'/api/games/{hg}/vacation', {'accessToken': friend_tok, 'days': 3}) or {}
+    friend_row = next((pl for pl in away.get('players', []) if pl.get('id') == (joined.get('credentials') or {}).get('playerId')), {})
+    check('в отпуске игрок назван отсутствующим и со сроком — пункт 177',
+          friend_row.get('away') is True and bool(friend_row.get('vacationUntil')), str(friend_row)[:300])
+    late_tok = (taken.get('credentials') or {}).get('accessToken')
+    turn_before = (call('GET', f'/api/games/{hg}') or {}).get('game', {}).get('turn')
+    call('POST', f'/api/games/{hg}/turn/end', {'accessToken': hg_tok})
+    call('POST', f'/api/games/{hg}/turn/end', {'accessToken': late_tok})
+    turn_after = (call('GET', f'/api/games/{hg}') or {}).get('game', {}).get('turn')
+    check('отпускника партия не ждёт: ход посчитан без него — пункт 177',
+          turn_before is not None and turn_after == turn_before + 1, f'{turn_before} → {turn_after}')
+    back = call('POST', f'/api/games/{hg}/vacation', {'accessToken': friend_tok, 'days': 0}) or {}
+    friend_back = next((pl for pl in back.get('players', []) if pl.get('id') == friend_row.get('id')), {})
+    check('вернуться из отпуска можно сразу — пункт 177',
+          not friend_back.get('vacationUntil') and friend_back.get('away') is False, str(friend_back)[:300])
+    call('DELETE', f'/api/games/{hg}/admin')
+for guest_id in (friend_id, late_id):
+    if guest_id:
+        call('DELETE', f'/api/auth/accounts/{guest_id}')
+
+# РЕЖИМ ЗРИТЕЛЯ — field-backlog, пункт 59: партию смотрят со стороны только с согласия создателя,
+# без тумана войны, но на пять ходов позади; сидящий за столом свою партию со стороны не видит.
+watched = call('POST', '/api/games', {'name': 'Регресс зрители', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                      'totalPlayers': 2, 'galacticEvents': False, 'seed': 20261008,
+                                      'spectators': True})
+wg = ((watched or {}).get('game') or {}).get('id')
+wg_tok = ((watched or {}).get('credentials') or {}).get('accessToken')
+shut = call('POST', '/api/games', {'name': 'Регресс без зрителей', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                   'totalPlayers': 2, 'galacticEvents': False})
+sg = ((shut or {}).get('game') or {}).get('id')
+sg_tok = ((shut or {}).get('credentials') or {}).get('accessToken')
+viewer_token, viewer_id = fresh_guest()
+if wg and sg and viewer_token:
+    check('согласие на зрителей видно в сводке партии — пункт 59',
+          (watched.get('game') or {}).get('spectators') is True
+          and not (shut.get('game') or {}).get('spectators'), str(watched.get('game'))[:200])
+    call('POST', f'/api/games/{wg}/start', {'accessToken': wg_tok})
+    call('POST', f'/api/games/{sg}/start', {'accessToken': sg_tok})
+    check('молодую партию зритель не видит: он отстаёт на пять ходов — пункт 59',
+          (call_account('GET', f'/api/spectate/{wg}', viewer_token) or {}).get('ERROR') == 409)
+    for _ in range(6):
+        end_turn(wg, wg_tok)
+    seen = call_account('GET', f'/api/spectate/{wg}', viewer_token) or {}
+    check('зритель видит всю галактику на пять ходов позади партии — пункт 59',
+          seen.get('turn') == 2 and seen.get('gameTurn') == 7 and len(seen.get('empires') or []) == 2
+          and len(seen.get('stars') or []) > 10
+          and sum(1 for star in seen.get('stars') or [] if star.get('owners')) >= 2,
+          f"ход {seen.get('turn')} из {seen.get('gameTurn')}, звёзд {len(seen.get('stars') or [])}, "
+          f"{str(seen.get('ERROR') or '')}")
+    listed = call_account('GET', '/api/spectate', viewer_token) or []
+    row = next((one for one in listed if isinstance(one, dict) and one.get('id') == wg), {})
+    check('партия с согласием есть в списке зрителя, без согласия — нет — пункт 59',
+          row.get('viewTurn') == 2 and row.get('yours') is False
+          and not any(isinstance(one, dict) and one.get('id') == sg for one in listed), str(row)[:200])
+    check('свою партию со стороны не смотрят: увидели бы чужие флоты — пункт 59',
+          (call('GET', f'/api/spectate/{wg}') or {}).get('ERROR') == 403)
+    check('партию без согласия создателя смотреть нельзя — пункт 59',
+          (call_account('GET', f'/api/spectate/{sg}', viewer_token) or {}).get('ERROR') == 403)
+for gid in (wg, sg):
+    if gid:
+        call('DELETE', f'/api/games/{gid}/admin')
+if viewer_id:
+    call('DELETE', f'/api/auth/accounts/{viewer_id}')
+
+# ОСОБЕННОСТИ ГАЛАКТИКИ — field-backlog, пункт 94: признак партии, жребий от зерна повторяется,
+# без запроса особенности нет (API не меняет прежних партий прогона).
+featured = call('POST', '/api/games', {'name': 'Регресс особенность', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                       'totalPlayers': 4, 'galacticEvents': False, 'seed': 20261009,
+                                       'galaxyFeature': 'LAIRS'}) or {}
+lot_a = call('POST', '/api/games', {'name': 'Регресс жребий', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                    'totalPlayers': 2, 'galacticEvents': False, 'seed': 777, 'galaxyFeature': 'RANDOM'}) or {}
+lot_b = call('POST', '/api/games', {'name': 'Регресс жребий', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                    'totalPlayers': 2, 'galacticEvents': False, 'seed': 777, 'galaxyFeature': 'RANDOM'}) or {}
+plain = call('POST', '/api/games', {'name': 'Регресс без особенности', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                    'totalPlayers': 2, 'galacticEvents': False}) or {}
+check('особенность галактики — признак партии — пункт 94',
+      (featured.get('game') or {}).get('galaxyFeature') == 'LAIRS', str(featured.get('game'))[:200])
+check('жребий особенности повторяется по зерну — пункт 94',
+      (lot_a.get('game') or {}).get('galaxyFeature') is not None
+      and (lot_a.get('game') or {}).get('galaxyFeature') == (lot_b.get('game') or {}).get('galaxyFeature'),
+      f"{(lot_a.get('game') or {}).get('galaxyFeature')} / {(lot_b.get('game') or {}).get('galaxyFeature')}")
+check('без запроса особенности у партии нет — пункт 94', not (plain.get('game') or {}).get('galaxyFeature'))
+for made in (featured, lot_a, lot_b, plain):
+    made_id = (made.get('game') or {}).get('id')
+    if made_id:
+        call('DELETE', f'/api/games/{made_id}/admin')
+
+# ГЛАВЫ ПАРТИИ — field-backlog, пункт 54: глава идёт по состоянию партии. Партия ИИ по гостевым
+# правилам (тесный и богатый старт: без кораблей с первого хода ИИ за 70 ходов не встречал никого)
+# к девяностому ходу знакомит соседей — хоть одна империя уходит из «Расселения».
+chaptered = call('POST', '/api/games', {'name': 'Регресс главы', 'playerName': 'Наблюдатель', 'galaxySize': 'SMALL',
+                                        'observer': True, 'totalPlayers': 4, 'galacticEvents': False,
+                                        'seed': 20261054, 'guestRules': True, 'council': True}) or {}
+ch_id = (chaptered.get('game') or {}).get('id')
+ch_tok = (chaptered.get('credentials') or {}).get('accessToken')
+if ch_id:
+    call('POST', f'/api/games/{ch_id}/start', {'accessToken': ch_tok})
+    call('POST', f'/api/games/{ch_id}/turn/advance', {'accessToken': ch_tok, 'turns': 90})
+    ch_players = (call('GET', f'/api/games/{ch_id}') or {}).get('players') or []
+    chapters = [one.get('chapter') for one in ch_players]
+    check('главы партии идут по её состоянию: к 90-му ходу соседи знакомы — пункт 54',
+          all(isinstance(value, int) and 1 <= value <= 5 for value in chapters) and max(chapters or [0]) >= 2,
+          str(chapters))
+    ch_tele = call_auth('GET', f'/api/games/{ch_id}/telemetry', ch_tok) or {}
+    firsts = [empire.get('firstTurn') or {} for empire in ch_tele.get('empires') or []]
+    check('телеметрия несёт ход первой встречи с механикой — пункт 93',
+          any(firsts) and all(isinstance(turn, int) and turn >= 0 for one in firsts for turn in one.values())
+          and any('CONTACT' in one for one in firsts), str(firsts)[:300])
+    call('DELETE', f'/api/games/{ch_id}/admin')
+
+# ГАЛАКТИКА НЕДЕЛИ — field-backlog, пункт 146: условия назначает сервер, одни на всех; гостю — нет.
+weekly = call('GET', '/api/weekly') or {}
+iso = datetime.datetime.now(datetime.timezone.utc).isocalendar()
+check('у галактики недели номер недели и общие условия — пункт 146',
+      weekly.get('week') == iso[0] * 100 + iso[1] and weekly.get('galaxySize') == 'SMALL'
+      and weekly.get('empires') == 4 and isinstance(weekly.get('races'), list), str(weekly)[:200])
+week_game = call('POST', '/api/games', {'weekly': True, 'playerName': 'Игрок', 'galaxySize': 'HUGE',
+                                        'totalPlayers': 8, 'galacticEvents': False}) or {}
+wgame = week_game.get('game') or {}
+check('партию недели заводят условия недели, а не запроса — пункт 146',
+      wgame.get('weeklyWeek') == weekly.get('week') and wgame.get('galaxySize') == 'SMALL'
+      and wgame.get('totalPlayers') == 4 and wgame.get('galaxyFeature') == weekly.get('feature'), str(wgame)[:300])
+if wgame.get('id'):
+    call('DELETE', f"/api/games/{wgame['id']}/admin")
+weekly_guest, weekly_guest_id = fresh_guest()
+if weekly_guest:
+    check('гостю галактика недели не открыта — пункт 146',
+          (call_account('POST', '/api/games', weekly_guest,
+                        {'weekly': True, 'playerName': 'Гость'}) or {}).get('ERROR') == 403)
+    call('DELETE', f'/api/auth/accounts/{weekly_guest_id}')
+
+# НАСТАВНИК — field-backlog, пункт 184: ученик сам называет наставника (только человека за этим
+# столом), наставник видит его империю его глазами и ставит метки на его карте; снял согласие —
+# ушли и метки.
+mentor_game = call('POST', '/api/games', {'name': 'Регресс наставник', 'playerName': 'Наставник', 'galaxySize': 'SMALL',
+                                          'totalPlayers': 3, 'galacticEvents': False, 'seed': 20261010}) or {}
+mg = (mentor_game.get('game') or {}).get('id')
+mg_tok = (mentor_game.get('credentials') or {}).get('accessToken')
+pupil_token, pupil_id = fresh_guest()
+if mg and pupil_token:
+    mg_code = (call('GET', f'/api/games/{mg}/invite?accessToken={mg_tok}') or {}).get('code')
+    pupil_join = call_account('POST', f'/api/invites/{mg_code}/join', pupil_token, {'playerName': 'Ученик'}) or {}
+    pupil_tok = (pupil_join.get('credentials') or {}).get('accessToken')
+    call('POST', f'/api/games/{mg}/start', {'accessToken': mg_tok})
+    mg_players = (call('GET', f'/api/games/{mg}') or {}).get('players') or []
+    host_pid = next((one['id'] for one in mg_players if one.get('name') == 'Наставник'), None)
+    pupil_pid = next((one['id'] for one in mg_players if one.get('name') == 'Ученик'), None)
+    ai_pid = next((one['id'] for one in mg_players if one.get('playerType') == 'AI'), None)
+    check('наставником не назначить ИИ — пункт 184',
+          (call_auth('PUT', f'/api/games/{mg}/mentor', pupil_tok, {'mentorPlayerId': ai_pid}) or {}).get('ERROR') == 400)
+    call_auth('PUT', f'/api/games/{mg}/mentor', pupil_tok, {'mentorPlayerId': host_pid})
+    students = call_auth('GET', f'/api/games/{mg}/mentor/students', mg_tok) or []
+    view = students[0] if isinstance(students, list) and students else {}
+    check('наставник видит империю ученика его глазами — пункт 184',
+          view.get('studentPlayerId') == pupil_pid and len((view.get('map') or {}).get('systems') or []) > 10
+          and isinstance(view.get('fleets'), list), str(view)[:200])
+    pupil_home = next((one.get('homeSystemId') for one in mg_players if one.get('id') == pupil_pid), None)
+    marked = call_auth('PUT', f'/api/games/{mg}/mentor/marks', mg_tok,
+                       {'studentPlayerId': pupil_pid, 'systemId': pupil_home, 'code': 'COLONIZE'}) or []
+    pupil_map = call_auth('GET', f'/api/games/{mg}/map', pupil_tok) or {}
+    check('метка наставника видна на карте ученика — пункт 184',
+          isinstance(marked, list) and len(marked) == 1
+          and [(one.get('systemId'), one.get('code')) for one in pupil_map.get('mentorMarks') or []]
+          == [(pupil_home, 'COLONIZE')], str(pupil_map.get('mentorMarks')))
+    check('метка — знак из списка, а не текст — пункт 184',
+          (call_auth('PUT', f'/api/games/{mg}/mentor/marks', mg_tok,
+                     {'studentPlayerId': pupil_pid, 'systemId': pupil_home, 'code': 'Привет'}) or {}).get('ERROR') == 409)
+    check('чужому ученику меток не ставят — пункт 184',
+          (call_auth('PUT', f'/api/games/{mg}/mentor/marks', pupil_tok,
+                     {'studentPlayerId': host_pid, 'systemId': pupil_home, 'code': 'AVOID'}) or {}).get('ERROR') == 403)
+    call_auth('PUT', f'/api/games/{mg}/mentor', pupil_tok, {'mentorPlayerId': None})
+    check('снятое согласие уносит и метки — пункт 184',
+          not (call_auth('GET', f'/api/games/{mg}/map', pupil_tok) or {}).get('mentorMarks')
+          and call_auth('GET', f'/api/games/{mg}/mentor/students', mg_tok) == [])
+if mg:
+    call('DELETE', f'/api/games/{mg}/admin')
+if pupil_id:
+    call('DELETE', f'/api/auth/accounts/{pupil_id}')
+
+# МЕДЛЕННАЯ ПАРТИЯ — field-backlog, пункт 64: ход в четыре часа и в сутки — законные сроки, час — нет.
+slow = call('POST', '/api/games', {'name': 'Регресс медленная', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                   'totalPlayers': 2, 'galacticEvents': False, 'turnSeconds': 4 * 3600}) or {}
+check('ход в четыре часа — законный срок медленной партии — пункт 64',
+      (slow.get('game') or {}).get('turnSeconds') == 4 * 3600, str(slow.get('game'))[:200])
+check('произвольный срок по-прежнему не принять — пункт 64',
+      (call('POST', '/api/games', {'name': 'Регресс срок', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                   'totalPlayers': 2, 'turnSeconds': 3600}) or {}).get('ERROR') == 400)
+if (slow.get('game') or {}).get('id'):
+    call('DELETE', f"/api/games/{slow['game']['id']}/admin")
+
+# «ИГРАТЬ ДАЛЬШЕ» — пункт 131: продолжают только выигранную партию, и не после покорения.
+running = call('POST', '/api/games', {'name': 'Регресс дальше', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                      'totalPlayers': 2, 'galacticEvents': False}) or {}
+run_id = (running.get('game') or {}).get('id')
+run_tok = (running.get('credentials') or {}).get('accessToken')
+if run_id:
+    call('POST', f'/api/games/{run_id}/start', {'accessToken': run_tok})
+    check('идущую партию «дальше» не продолжить — пункт 131',
+          (call('POST', f'/api/games/{run_id}/play-on', {'accessToken': run_tok}) or {}).get('ERROR') == 409)
+    call('DELETE', f'/api/games/{run_id}/admin')
+
+# ЦВЕТ ЗВЕЗДЫ — пункт 132: у красной звезды (кроме родных) богатых недр не бывает — так в оригинале.
+colored = call('POST', '/api/games', {'name': 'Регресс цвет звезды', 'playerName': 'Наблюдатель', 'galaxySize': 'HUGE',
+                                      'observer': True, 'totalPlayers': 4, 'galacticEvents': False, 'seed': 20261132}) or {}
+col_id = (colored.get('game') or {}).get('id')
+col_tok = (colored.get('credentials') or {}).get('accessToken')
+if col_id:
+    call('POST', f'/api/games/{col_id}/start', {'accessToken': col_tok})
+    col_map = call_auth('GET', f'/api/games/{col_id}/map?revealAll=true', col_tok) or {}
+    homes = {one.get('homeSystemId') for one in (call('GET', f'/api/games/{col_id}') or {}).get('players') or []}
+    by_color = collections.defaultdict(lambda: [0, 0])
+    for system in col_map.get('systems') or []:
+        if system.get('id') in homes or system.get('special'):
+            continue
+        for planet in system.get('planets') or []:
+            row = by_color[system.get('color')]
+            row[0] += 1
+            row[1] += planet.get('minerals') in ('RICH', 'ULTRA_RICH')
+    check('у красной звезды богатых недр нет, у белой они есть — пункт 132',
+          by_color['RED'][0] > 10 and by_color['RED'][1] == 0 and by_color['WHITE'][1] > 0,
+          str({color: tuple(row) for color, row in by_color.items()}))
+    call('DELETE', f'/api/games/{col_id}/admin')
+
+# СЛУЧАЙ И ПРАВИЛО — пункты 104 и 86: перекос событий и сглаживание промахов названы в справочнике.
+rules_book = call('GET', '/api/reference/rules') or {}
+luck = next((one for one in rules_book.get('articles') or [] if one.get('code') == 'luck'), {})
+check('справочник правил называет жребий и его перекос — пункты 104 и 86',
+      bool(luck.get('text')) and '3' in luck.get('text', '') and bool(luck.get('deviation')), str(luck)[:200])
+
+# СООБЩЕНИЯ — пункт 16: свободный текст между людьми, выключение собеседника и жалоба.
+chat_game = call('POST', '/api/games', {'name': 'Регресс сообщения', 'playerName': 'Хозяин', 'galaxySize': 'SMALL',
+                                        'totalPlayers': 3, 'galacticEvents': False, 'seed': 20261016}) or {}
+cg16 = (chat_game.get('game') or {}).get('id')
+cg16_tok = (chat_game.get('credentials') or {}).get('accessToken')
+talker_token, talker_id = fresh_guest()
+if cg16 and talker_token:
+    code16 = (call('GET', f'/api/games/{cg16}/invite?accessToken={cg16_tok}') or {}).get('code')
+    talker_join = call_account('POST', f'/api/invites/{code16}/join', talker_token, {'playerName': 'Собеседник'}) or {}
+    talker_tok = (talker_join.get('credentials') or {}).get('accessToken')
+    call('POST', f'/api/games/{cg16}/start', {'accessToken': cg16_tok})
+    host16 = next((one['id'] for one in (call('GET', f'/api/games/{cg16}') or {}).get('players') or []
+                   if one.get('name') == 'Хозяин'), None)
+    said = call_auth('POST', f'/api/games/{cg16}/signals', talker_tok,
+                     {'accessToken': talker_tok, 'code': 'TEXT', 'text': 'Предлагаю союз против северных соседей'}) or []
+    heard = call_auth('GET', f'/api/games/{cg16}/signals', cg16_tok) or []
+    message = next((one for one in heard if isinstance(one, dict) and one.get('code') == 'TEXT'), {})
+    check('свободное сообщение доходит до другого человека — пункт 16',
+          message.get('text') == 'Предлагаю союз против северных соседей', str(heard)[:200])
+    check('сообщение длиннее предела не принять — пункт 16',
+          (call_auth('POST', f'/api/games/{cg16}/signals', talker_tok,
+                     {'accessToken': talker_tok, 'code': 'TEXT', 'text': 'х' * 301}) or {}).get('ERROR') == 400)
+    reported = call_auth('POST', f"/api/games/{cg16}/signals/{message.get('id')}/report", cg16_tok)
+    check('на сообщение жалуются — жалоба у администратора — пункт 16',
+          not (isinstance(reported, dict) and reported.get('ERROR'))
+          and any('Жалоба на сообщение' in (one.get('text') or '') for one in (call('GET', '/api/problems') or [])
+                  if isinstance(one, dict)), str(reported)[:200])
+    talker_pid = message.get('fromPlayerId')
+    call_auth('PUT', f'/api/games/{cg16}/signals/muted/{talker_pid}?muted=true', cg16_tok)
+    check('выключенного собеседника больше не видно — пункт 16',
+          not any(one.get('fromPlayerId') == talker_pid
+                  for one in call_auth('GET', f'/api/games/{cg16}/signals', cg16_tok) or [] if isinstance(one, dict)))
+    call('DELETE', f'/api/games/{cg16}/admin')
+if talker_id:
+    call('DELETE', f'/api/auth/accounts/{talker_id}')
+
+# УРОВНИ СЛОЖНОСТИ — field-backlog, пункты 9, 10 и 87: качество игры ИИ, а не прибавки. Справочник
+# уровней называет признаки правила; партия помнит уровень, незнакомый — отказ; обучение — новичок;
+# соседям прогон назначает свой уровень, и телеметрия его показывает.
+skills_ref = call('GET', '/api/reference/ai-skills') or []
+by_skill = {one.get('code'): one for one in skills_ref if isinstance(one, dict)}
+check('уровней сложности четыре, обычный — прежняя игра — пункт 9',
+      list(by_skill) == ['BEGINNER', 'EASY', 'NORMAL', 'HARD']
+      and by_skill['NORMAL'].get('build') == 'PAYBACK' and by_skill['NORMAL'].get('purchasesPerTurn') == 1
+      and by_skill['NORMAL'].get('coalitions') is True and by_skill['NORMAL'].get('openingBook') is False,
+      str(skills_ref)[:300])
+check('сложный играет книгой дебютов, новичок вразнобой и без выкупа — пункт 9',
+      by_skill.get('HARD', {}).get('openingBook') is True
+      and by_skill.get('BEGINNER', {}).get('build') == 'SHUFFLED'
+      and by_skill.get('BEGINNER', {}).get('purchasesPerTurn') == 0, str(skills_ref)[:300])
+book_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'resources', 'Ai',
+                         'ai-openings.json')
+book = json.load(io.open(book_path, encoding='utf-8')) if os.path.exists(book_path) else {}
+check('книга дебютов собрана замером и называет общее начало — пункт 9',
+      bool((book.get('default') or {}).get('sections')) and isinstance(book.get('races'), dict), book_path)
+check('незнакомый уровень сложности не принять — пункт 9',
+      (call('POST', '/api/games', {'name': 'Регресс уровень', 'playerName': 'Игрок', 'galaxySize': 'SMALL',
+                                   'totalPlayers': 2, 'aiSkill': 'GODLIKE'}) or {}).get('ERROR') == 400)
+hard_game = call('POST', '/api/games', {'name': 'Регресс сложный', 'playerName': 'Наблюдатель', 'galaxySize': 'SMALL',
+                                        'observer': True, 'totalPlayers': 3, 'galacticEvents': False,
+                                        'council': False, 'seed': 20261009, 'aiSkill': 'HARD'}) or {}
+hard_id = (hard_game.get('game') or {}).get('id')
+hard_tok = (hard_game.get('credentials') or {}).get('accessToken')
+check('партия помнит уровень сложности — пункт 9', (hard_game.get('game') or {}).get('aiSkill') == 'HARD',
+      str(hard_game.get('game'))[:200])
+if hard_id:
+    call('POST', f'/api/games/{hard_id}/start', {'accessToken': hard_tok, 'aiEmpires': [{'skill': 'BEGINNER'}]})
+    hard_turns = call('POST', f'/api/games/{hard_id}/turn/advance', {'accessToken': hard_tok, 'turns': 30}) or {}
+    hard_tel = call('GET', f'/api/games/{hard_id}/telemetry?accessToken={hard_tok}') or {}
+    seats = sorted((e.get('slot'), e.get('aiSkill')) for e in hard_tel.get('empires') or [])
+    check('уровень — у каждой империи: свой у назначенной прогоном, у прочих — партии — пункт 9',
+          [skill for _, skill in seats] == ['HARD', 'BEGINNER', 'HARD'] and hard_turns.get('played') == 30,
+          str(seats) + ' ' + str(hard_turns)[:100])
+    call('DELETE', f'/api/games/{hard_id}/admin')
+taught = call('POST', '/api/games', {'name': 'Регресс обучение уровень', 'playerName': 'Ученик', 'galaxySize': 'SMALL',
+                                     'totalPlayers': 2, 'tutorial': True}) or {}
+check('обучение без уровня — новичок: соперник учит, а не наказывает — пункт 9',
+      (taught.get('game') or {}).get('aiSkill') == 'BEGINNER', str(taught.get('game'))[:200])
+if (taught.get('game') or {}).get('id'):
+    call('DELETE', f"/api/games/{taught['game']['id']}/admin")
+
+# ПОКА ЖДЁМ СОПЕРНИКА — field-backlog, пункт 14: закончивший ход в партии людей продолжает
+# планировать — правка колонии проходит, пока ход не посчитан, и переживает его.
+# ЖИТЕЛИ САМИ — пункт 91: колония держит фермеров на прокорм и долю рабочих и учёных игрока.
+duo14 = call('POST', '/api/games', {'name': 'Регресс ожидание', 'playerName': 'Первый', 'galaxySize': 'SMALL',
+                                    'totalPlayers': 2, 'galacticEvents': False, 'seed': 20261014}) or {}
+duo14_id = (duo14.get('game') or {}).get('id')
+duo14_tok = (duo14.get('credentials') or {}).get('accessToken')
+if duo14_id:
+    second14 = call('POST', f'/api/games/{duo14_id}/join', {'playerName': 'Второй', 'homeStarName': 'Ждущая'}) or {}
+    second14_tok = (second14.get('credentials') or {}).get('accessToken')
+    call('POST', f'/api/games/{duo14_id}/start', {'accessToken': duo14_tok})
+    first_end = call('POST', f'/api/games/{duo14_id}/turn/end', {'accessToken': duo14_tok}) or {}
+    home14 = next((pl for st in (call_auth('GET', f'/api/games/{duo14_id}/map', duo14_tok) or {}).get('systems', [])
+                   for pl in st.get('planets', []) if pl.get('ownerPlayerId') == (duo14.get('credentials') or {}).get('playerId')
+                   and pl.get('colony')), {})
+    planned = call('POST', f"/api/games/{duo14_id}/planets/{home14.get('id')}/build-mode",
+                   {'accessToken': duo14_tok, 'autoJobs': True}) or {}
+    colony14 = planned.get('colony') or {}
+    jobs14 = {k: colony14.get(k, 0) for k in ('farmers', 'workers', 'scientists')}
+    check('закончивший ход планирует дальше, пока ждём соперника — пункт 14',
+          first_end.get('advanced') is False and bool(first_end.get('waitingFor')) and colony14.get('autoJobs') is True,
+          str(first_end)[:120] + ' ' + str(planned)[:120])
+    check('жители сами: все при деле, а колония себя кормит — пункт 91',
+          sum(jobs14.get(k, 0) for k in ('farmers', 'workers', 'scientists')) == home14.get('population')
+          and (colony14.get('foodBalance') or 0) >= 0, str(jobs14) + ' еда ' + str(colony14.get('foodBalance')))
+    call('POST', f'/api/games/{duo14_id}/turn/end', {'accessToken': second14_tok})
+    after14 = next((pl for st in (call_auth('GET', f'/api/games/{duo14_id}/map', duo14_tok) or {}).get('systems', [])
+                    for pl in st.get('planets', []) if pl.get('id') == home14.get('id')), {})
+    check('план, сделанный в ожидании, пережил ход — пункт 14',
+          (after14.get('colony') or {}).get('autoJobs') is True
+          and call('GET', f'/api/games/{duo14_id}').get('game', {}).get('turn') == 2, str(after14.get('colony'))[:120])
+    call('DELETE', f'/api/games/{duo14_id}/admin')
+suggested = call('GET', '/api/auth/difficulty-suggestion')
+check('подсказка уровня следующей партии отвечает — пункт 10',
+      isinstance(suggested, dict) and 'ERROR' not in suggested
+      and (not suggested or suggested.get('suggested') in by_skill), str(suggested)[:200])
+
+solo = call('POST', '/api/games', {'name': 'Регресс отпуск один', 'playerName': 'Один', 'galaxySize': 'SMALL',
+                                   'totalPlayers': 2, 'galacticEvents': False})
+solo_id = ((solo or {}).get('game') or {}).get('id')
+solo_tok = ((solo or {}).get('credentials') or {}).get('accessToken')
+if solo_id:
+    call('POST', f'/api/games/{solo_id}/start', {'accessToken': solo_tok})
+    check('в одиночной партии отпуск не нужен — она и так ждёт игрока',
+          (call('POST', f'/api/games/{solo_id}/vacation', {'accessToken': solo_tok, 'days': 3}) or {}).get('ERROR') == 409)
+    call('DELETE', f'/api/games/{solo_id}/admin')
+# ВОРОНКА НОВИЧКА — field-backlog, пункт 2: шаги пути пишет кто угодно, даже до входа, а
+# читает только администратор. Повтор того же шага подряд не пишется, чужой текст в имя шага
+# не пускается.
+funnel_visitor = 'regress-' + uuid.uuid4().hex[:16]
+funnel_ok = call_account('POST', '/api/funnel', '', {'visitor': funnel_visitor, 'step': 'screen.auth'})
+check('шаг воронки пишется и без входа — field-backlog, п. 2', funnel_ok is None, str(funnel_ok)[:200])
+call_account('POST', '/api/funnel', '', {'visitor': funnel_visitor, 'step': 'screen.auth'})
+call('POST', '/api/funnel', {'visitor': funnel_visitor, 'step': 'game.turn', 'turn': 3,
+                             'detail': 'BUILDING,RESEARCH'})
+bad_step = call_account('POST', '/api/funnel', '', {'visitor': funnel_visitor, 'step': 'Шаг <b>'})
+check('в имя шага свободный текст не пускается', (bad_step or {}).get('ERROR') == 400,
+      str(bad_step)[:120])
+funnel_rows = [row for row in (call('GET', '/api/funnel?days=1') or []) if isinstance(row, dict)
+               and row.get('visitor') == funnel_visitor]
+check('журнал воронки отдаёт путь посетителя по порядку, без повторов подряд',
+      [row.get('step') for row in funnel_rows] == ['screen.auth', 'game.turn']
+      and funnel_rows[-1].get('turn') == 3 and funnel_rows[-1].get('role'),
+      str(funnel_rows)[:300])
+check('журнал воронки читает только администратор',
+      (call_account('GET', '/api/funnel', 'x' * 20) or {}).get('ERROR') == 403)
+
+# СООБЩИТЬ О ПРОБЛЕМЕ — field-backlog, пункт 157: пишет любой вошедший (и гость), читает и
+# отмечает разобранным только администратор, а с одной записи — не больше пяти в час.
+saved_token, account_token = account_token, None
+reporter = call('POST', '/api/auth/guest')
+account_token = saved_token
+reporter_token = (reporter or {}).get('token') if isinstance(reporter, dict) else None
+reporter_id = ((reporter or {}).get('account') or {}).get('id')
+check('без входа о проблеме не сообщить',
+      (call_account('POST', '/api/problems', '', {'text': 'x'}) or {}).get('ERROR') == 403)
+
+# ЧАСТЫЕ ОТКАЗЫ — field-backlog, пункт 77: сервер считает отказы живым игрокам по ключу, а
+# запросы скриптов проекта (этот прогон в их числе) мимо счёта. Живого игрока здесь изображает
+# заголовок браузера.
+def refusals_of(key):
+    rows = call('GET', '/api/refusals')
+    return next((row.get('refusals', 0) for row in (rows if isinstance(rows, list) else [])
+                 if row.get('key') == key), 0)
+
+
+missing_game = '/api/games/00000000-0000-0000-0000-000000000000'
+refusals_before = refusals_of('game.notFound')
+call('GET', missing_game)
+refusals_script = refusals_of('game.notFound')
+_timed(urllib.request.Request(BASE + missing_game, headers={'User-Agent': 'Mozilla/5.0 (regress)',
+                                                             'Accept-Language': 'ru'}), missing_game)
+refusals_browser = refusals_of('game.notFound')
+check('отказ скрипту не идёт в счёт частых — field-backlog, п. 77', refusals_script == refusals_before,
+      f'было {refusals_before}, после запроса скрипта {refusals_script}')
+check('отказ игроку в браузере считается по ключу — field-backlog, п. 77',
+      refusals_browser == refusals_before + 1, f'было {refusals_before}, после браузера {refusals_browser}')
+check('частые отказы видит только хозяин сервера',
+      (call_account('GET', '/api/refusals', '') or {}).get('ERROR') in (401, 403))
+if reporter_token:
+    problem_text = 'Регресс: кнопка хода молчит ' + uuid.uuid4().hex[:6]
+    sent_report = call_account('POST', '/api/problems', reporter_token,
+                               {'text': problem_text, 'turn': 7, 'screen': 'game',
+                                'clientVersion': 'regress', 'context': '{"faults": []}'})
+    check('гость сообщает о проблеме — field-backlog, п. 157', sent_report is None, str(sent_report)[:200])
+    listed = [row for row in (call('GET', '/api/problems') or []) if isinstance(row, dict)
+              and row.get('text') == problem_text]
+    check('сообщение видно хозяину вместе с ходом, экраном и тем, кто писал',
+          len(listed) == 1 and listed[0].get('turn') == 7 and listed[0].get('screen') == 'game'
+          and listed[0].get('accountId') == reporter_id and listed[0].get('resolved') is False,
+          str(listed)[:300])
+    check('чужим список сообщений не отдаётся',
+          (call_account('GET', '/api/problems', reporter_token) or {}).get('ERROR') == 403)
+    if listed:
+        resolved_row = call('POST', f"/api/problems/{listed[0]['id']}/resolve")
+        check('сообщение отмечается разобранным', (resolved_row or {}).get('resolved') is True,
+              str(resolved_row)[:200])
+        # КРУГ ЗАМЫКАЕТСЯ — пункт 158: хозяин отвечает, написавший видит ответ один раз.
+        report_id = listed[0]['id']
+        release_now = (call('GET', '/api/notices/release') or {}).get('version')
+        no_reason = call('POST', f'/api/problems/{report_id}/answer', {'kind': 'WONT_FIX'})
+        check('«не будем исправлять» без причины не отправить — п. 158',
+              (no_reason or {}).get('ERROR') == 400, str(no_reason)[:200])
+        answered = call('POST', f'/api/problems/{report_id}/answer', {'kind': 'FIXED'}) or {}
+        check('ответ «исправлено» без версии помечается текущей версией — п. 158',
+              answered.get('answerKind') == 'FIXED' and answered.get('answerVersion') == release_now
+              and answered.get('resolved') is True and answered.get('answerSeen') is False,
+              str(answered)[:300])
+        answers = call_account('GET', '/api/problems/answers', reporter_token)
+        answers = answers if isinstance(answers, list) else []
+        check('написавший видит ответ на своё сообщение с его началом и версией — п. 158',
+              len(answers) == 1 and answers[0].get('version') == release_now
+              and str(answers[0].get('excerpt', '')).startswith('Регресс: кнопка хода'),
+              str(answers)[:300])
+        check('чужие ответы другим не показывают — п. 158',
+              not [row for row in (call('GET', '/api/problems/answers') or []) if isinstance(row, dict)
+                   and row.get('id') == report_id])
+        call_account('POST', '/api/problems/answers/seen', reporter_token)
+        check('прочитанный ответ больше не всплывает, а хозяин видит, что его прочли — п. 158',
+              call_account('GET', '/api/problems/answers', reporter_token) == []
+              and any(row.get('id') == report_id and row.get('answerSeen') is True
+                      for row in (call('GET', '/api/problems') or []) if isinstance(row, dict)))
+        wont = call('POST', f'/api/problems/{report_id}/answer',
+                    {'kind': 'WONT_FIX', 'text': 'так задумано правилом'}) or {}
+        again = call_account('GET', '/api/problems/answers', reporter_token)
+        check('новый ответ заменяет прежний и показывается заново — п. 158',
+              wont.get('answerKind') == 'WONT_FIX' and wont.get('answerVersion') is None
+              and isinstance(again, list) and len(again) == 1 and again[0].get('text') == 'так задумано правилом',
+              str(again)[:300])
+        reopened = call('POST', f'/api/problems/{report_id}/resolve?resolved=false') or {}
+        check('возврат сообщения в работу снимает ответ — п. 158',
+              reopened.get('resolved') is False and 'answerKind' not in reopened
+              and call_account('GET', '/api/problems/answers', reporter_token) == [],
+              str(reopened)[:200])
+    flood_codes = [(call_account('POST', '/api/problems', reporter_token, {'text': 'наплыв %d' % i})
+                    or {}).get('ERROR') for i in range(6)]
+    check('сообщений с одной записи — не больше пяти в час',
+          flood_codes[:4] == [None] * 4 and flood_codes[-1] == 429, str(flood_codes))
+    if reporter_id:
+        call('DELETE', f'/api/auth/accounts/{reporter_id}')
+        check('сообщения удалённой записи уходят вместе с ней',
+              not [row for row in (call('GET', '/api/problems') or []) if isinstance(row, dict)
+                   and row.get('accountId') == reporter_id])
+
+# ПАКЕТ ОСНОВАТЕЛЯ: страницу читают все (и без входа), черновик видит только администратор,
+# правит только он. Прогон правит страницу и в конце возвращает ту, что была, слово в слово:
+# это страница продажи, и прогон не вправе оставить на ней свои числа.
+founders_before = call('GET', '/api/founders')
+check('администратор получает страницу основателя — и черновик тоже',
+      isinstance(founders_before, dict) and bool((founders_before.get('ru') or {}).get('title'))
+      and bool((founders_before.get('en') or {}).get('title')), str(founders_before)[:200])
+if isinstance(founders_before, dict) and 'ERROR' not in founders_before:
+    founders_page = {k: v for k, v in founders_before.items() if k != 'updatedAt'}
+    draft = call('PUT', '/api/founders', dict(founders_page, published=False))
+    check('страница сохраняется черновиком', (draft or {}).get('published') is False, str(draft)[:200])
+    check('черновик без входа не виден — пусто, а не отказ',
+          call_account('GET', '/api/founders', '') is None)
+    published = dict(founders_page, published=True, seatsTotal=10, seatsTaken=4,
+                     ru=dict(founders_page['ru'],
+                             sections=list(founders_page['ru'].get('sections') or []) + [{'title': ' ', 'items': ['', ' ']}]))
+    saved = call('PUT', '/api/founders', published) or {}
+    check('пустой раздел при сохранении выбрасывается',
+          len(saved.get('ru', {}).get('sections') or []) == len(founders_page['ru'].get('sections') or []),
+          str(saved)[:200])
+    seen = call_account('GET', '/api/founders', '') or {}
+    check('опубликованную страницу читают без входа, с местами',
+          seen.get('seatsTotal') == 10 and seen.get('seatsTaken') == 4
+          and (seen.get('en') or {}).get('title') == founders_page['en']['title'], str(seen)[:200])
+    check('занятых мест не больше, чем всего',
+          (call('PUT', '/api/founders', dict(founders_page, seatsTotal=5, seatsTaken=6)) or {}).get('ERROR') == 400)
+    check('ссылка покупки — только веб-адрес',
+          (call('PUT', '/api/founders', dict(founders_page, buyUrl='javascript:alert(1)')) or {}).get('ERROR') == 400)
+    check('без заголовка страница не сохраняется',
+          (call('PUT', '/api/founders', dict(founders_page, en=dict(founders_page['en'], title=' ')))
+           or {}).get('ERROR') == 400)
+    check('чужим правка страницы не даётся',
+          (call_account('PUT', '/api/founders', 'x' * 20, founders_page) or {}).get('ERROR') == 403)
+    restored = call('PUT', '/api/founders', founders_page) or {}
+    check('страница основателя вернулась, как была',
+          {k: v for k, v in restored.items() if k != 'updatedAt'} == founders_page, str(restored)[:200])
+
 plain_game = call('POST', '/api/games', {'name': 'Регресс без Wardenhold', 'galaxySize': 'SMALL',
                                          'playerName': 'Хозяин'})
 check('запрос без полей не включает ни Wardenhold, ни итог по могуществу — замеры не обрываются',
@@ -799,6 +1652,9 @@ check('итог по могуществу включается признако�
       f"{vg.get('mightVictory')}, ход {vg.get('mightVictoryTurn')}")
 if vg.get('id'):
     v_tok = verdict_game['credentials']['accessToken']
+    early = call('GET', f"/api/games/{vg['id']}/ending") or {}
+    check('итогов у неоконченной партии нет — 409 (field-backlog, пункт 33)',
+          early.get('ERROR') == 409, str(early)[:200])
     call('POST', f"/api/games/{vg['id']}/start", {'accessToken': v_tok})
     for _ in range(4):
         call('POST', f"/api/games/{vg['id']}/turn/advance", {'accessToken': v_tok, 'turns': 100})
@@ -811,8 +1667,77 @@ if vg.get('id'):
           and ended.get('winnerPlayerId'),
           f"{ended.get('status')}, {ended.get('victoryKind')}, ход {ended.get('turn')}")
     if ended.get('victoryKind') == 'MIGHT':
-        check('итог подведён ровно на сроке', ended.get('turn') == 301, str(ended.get('turn')))
+        # Не позже срока: при огромном отрыве итог приходит досрочно (field-backlog, пункт 80).
+        check('итог подведён не позже срока', 0 < (ended.get('turn') or 0) <= 301, str(ended.get('turn')))
+    # Сцена конца партии — field-backlog, пункт 33: итоги собираются по учётной записи и
+    # рассказывают партию числами — путь к победе, причина с числами, своё место, график всех.
+    ending = call('GET', f"/api/games/{vg['id']}/ending") or {}
+    own_id = verdict_game['credentials'].get('playerId')
+    lines = ending.get('history') or []
+    # РАСКРЫТИЕ — пункт 136: у оконченной партии карта открыта целиком.
+    end_map = call('GET', f"/api/games/{vg['id']}/map?accessToken={v_tok}") or {}
+    check('у оконченной партии вся галактика разведана — пункт 136',
+          ended.get('status') != 'FINISHED'
+          or (bool(end_map.get('systems')) and all(x.get('explored') for x in end_map.get('systems') or [])),
+          str(sum(1 for x in end_map.get('systems') or [] if not x.get('explored'))))
+    check('итоги партии: путь к победе, причина с числами и своё место — пункт 33',
+          ending.get('victoryKind') == ended.get('victoryKind') and ending.get('kindLabel')
+          and any(ch.isdigit() for ch in ending.get('reason') or '')
+          and 1 <= (ending.get('place') or 0) <= (ending.get('empires') or 0)
+          and ending.get('won') == (ending.get('winnerId') == own_id),
+          str({k: ending.get(k) for k in ('victoryKind', 'reason', 'place', 'empires', 'won')})[:300])
+    check('график итогов показывает ВСЕ империи, своя помечена, победитель тоже — пункт 33',
+          len(lines) == 3 and all(line.get('points') for line in lines)
+          and sum(bool(line.get('self')) for line in lines) == 1
+          and sum(bool(line.get('winner')) for line in lines) == 1,
+          str([(l.get('name'), len(l.get('points') or []), l.get('self'), l.get('winner')) for l in lines])[:300])
+    # ПУТЬ ПОБЕДИТЕЛЯ — пункт 106: имя победителя и контрольные ходы по порядку.
+    wpath = ending.get('winnerPath') or {}
+    check('путь победителя: имя и контрольные ходы по порядку — пункт 106',
+          bool(wpath.get('name')) and [x.get('turn') for x in wpath.get('checkpoints') or []]
+          == sorted(x.get('turn') for x in wpath.get('checkpoints') or [])
+          and len(wpath.get('checkpoints') or []) >= 1,
+          str(wpath)[:300])
+    # КАЖДЫЙ ЛУЧШИЙ В ЧЁМ-ТО — пункт 116: только настоящие первые места, у каждого держатель и число.
+    firsts = ending.get('firsts')
+    check('первые места партии — у каждого держатель и число больше нуля — пункт 116',
+          isinstance(firsts, list) and len(firsts) > 0
+          and all(x.get('holders') and (x.get('value') or 0) > 0 for x in firsts)
+          and any(x.get('axis') == 'TECHNOLOGIES' for x in firsts),
+          str(firsts)[:300])
+    # «Как это было» — пункт 143: история — список строк хроники по ходам, без конца партии.
+    story = ending.get('story')
+    check('сцена конца начинается с истории по ходам — пункт 143',
+          isinstance(story, list) and len(story) <= 7
+          and [x.get('turn') for x in story] == sorted(x.get('turn') for x in story)
+          and all(x.get('kind') not in ('END', 'CONCEDED') for x in story),
+          str(story)[:300])
+    mine_block = ending.get('mine') or {}
+    check('что получилось у игрока: лучший миг и счёт колоний — пункт 33',
+          mine_block.get('bestTurn') and 0 < (mine_block.get('bestSharePercent') or 0) <= 100
+          and (mine_block.get('peakColonies') or 0) >= 1,
+          str(mine_block)[:300])
+    finished_mine = call('GET', '/api/games/mine') or []
+    check('оконченная партия видна в «Ваших партиях» — оттуда итоги открывают ещё раз (пункт 33)',
+          any(g.get('id') == vg['id'] and g.get('status') == 'FINISHED' for g in finished_mine
+              if isinstance(g, dict)),
+          str([(g.get('name'), g.get('status')) for g in finished_mine if isinstance(g, dict)])[:200])
+    # Бюджет хода — field-backlog, пункт 166: последний ход партии разложен по фазам.
+    profile = call('GET', f"/api/games/{vg['id']}/turn/profile") or {}
+    check('последний ход партии разложен по фазам — прибор бюджета хода (пункт 166)',
+          isinstance(profile, dict) and 'ERROR' not in profile and len(profile) >= 10
+          and all(isinstance(v, (int, float)) and v >= 0 for v in profile.values()),
+          str(profile)[:200])
+    check('разбивка хода — только администратору',
+          (call_account('GET', f"/api/games/{vg['id']}/turn/profile", 'x' * 20) or {}).get('ERROR') in (401, 403))
     call('DELETE', f"/api/games/{vg['id']}/admin")
+
+# Замер трения — field-backlog, пункт 195: клиент шлёт длительность шагом воронки, и сервер
+# обязан принять её в том виде, в каком шлёт клиент (`state/firstAction.ts`).
+timing_answer = call('POST', '/api/funnel', {'visitor': 'regress-timing-' + str(int(time.time())),
+                                             'step': 'timing.first-action', 'detail': 'ms:8421,turn'})
+check('замер «до первого действия» принят журналом воронки — пункт 195',
+      not (isinstance(timing_answer, dict) and timing_answer.get('ERROR')), str(timing_answer)[:200])
 
 # Регистрация игрока: запись заводится, но до подтверждения почты вход закрыт — п. 3.1.
 # Логина в заявке нет: логином служит сама почта, а имя идёт только на показ в игре.
@@ -890,6 +1815,173 @@ if confirm_token:
 check('чужая ссылка подтверждения не годится — п. 3.1',
       call('POST', '/api/auth/confirm?token=' + 'x' * 43).get('ERROR') == 403)
 
+# СБРОС И СМЕНА ПАРОЛЯ, УДАЛЕНИЕ ЗАПИСИ — backlog-promo, пункт 45, и ПРАВА ЗАПИСИ — пункт 41.
+# Своя запись: её сбрасывают, меняют, дают ей право и в конце удаляют. Письма читаются из папки
+# исходящих — с настоящим SMTP проверять нечем, и блок молчит.
+def outbox_link(login, kind):
+    if not os.path.isdir(OUTBOX):
+        return None
+    letters = sorted((f for f in os.listdir(OUTBOX) if login in f),
+                     key=lambda f: os.path.getmtime(os.path.join(OUTBOX, f)))
+    for name in reversed(letters):
+        found = re.search(kind + r'=(\S+)', io.open(os.path.join(OUTBOX, name), encoding='utf-8').read())
+        if found:
+            return found.group(1)
+    return None
+
+
+reset_login = 'reset-' + uuid.uuid4().hex[:10] + TEST_MAIL_DOMAIN
+reset_reg = register({'email': reset_login, 'name': 'Сброс', 'password': 'orion-2026'})
+if isinstance(reset_reg, dict) and not reset_reg.get('ERROR') and not reset_reg.get('mailSent'):
+    first = call('POST', '/api/auth/confirm?token=' + (outbox_link(reset_login, 'confirm') or 'none')) or {}
+    first_token = first.get('token')
+    reset_id = (first.get('account') or {}).get('id')
+    asked = call('POST', '/api/auth/reset/request', {'email': reset_login}) or {}
+    stranger = call('POST', '/api/auth/reset/request', {'email': 'nobody-' + reset_login}) or {}
+    check('ответ на просьбу сброса один, есть запись или нет — пункт 45',
+          bool(asked.get('notice')) and asked.get('notice') == stranger.get('notice'), str(asked)[:200])
+    reset_code = outbox_link(reset_login, 'reset')
+    check('ссылка сброса уходит письмом — пункт 45', reset_code is not None, reset_login)
+    if reset_code:
+        check('короткий новый пароль не принимается — пункт 45',
+              (call('POST', '/api/auth/reset', {'token': reset_code, 'newPassword': 'коротко'}) or {}).get('ERROR') == 409)
+        renewed = call('POST', '/api/auth/reset', {'token': reset_code, 'newPassword': 'orion-2027'}) or {}
+        check('по ссылке задаётся новый пароль, и игрок сразу входит — пункт 45',
+              bool(renewed.get('token')), str(renewed)[:200])
+        check('сброс гасит прежние входы записи — пункт 45',
+              (call_account('GET', '/api/auth/me', first_token or '') or {}).get('ERROR') in (401, 403))
+        check('ссылка сброса одноразовая — пункт 45',
+              (call('POST', '/api/auth/reset', {'token': reset_code, 'newPassword': 'orion-2028'}) or {}).get('ERROR') == 403)
+        check('после сброса входят новым паролем, а старым нет — пункт 45',
+              bool((call('POST', '/api/auth/login', {'login': reset_login, 'password': 'orion-2027'}) or {}).get('token'))
+              and (call('POST', '/api/auth/login', {'login': reset_login, 'password': 'orion-2026'}) or {}).get('ERROR') == 403)
+        mine_token = renewed.get('token')
+        check('смена пароля с неверным нынешним не проходит — пункт 45',
+              (call_account('POST', '/api/auth/password', mine_token,
+                            {'password': 'wrong-wrong', 'newPassword': 'orion-2028'}) or {}).get('ERROR') == 403)
+        call_account('POST', '/api/auth/password', mine_token, {'password': 'orion-2027', 'newPassword': 'orion-2028'})
+        check('пароль меняется из настроек, а вход остаётся — пункт 45',
+              bool((call('POST', '/api/auth/login', {'login': reset_login, 'password': 'orion-2028'}) or {}).get('token'))
+              and (call_account('GET', '/api/auth/me', mine_token) or {}).get('login') == reset_login)
+
+        # Права записи: администратор выдаёт и отзывает руками, запись видит действующие.
+        # Основатель (FOUNDER, пакет основателя) видит страницы прибора — пункты 47, 70, 101;
+        # ранний доступ (EARLY_ACCESS) сверх игрока не даёт ничего.
+        if reset_id:
+            check('свои наборы справочников закрыты обычному игроку — пункт 42',
+                  (call_account('GET', '/api/mods', mine_token) or {}).get('ERROR') == 403)
+            check('страница баланса закрыта обычному игроку — пункт 70',
+                  (call_account('GET', '/api/balance/open', mine_token) or {}).get('ERROR') == 403)
+            early = call('POST', f'/api/auth/accounts/{reset_id}/entitlements',
+                         {'kind': 'EARLY_ACCESS', 'note': 'регресс'}) or {}
+            check('ранний доступ страниц прибора не открывает — пункт 70',
+                  early.get('active') is True
+                  and (call_account('GET', '/api/balance/open', mine_token) or {}).get('ERROR') == 403
+                  and (call_account('GET', '/api/auth/me', mine_token) or {}).get('insider') is False,
+                  str(early)[:200])
+            call('DELETE', f"/api/auth/entitlements/{early.get('id')}")
+            granted = call('POST', f'/api/auth/accounts/{reset_id}/entitlements',
+                           {'kind': 'FOUNDER', 'note': 'регресс'}) or {}
+            # Ответ «кто я» переспрашивается, если пришёл отказом предела частоты (429): в разгар
+            # прогона адрес тратит ведро быстро, и две проверки ниже проваливались не правом, а
+            # пустым ответом (09.10.2026). Сам ответ — в подробностях, чтобы причина была видна.
+            me_now = {}
+            for _ in range(5):
+                me_now = call_account('GET', '/api/auth/me', mine_token) or {}
+                if me_now.get('ERROR') != 429:
+                    break
+                time.sleep(1.5)
+            check('администратор выдаёт право руками, и запись его видит — пункт 41',
+                  granted.get('active') is True and 'FOUNDER' in (me_now.get('entitlements') or []),
+                  str({'granted': granted.get('active'), 'me': {k: me_now.get(k) for k in ('ERROR', 'entitlements', 'insider')}})[:200])
+            opened = {}
+            for _ in range(5):
+                opened = call_account('GET', '/api/balance/open', mine_token) or {}
+                if opened.get('ERROR') != 429:
+                    break
+                time.sleep(1.5)
+            check('основателю открыт баланс рас: числа из записей прогонов — пункты 70 и 101',
+                  me_now.get('insider') is True and isinstance(opened.get('runs'), int) and opened.get('runs') > 0
+                  and opened.get('games', 0) > 0 and opened.get('turns', 0) > 0
+                  and opened.get('minGames') == 40,
+                  str({k: opened.get(k) for k in ('ERROR', 'runs', 'games', 'minGames')} | {'insider': me_now.get('insider')}))
+            # МОДЫ — field-backlog, пункт 42: свои наборы справочников только основателю. Неверный набор
+            # не сохраняется, верный — собирается из файла игры; партия на наборе видит его здания в
+            # списке стройки (справочник подменяется на время запросов к этой партии).
+            mods_listed = call_account('GET', '/api/mods', mine_token)
+            check('основателю открыт список своих наборов справочников — пункт 42',
+                  isinstance(mods_listed, list), str(mods_listed)[:200])
+            bad_mod = call_account('POST', '/api/mods', mine_token, {'name': 'Регресс битый', 'buildings': '{"buildings": 5}'}) or {}
+            check('набор, который игра не прочтёт, не сохраняется — пункт 42', bad_mod.get('ERROR') == 400, str(bad_mod)[:200])
+            base_buildings = call_account('GET', '/api/mods/base/buildings', mine_token) or {}
+            if isinstance(base_buildings, dict) and isinstance(base_buildings.get('buildings'), list):
+                for b in base_buildings['buildings']:
+                    nm = b.get('name')
+                    if isinstance(nm, dict):
+                        # Оба языка: прогон спрашивает сервер по-русски.
+                        nm['en'] = 'Mod ' + nm.get('en', '')
+                        if 'ru' in nm:
+                            nm['ru'] = 'Mod ' + nm['ru']
+                    elif isinstance(nm, str):
+                        b['name'] = 'Mod ' + nm
+            good_mod = call_account('POST', '/api/mods', mine_token,
+                                    {'name': 'Регресс набор', 'buildings': json.dumps(base_buildings, ensure_ascii=False)}) or {}
+            check('набор из файла игры сохраняется — пункт 42', bool(good_mod.get('id')) and good_mod.get('buildings') is True,
+                  str(good_mod)[:200])
+            if good_mod.get('id'):
+                mod_game = call_account('POST', '/api/games', mine_token, {'name': 'Регресс мод', 'galaxySize': 'SMALL',
+                                        'playerName': 'Моддер', 'totalPlayers': 2, 'modId': good_mod['id']}) or {}
+                mg_id = (mod_game.get('game') or {}).get('id')
+                mg_tok = (mod_game.get('credentials') or {}).get('accessToken')
+                mod_names = []
+                if mg_id and mg_tok:
+                    call('POST', f'/api/games/{mg_id}/start', {'accessToken': mg_tok})
+                    mg_map = call_auth('GET', f'/api/games/{mg_id}/map', mg_tok) or {}
+                    for st in mg_map.get('systems', []):
+                        for pl in st.get('planets', []):
+                            col = pl.get('colony') or {}
+                            # Постройки родного мира (звёздная база, казармы, столица) — их названия из справочника.
+                            if pl.get('homeworld') and col.get('buildings'):
+                                mod_names = [x.get('name', '') for x in col['buildings']]
+                check('партия на наборе видит его здания — названия из набора — пункт 42',
+                      bool(mod_names) and all(n.startswith('Mod ') for n in mod_names), str(mod_names)[:200])
+                plain_names = []
+                plain = call_account('POST', '/api/games', mine_token, {'name': 'Регресс без мода', 'galaxySize': 'SMALL',
+                                     'playerName': 'Обычный', 'totalPlayers': 2}) or {}
+                pg_id = (plain.get('game') or {}).get('id')
+                pg_tok = (plain.get('credentials') or {}).get('accessToken')
+                if pg_id and pg_tok:
+                    call('POST', f'/api/games/{pg_id}/start', {'accessToken': pg_tok})
+                    pg_map = call_auth('GET', f'/api/games/{pg_id}/map', pg_tok) or {}
+                    for st in pg_map.get('systems', []):
+                        for pl in st.get('planets', []):
+                            col = pl.get('colony') or {}
+                            if pl.get('homeworld') and col.get('buildings'):
+                                plain_names = [x.get('name', '') for x in col['buildings']]
+                check('набор не трогает соседнюю партию — пункт 42',
+                      bool(plain_names) and not any(n.startswith('Mod ') for n in plain_names), str(plain_names)[:200])
+                for gid in (mg_id, pg_id):
+                    if gid:
+                        call('DELETE', f'/api/games/{gid}/admin')
+                call_account('DELETE', f"/api/mods/{good_mod['id']}", mine_token)
+            check('чужое право не выдать без администратора — пункт 41',
+                  (call_account('POST', f'/api/auth/accounts/{reset_id}/entitlements', mine_token,
+                                {'kind': 'FOUNDER'}) or {}).get('ERROR') == 403)
+            check('неизвестный вид права не выдаётся — пункт 41',
+                  (call('POST', f'/api/auth/accounts/{reset_id}/entitlements', {'kind': 'GOD_MODE'}) or {}).get('ERROR') == 400)
+            revoked = call('DELETE', f"/api/auth/entitlements/{granted.get('id')}") or {}
+            history = call('GET', f'/api/auth/accounts/{reset_id}/entitlements') or []
+            check('отозванное право гаснет, но остаётся в истории — пункт 41',
+                  revoked.get('active') is False and len(history) == 2 and all(one.get('revokedAt') for one in history)
+                  and 'FOUNDER' not in ((call_account('GET', '/api/auth/me', mine_token) or {}).get('entitlements') or []),
+                  str(history)[:200])
+
+        check('удалить запись с неверным паролем нельзя — пункт 45',
+              (call_account('POST', '/api/auth/delete', mine_token, {'password': 'wrong-wrong'}) or {}).get('ERROR') == 403)
+        call_account('POST', '/api/auth/delete', mine_token, {'password': 'orion-2028'})
+        check('игрок удаляет свою запись сам — и войти в неё больше нельзя — пункт 45',
+              (call('POST', '/api/auth/login', {'login': reset_login, 'password': 'orion-2028'}) or {}).get('ERROR') == 403)
+
 # Язык живёт в учётной записи — п. 3.5. До этого он лежал только в localStorage браузера:
 # игрок выбирал русский, садился за другую машину — и получал английский заново. Прогон
 # просит ответы по-русски, поэтому запись заводится русской; «другая машина» здесь — это
@@ -933,6 +2025,21 @@ if player_token:
           call('PUT', '/api/auth/text-scale', {'textScale': 180}).get('ERROR') == 400)
     call('PUT', '/api/auth/text-scale', {'textScale': 100})
 
+    # Громкость музыки и эффектов: живёт в записи, а пустая значит ВЫКЛЮЧЕНО — звук, заигравший
+    # сам при первом входе, раздражает сильнее тишины (решение хозяина проекта).
+    check('новая запись звука не называет — звук выключен',
+          confirmed['account'].get('musicVolume') in (None, 0)
+          and confirmed['account'].get('sfxVolume') in (None, 0), str(confirmed['account']))
+    louder = call('PUT', '/api/auth/sound', {'musicVolume': 40, 'sfxVolume': 100})
+    check('переключатели звука записывают выбор в запись',
+          louder.get('musicVolume') == 40 and louder.get('sfxVolume') == 100, str(louder))
+    me = call('GET', '/api/auth/me')
+    check('записанная громкость видна при следующем входе',
+          me.get('musicVolume') == 40 and me.get('sfxVolume') == 100, str(me))
+    check('ступень громкости не из списка не записывается',
+          call('PUT', '/api/auth/sound', {'musicVolume': 101, 'sfxVolume': 0}).get('ERROR') == 400)
+    call('PUT', '/api/auth/sound', {'musicVolume': 0, 'sfxVolume': 0})
+
     # Раскладка горячих клавиш карты — п. 11.1: третья настройка вида, которая живёт в
     # записи. Клавиши помнят пальцами, и стандартные на второй машине — та же потеря, что
     # английский язык или мелкий шрифт.
@@ -952,9 +2059,9 @@ if player_token:
     check('разметка вместо клавиши не записывается — п. 11.1',
           call('PUT', '/api/auth/hotkeys',
                {'hotkeys': {'turn': '<script>alert(1)</script>'}}).get('ERROR') == 400)
-    check('раскладка длиннее дюжины пар не записывается — п. 11.1',
+    check('раскладка длиннее шестнадцати пар не записывается — п. 11.1',
           call('PUT', '/api/auth/hotkeys',
-               {'hotkeys': {('a%d' % i): 'KeyA' for i in range(13)}}).get('ERROR') == 400)
+               {'hotkeys': {('a%d' % i): 'KeyA' for i in range(17)}}).get('ERROR') == 400)
     check('отказ не портит уже записанную раскладку — п. 11.1',
           call('GET', '/api/auth/me').get('hotkeys') == own,
           str(call('GET', '/api/auth/me').get('hotkeys')))
@@ -972,6 +2079,10 @@ check('без входа язык записи не меняется — п. 3.5
 check('без входа размер текста не меняется — п. 11.1',
       probe('PUT', '/api/auth/text-scale',
             json.dumps({'textScale': 130}).encode())['status'] in (401, 403))
+
+check('без входа громкость не меняется',
+      probe('PUT', '/api/auth/sound',
+            json.dumps({'musicVolume': 1, 'sfxVolume': 1}).encode())['status'] in (401, 403))
 
 check('без входа раскладка клавиш не меняется — п. 11.1',
       probe('PUT', '/api/auth/hotkeys',
@@ -1225,7 +2336,7 @@ bg = call('POST', '/api/games', {'name': 'Знамёна', 'playerName': 'Зна
 bg_id, bg_tok = bg['game']['id'], bg['credentials']['accessToken']
 bg_host = [x for x in call('GET', f'/api/games/{bg_id}')['players'] if x['id'] == bg['credentials']['playerId']]
 check('создатель получает выбранное знамя — п. 3.2',
-      bool(bg_host) and bg_host[0]['color'].lower() == '#b07a4a',
+      bool(bg_host) and bg_host[0]['color'].lower() == '#9f7756',
       str(bg_host[0]['color'] if bg_host else None))
 bg_same = call('POST', f'/api/games/{bg_id}/join', {'playerName': 'Двойник', 'banner': 'BROWN'})
 check('занятое знамя второму не взять — п. 3.2', bg_same.get('ERROR') == 409,
@@ -1233,13 +2344,13 @@ check('занятое знамя второму не взять — п. 3.2', bg
 bg_other = call('POST', f'/api/games/{bg_id}/join', {'playerName': 'Сосед', 'banner': 'SILVER'})
 check('свободное знамя берётся при входе в чужую партию — п. 3.2',
       bg_other.get('ERROR') is None
-      and any(x['color'].lower() == '#c9d1dc' for x in call('GET', f'/api/games/{bg_id}')['players']),
+      and any(x['color'].lower() == '#d7dce0' for x in call('GET', f'/api/games/{bg_id}')['players']),
       str(bg_other.get('body', {}).get('message')))
 bg_start = call('POST', f'/api/games/{bg_id}/start', {'accessToken': bg_tok})
 bg_colors = [x['color'].lower() for x in bg_start.get('players', [])]
 check('ИИ разбирает оставшиеся знамёна, не повторяя людей — п. 3.2',
       len(bg_colors) == 4 and len(set(bg_colors)) == 4
-      and '#b07a4a' in bg_colors and '#c9d1dc' in bg_colors,
+      and '#9f7756' in bg_colors and '#d7dce0' in bg_colors,
       str(bg_colors))
 call('DELETE', f'/api/games/{bg_id}?accessToken={bg_tok}')
 
@@ -1250,8 +2361,8 @@ check('галактика сгенерирована', len(m['systems']) == 33, 
 # на раскрытой карте — см. README, раздел «Видимость систем».
 revealed = call('GET', f'/api/games/{gid}/map?accessToken={tok}&revealAll=true')
 special = [s for s in revealed['systems'] if s.get('special')]
-check('есть особая звезда Wardenhold',
-      len(special) == 1 and special[0]['name'] == 'Wardenhold',
+check('есть особая звезда Thessar',
+      len(special) == 1 and special[0]['name'] == 'Thessar',
       str([x['name'] for x in special]))
 check('метка особой звезды скрыта у неразведанных систем',
       not any(s.get('special') for s in m['systems']))
@@ -1482,6 +2593,64 @@ check('казна пополняется товарами', credits_now > 0, f'{
 
 # --- 6. Здания (п. 10) ---
 avail = [x['code'] for x in p['colony']['available']]
+# ПУТИ К ПОБЕДЕ — field-backlog, пункт 51: свои колонии и голоса — всегда, порог совета — две
+# трети, выключенный путь пуст; веха (пункт 11) — строка или ничего.
+# ЗАПИСКА К ПАРТИИ — пункт 110: своя строка, пустая стирает, длинная — отказ 400.
+saved_note = call('PUT', f'/api/games/{gid}/note?accessToken={tok}', {'note': '  взять Сол к 80-му ходу  '}) or {}
+read_note = call('GET', f'/api/games/{gid}/note?accessToken={tok}') or {}
+check('записка к партии сохраняется и читается — пункт 110',
+      saved_note.get('note') == 'взять Сол к 80-му ходу' and read_note.get('note') == 'взять Сол к 80-му ходу',
+      str((saved_note, read_note)))
+check('слишком длинная записка — 400 — пункт 110',
+      (call('PUT', f'/api/games/{gid}/note?accessToken={tok}', {'note': 'x' * 201}) or {}).get('ERROR') == 400)
+# Заметок до трёх, по строке на заметку (08.10.2026): пустые строки отбрасываются, четвёртая — отказ.
+three_notes = call('PUT', f'/api/games/{gid}/note?accessToken={tok}', {'note': 'один\n\n два \nтри'}) or {}
+check('три заметки сохраняются строками, пустые отброшены',
+      three_notes.get('note') == 'один\nдва\nтри', str(three_notes))
+check('четвёртая заметка — 400',
+      (call('PUT', f'/api/games/{gid}/note?accessToken={tok}', {'note': 'a\nb\nc\nd'}) or {}).get('ERROR') == 400)
+cleared_note = call('PUT', f'/api/games/{gid}/note?accessToken={tok}', {'note': ''}) or {}
+check('пустая записка стирает её — пункт 110', 'note' not in cleared_note and 'ERROR' not in cleared_note,
+      str(cleared_note))
+# СРАВНЕНИЕ С СОБОЙ ПРОШЛЫМ — пункт 115: в начале партии сравнивать не с чем, и это не ошибка.
+past = call('GET', f'/api/games/{gid}/past-self?accessToken={tok}')
+check('сравнение с собой прошлым отвечает без отказа — пункт 115',
+      past is None or (isinstance(past, dict) and 'ERROR' not in past), str(past)[:200])
+victory = call('GET', f'/api/games/{gid}/victory-progress?accessToken={tok}') or {}
+check('прогресс к победе несёт список «финиш близко» — пункт 56',
+      isinstance(victory.get('finish'), list), str(victory.get('finish'))[:200])
+check('прогресс к победе: свои колонии и порог совета — пункт 51',
+      ((victory.get('conquest') or {}).get('yourColonies') or 0) >= 1
+      and (victory.get('council') is None or (victory.get('council') or {}).get('neededPercent') == 67)
+      and (victory.get('milestone') is None or isinstance(victory.get('milestone'), str)),
+      str(victory)[:300])
+# КАК УСТРОЕНО — field-backlog, пункты 75 и 200: фазы хода идут в порядке сервера и все названы
+# словами, у статей правил числа подставлены (ни одной подстановки «{0}» и ни одного ключа).
+book = call('GET', '/api/reference/rules') or {}
+phases = book.get('phases') or []
+orders = [x.get('order') for x in phases]
+check('справочник «Как устроено»: фазы хода по порядку сервера и названы — пункт 75',
+      len(phases) >= 15 and orders == sorted(orders)
+      and all(x.get('title') and x.get('code') and not str(x.get('title')).startswith('rules.') for x in phases),
+      str(phases)[:300])
+articles = book.get('articles') or []
+check('статьи правил с числами из правил игры — пункт 200',
+      len(articles) >= 8 and all(any(c.isdigit() for c in (x.get('text') or '')) and '{' not in (x.get('text') or '')
+                                 and not (x.get('text') or '').startswith('rules.') for x in articles)
+      and any(x.get('deviation') for x in articles),
+      str([(x.get('code'), (x.get('text') or '')[:40]) for x in articles])[:300])
+# ХРОНИКА — пункт 138: список моментов по ходам, тексты собраны, а не ключи.
+chronicle = call('GET', f'/api/games/{gid}/chronicle?accessToken={tok}')
+check('хроника партии отдаётся списком собранных строк — пункт 138',
+      isinstance(chronicle, list)
+      and all(x.get('turn') is not None and x.get('kind') and not str(x.get('text', '')).startswith(('turn.', 'milestone.'))
+              for x in chronicle),
+      str(chronicle)[:300])
+# ИЗ ЧЕГО СЛОЖИЛОСЬ — пункт 40: слагаемые выработки колонии с базой у каждого ресурса.
+parts = p['colony'].get('outputParts') or []
+check('выработка колонии разложена на слагаемые, у каждого ресурса есть база — пункт 40',
+      {(x.get('resource'), x.get('source')) for x in parts} >= {('FOOD', 'BASE'), ('PRODUCTION', 'BASE'), ('RESEARCH', 'BASE')},
+      str(parts)[:300])
 # Особые проекты зданиями не являются: дома, товары, шпион, корабль, грузовой флот и
 # гражданские корабли — последние открыты изученным только что Cold Fusion, а грузовой
 # флот стоит в списке со стартовых технологий (п. 9). Колониальная база — если в родной
@@ -1512,6 +2681,17 @@ call('POST', f"/api/games/{gid}/planets/{p['id']}/population",
 call('POST', f"/api/games/{gid}/planets/{p['id']}/project",
      {'accessToken': tok, 'projectCode': 'biospheres'})
 before_build = planet()['colony']
+# Здание на стапеле уходит из списка доступного, как и поставленное в очередь (06.10.2026):
+# поставленное первым и есть текущая стройка, а в списке оно оставалось.
+check('здание на стапеле ушло из списка доступного — п. 10',
+      before_build['projectCode'] == 'biospheres'
+      and 'biospheres' not in [x['code'] for x in before_build['available']],
+      str(before_build['projectCode']))
+again = call('POST', f"/api/games/{gid}/planets/{p['id']}/queue",
+             {'accessToken': tok, 'projectCode': 'biospheres'})
+check('здание на стапеле в очередь не встаёт, отказ называет причину — п. 10',
+      again.get('ERROR') == 409 and 'уже строит' in str(again.get('body', {}).get('message')),
+      str(again.get('body', {}).get('message')))
 capacity_before, upkeep_before = before_build['maxPopulation'], before_build['upkeep']
 # Ждём именно биосферы: звёздная база на родном мире стоит с первого хода (п. 8), и
 # «есть хоть одно здание» больше не значит «достроили это».
@@ -1557,6 +2737,14 @@ check('проект встаёт в очередь — п. 10',
       str([x['code'] for x in queued['colony']['queue']]))
 check('стройку очередь не трогает — п. 10', queued['colony']['projectCode'] == 'SPY',
       str(queued['colony']['projectCode']))
+# Дома второй раз в очередь не встают (07.10.2026): дойдя до первых, колония на них и
+# останется, и вторые не начнутся никогда.
+twice = enqueue('HOUSING')
+check('дома в очереди дважды не встают — п. 10',
+      twice.get('ERROR') == 409
+      and [x['code'] for x in colony_now()['queue']] == ['HOUSING']
+      and 'HOUSING' not in [x['code'] for x in colony_now()['available']],
+      str(twice)[:200])
 
 queued = enqueue('SPY')
 # Признак повторяемости приходит с сервера: по нему окно стройки решает, гасить ли
@@ -1589,11 +2777,11 @@ bad = enqueue('biospheres')
 check('построенное здание в очередь не поставить — п. 10', bad.get('ERROR') == 409,
       str(bad.get('body', {}).get('message')))
 
-# Предел очереди — семь проектов, как в окне стройки оригинала.
-while len(colony_now()['queue']) < 7:
+# Предел очереди — десять проектов (в окне стройки оригинала семь).
+while len(colony_now()['queue']) < 10:
     enqueue('SPY')
 full = enqueue('SPY')
-check('очередь длиннее семи не растёт — п. 10', full.get('ERROR') == 409,
+check('очередь длиннее десяти не растёт — п. 10', full.get('ERROR') == 409,
       f"в очереди {len(colony_now()['queue'])}, ответ {full.get('body', {}).get('message')}")
 
 # Здание, стоящее в очереди, из списка стройки уходит: второй раз его не построить.
@@ -1782,6 +2970,23 @@ if sale_target:
     check('колония помнит ход своей продажи — п. 10',
           colony_now().get('soldTurn') == call('GET', f'/api/games/{gid}')['game']['turn'],
           f"продано на ходу {colony_now().get('soldTurn')}")
+
+    # ОТМЕНА В ПРЕДЕЛАХ ХОДА — field-backlog, пункт 74: продажа отменяется до конца хода, здание и
+    # казна возвращаются, и колония снова вправе продать; продаём снова — дальше всё как было.
+    undoable = call_auth('GET', f'/api/games/{gid}/undo', tok) or []
+    sale_undo = next((one for one in undoable if isinstance(one, dict) and one.get('kind') == 'SELL'), {})
+    check('продажа этого хода стоит в списке отмены — пункт 74', bool(sale_undo.get('id')), str(undoable)[:200])
+    if sale_undo.get('id'):
+        call_auth('POST', f"/api/games/{gid}/undo/{sale_undo['id']}", tok)
+        check('отменённая продажа возвращает здание и деньги — пункт 74',
+              sale_target['code'] in [b['code'] for b in colony_now()['buildings']]
+              and credits_now() == sale_credits_before and not colony_now().get('soldTurn'),
+              f"казна {credits_now()} (была {sale_credits_before}), продано на ходу {colony_now().get('soldTurn')}")
+        resold = call('POST', f"/api/games/{gid}/planets/{p['id']}/sell",
+                      {'accessToken': tok, 'buildingCode': sale_target['code']})
+        check('после отмены колония снова вправе продать — пункт 74',
+              sale_target['code'] not in [b['code'] for b in (resold.get('colony') or {}).get('buildings', [])],
+              str(resold)[:200])
 
     end_turn(gid, tok)
     # Новым ходом предел снят, и отказ приходит уже по делу: такого здания на планете нет.
@@ -2105,6 +3310,20 @@ check('здание изучено и попало в список стройк�
       any(x['code'] == 'automated-factory' for x in home['colony']['available'])
       or any(x['code'] == 'automated-factory' for x in home['colony']['buildings']),
       'доступно %s' % [x['code'] for x in home['colony']['available']])
+# ОКУПАЕМОСТЬ ЗДАНИЯ — field-backlog, пункт 122: у каждого здания в списке стройки либо срок
+# окупаемости на этой колонии (то же число, что у ИИ и автостроя), либо назначение словом.
+# Стоит здесь, а не в разделе зданий: там колония не может строить ещё ни одного здания, и
+# проверка мерила пустоту. Завод — производственное здание, у него обязан быть срок.
+catalog_codes = {b['code'] for b in (call('GET', '/api/reference/buildings') or []) if isinstance(b, dict)}
+building_rows = [x for x in home['colony']['available'] if x['code'] in catalog_codes]
+check('у здания в списке стройки — срок окупаемости или назначение — пункт 122',
+      all((x.get('paybackTurns') or 0) > 0 or x.get('purpose') for x in building_rows),
+      str([(x['code'], x.get('paybackTurns'), x.get('purpose')) for x in building_rows])[:300])
+factory_row = next((x for x in building_rows if x['code'] == 'automated-factory'), None)
+check('завод окупается за ходы, а не назван назначением — пункт 122',
+      (factory_row or {}).get('paybackTurns', 0) > 0
+      or any(b['code'] == 'automated-factory' for b in home['colony']['buildings']),
+      str(factory_row))
 call('POST', '/api/games/%s/planets/%s/build-mode' % (mg, home['id']),
      {'accessToken': m_tok, 'repeatBuild': False, 'autoBuild': True})
 after = mode_colony()
@@ -2125,10 +3344,10 @@ check('автострой взял здание, а не товары — п. 10
 # записи — чтобы завести, игрока — чтобы заложить колонии.
 template = call_account('POST', '/api/build-templates', account_token,
                         {'name': 'Регресс: раннее развитие', 'tier': 1,
-                         'projects': ['research-laboratory', 'SPY']})
+                         'projects': ['research-laboratory', 'SPY', 'regress-vanished-building']})
 check('шаблон стройки сохраняется — п. 10', template.get('id') is not None, str(template)[:120])
 check('шаблон помнит порядок — п. 10',
-      template.get('projects') == ['research-laboratory', 'SPY'],
+      template.get('projects') == ['research-laboratory', 'SPY', 'regress-vanished-building'],
       str(template.get('projects')))
 check('шаблон виден в своём списке — п. 10',
       any(x['id'] == template['id'] for x in call_account('GET', '/api/build-templates', account_token)))
@@ -2137,10 +3356,13 @@ if player_token:
           not any(x['id'] == template['id']
                   for x in call_account('GET', '/api/build-templates', player_token)))
 
-# Закладка: берётся то, что колония может построить СЕЙЧАС, остальное пропускается молча.
-# У родного мира казармы уже стоят, а лаборатория не изучена — значит, лечь должен один завод.
-laid = call_account('POST', '/api/games/%s/planets/%s/queue/template' % (mg, home['id']),
-                    account_token, {'accessToken': m_tok, 'templateId': template['id']})
+# Закладка: берётся то, что колония может построить СЕЙЧАС, остальное пропускается — но НЕ
+# молча (field-backlog, пункт 97): ответ называет пропущенное и причину. Лаборатория не
+# изучена, а третьего проекта в игре нет вовсе — он стоит за «справочник поменялся».
+laid_answer = call_account('POST', '/api/games/%s/planets/%s/queue/template' % (mg, home['id']),
+                           account_token, {'accessToken': m_tok, 'templateId': template['id']})
+laid = (laid_answer.get('planet') or laid_answer) if isinstance(laid_answer, dict) else {}
+template_skipped = (laid_answer.get('skipped') or []) if isinstance(laid_answer, dict) else []
 queued = [x['code'] for x in (laid.get('colony') or {}).get('queue', [])]
 check('шаблон лёг в очередь — п. 10',
       'SPY' in queued or (laid.get('colony') or {}).get('projectCode') == 'SPY',
@@ -2151,6 +3373,12 @@ check('неизученное из шаблона пропущено, а не о
       'research-laboratory' not in queued
       and (laid.get('colony') or {}).get('projectCode') != 'research-laboratory',
       str(queued))
+check('пропущенное из шаблона названо словами и с причиной, без кодов — пункт 97',
+      len(template_skipped) == 2
+      and all(row.get('name') and row.get('reason') and '-' not in row['name'] for row in template_skipped)
+      and template_skipped[0]['reason'] != template_skipped[1]['reason']
+      and 'research-laboratory' not in str(template_skipped),
+      str(template_skipped))
 
 check('шаблон удаляется — п. 10',
       call_account('DELETE', '/api/build-templates/%s' % template['id'], account_token) is None)
@@ -2185,6 +3413,500 @@ call_account('DELETE', '/api/games/%s/admin' % mg, account_token)
 # поднимают только те, кто в ней играл. Правило держится на учётной записи, а не на имени
 # игрока, поэтому проверке нужны ДВЕ записи — администратор и та, которую прогон завёл
 # разделом выше. Без второй записи проверять нечего: свой же слепок поднимается всегда.
+# ЧЕСТНЫЙ СТОЛ — field-backlog, пункт 197 (решение хозяина проекта, 05.10.2026): показ всей
+# галактики у администратора остаётся, но в партии с другими людьми она для всех помечается
+# «под наблюдением администратора». В своей одиночной партии пометки нет.
+if player_token:
+    watch_game = call_account('POST', '/api/games', account_token,
+                              {'name': 'Регресс наблюдение', 'playerName': 'Хозяин',
+                               'galaxySize': 'SMALL', 'totalPlayers': 2, 'galacticEvents': False})
+    wg = ((watch_game or {}).get('game') or {}).get('id')
+    w_tok = ((watch_game or {}).get('credentials') or {}).get('accessToken')
+    w_second = call_account('POST', f'/api/games/{wg}/join', player_token, {'playerName': 'Сосед'})
+    w_tok2 = ((w_second or {}).get('credentials') or {}).get('accessToken')
+    call('POST', f'/api/games/{wg}/start', {'accessToken': w_tok})
+    check('пока администратор не смотрел всю галактику, партия не помечена',
+          (call('GET', f'/api/games/{wg}').get('game') or {}).get('adminWatched') is False)
+    revealed = call('GET', f'/api/games/{wg}/map?accessToken={w_tok}&revealAll=true')
+    check('показ всей галактики у администратора остался и при людях',
+          isinstance(revealed, dict) and len(revealed.get('systems', [])) > 0)
+    check('партия с людьми, где администратор смотрел всю галактику, помечена для всех — п. 197',
+          (call_account('GET', f'/api/games/{wg}', player_token).get('game') or {}).get('adminWatched') is True)
+    call('DELETE', f'/api/games/{wg}/admin')
+solo_watch = call('POST', '/api/games', {'name': 'Регресс наблюдение один', 'playerName': 'Один',
+                                         'galaxySize': 'SMALL', 'totalPlayers': 2, 'galacticEvents': False})
+sw = ((solo_watch or {}).get('game') or {}).get('id')
+sw_tok = ((solo_watch or {}).get('credentials') or {}).get('accessToken')
+if sw:
+    call('POST', f'/api/games/{sw}/start', {'accessToken': sw_tok})
+    call('GET', f'/api/games/{sw}/map?accessToken={sw_tok}&revealAll=true')
+    check('в своей партии против ИИ показ галактики пометки не ставит',
+          (call('GET', f'/api/games/{sw}').get('game') or {}).get('adminWatched') is False)
+    call('DELETE', f'/api/games/{sw}/admin')
+
+# ОДНО НАЖАТИЕ ДО СВОЕГО ХОДА — field-backlog, пункт 194: клиент без партии в браузере
+# открывает первую идущую из «Ваших партий», поэтому первой обязана стоять та, где играли
+# последней, а не последняя созданная.
+older = call('POST', '/api/games', {'name': 'Регресс последняя старшая', 'playerName': 'Один',
+                                    'galaxySize': 'SMALL', 'totalPlayers': 2, 'galacticEvents': False})
+newer = call('POST', '/api/games', {'name': 'Регресс последняя младшая', 'playerName': 'Один',
+                                    'galaxySize': 'SMALL', 'totalPlayers': 2, 'galacticEvents': False})
+og = ((older or {}).get('game') or {}).get('id')
+ng = ((newer or {}).get('game') or {}).get('id')
+if og and ng:
+    og_tok = older['credentials']['accessToken']
+    ng_tok = newer['credentials']['accessToken']
+    call('POST', f'/api/games/{og}/start', {'accessToken': og_tok})
+    call('POST', f'/api/games/{ng}/start', {'accessToken': ng_tok})
+    time.sleep(1.1)
+    call('POST', f'/api/games/{og}/turn/end', {'accessToken': og_tok})
+    running = [g.get('id') for g in (call('GET', '/api/games/mine') or [])
+               if isinstance(g, dict) and g.get('status') == 'IN_PROGRESS' and g.get('id') in (og, ng)]
+    check('«Ваши партии»: первой идёт партия, где играли последней — пункт 194',
+          running[:1] == [og], str(running))
+    call('DELETE', f'/api/games/{og}/admin')
+    call('DELETE', f'/api/games/{ng}/admin')
+
+# ПОДСКАЗКИ — field-backlog, пункты 30 и 130: ответ ветерана и отклонённые подсказки живут в
+# записи; ключи проверяются по виду, «вернуть все» — пустой список.
+if player_token:
+    hinted = call_account('PUT', '/api/auth/hints', player_token,
+                          {'noviceHints': False, 'dismissedHints': ['rule.guestGame', 'tutorial']}) or {}
+    check('запись помнит ответ ветерана и отклонённые подсказки — пункты 30 и 130',
+          hinted.get('noviceHints') is False and hinted.get('dismissedHints') == ['rule.guestGame', 'tutorial'],
+          str({k: hinted.get(k) for k in ('noviceHints', 'dismissedHints')}))
+    check('ключ подсказки не того вида — 400',
+          (call_account('PUT', '/api/auth/hints', player_token,
+                        {'noviceHints': True, 'dismissedHints': ['<b>']}) or {}).get('ERROR') == 400)
+    # ОКНА, КОТОРЫЕ ОТКРЫВАЮТСЯ САМИ — пункт 164: приглушённые живут в записи, пустой список —
+    # «открывать все», ключ не того вида — 400.
+    quiet = call_account('PUT', '/api/auth/windows', player_token,
+                         {'quietWindows': ['explored', 'research']}) or {}
+    check('запись помнит окна, которые не открываются сами — пункт 164',
+          quiet.get('quietWindows') == ['explored', 'research'], str(quiet.get('quietWindows')))
+    check('ключ окна не того вида — 400',
+          (call_account('PUT', '/api/auth/windows', player_token, {'quietWindows': ['a b']}) or {}).get('ERROR') == 400)
+    loud = call_account('PUT', '/api/auth/windows', player_token, {'quietWindows': []}) or {}
+    check('«открывать все окна» очищает список — пункт 164', not loud.get('quietWindows'), str(loud.get('quietWindows')))
+    # МЕНЬШЕ ДВИЖЕНИЯ — пункт 170: выбор живёт в записи, пусто — «как в системе».
+    still = call_account('PUT', '/api/auth/motion', player_token, {'reduceMotion': True}) or {}
+    check('запись помнит «меньше движения» — пункт 170', still.get('reduceMotion') is True, str(still.get('reduceMotion')))
+    system_motion = call_account('PUT', '/api/auth/motion', player_token, {'reduceMotion': None}) or {}
+    check('«как в системе» снимает выбор движения — пункт 170',
+          'reduceMotion' not in system_motion and system_motion.get('id'), str(system_motion)[:200])
+    restored_hints = call_account('PUT', '/api/auth/hints', player_token,
+                                  {'noviceHints': True, 'dismissedHints': []}) or {}
+    check('«вернуть все подсказки» очищает список — пункт 130',
+          restored_hints.get('noviceHints') is True and not restored_hints.get('dismissedHints'),
+          str({k: restored_hints.get(k) for k in ('noviceHints', 'dismissedHints')}))
+
+# ЗАБРАТЬ ХОД — field-backlog, пункт 128; КОНТЕКСТ «ВАШИХ ПАРТИЙ» — пункт 109; ВРЕМЯ
+# ПОСЛЕДНЕГО ДЕЙСТВИЯ — пункт 108. В партии двух людей объявленный ход можно забрать, пока
+# второй не закончил; посчитанный — нельзя. Строка своей партии говорит, ждут ли вашего хода.
+if player_token:
+    ug = call_account('POST', '/api/games', account_token,
+                      {'name': 'Регресс забрать ход', 'playerName': 'Хозяин',
+                       'galaxySize': 'SMALL', 'totalPlayers': 2, 'galacticEvents': False})
+    ug_id = ((ug or {}).get('game') or {}).get('id')
+    ug_tok = ((ug or {}).get('credentials') or {}).get('accessToken')
+    ug_host = ((ug or {}).get('credentials') or {}).get('playerId')
+    ug_second = call_account('POST', f'/api/games/{ug_id}/join', player_token, {'playerName': 'Сосед'})
+    ug_tok2 = ((ug_second or {}).get('credentials') or {}).get('accessToken')
+    call('POST', f'/api/games/{ug_id}/start', {'accessToken': ug_tok})
+    mine_before = next((g for g in (call('GET', '/api/games/mine') or [])
+                        if isinstance(g, dict) and g.get('id') == ug_id), {})
+    check('«Ваши партии»: идущая партия ждёт вашего хода — пункт 109',
+          (mine_before.get('mine') or {}).get('yourMove') is True
+          and (mine_before.get('mine') or {}).get('empires') == 2,
+          str(mine_before.get('mine'))[:200])
+    ended = call('POST', f'/api/games/{ug_id}/turn/end', {'accessToken': ug_tok}) or {}
+    host_row = next((p for p in (ended.get('state') or {}).get('players', []) if p.get('id') == ug_host), {})
+    check('конец хода помнит время последнего действия — пункт 108',
+          bool(host_row.get('lastActionAt')), str(host_row.get('lastActionAt')))
+    mine_waiting = next((g for g in (call('GET', '/api/games/mine') or [])
+                         if isinstance(g, dict) and g.get('id') == ug_id), {})
+    check('«Ваши партии»: после объявленного хода — «ждём соперников» — пункт 109',
+          (mine_waiting.get('mine') or {}).get('yourMove') is False, str(mine_waiting.get('mine'))[:200])
+    undone = call('POST', f'/api/games/{ug_id}/turn/undo', {'accessToken': ug_tok}) or {}
+    host_after = next((p for p in undone.get('players', []) if p.get('id') == ug_host), {})
+    check('объявленный ход забирается, пока соперник не закончил — пункт 128',
+          'ERROR' not in undone and host_after.get('turnEnded') is False
+          and (undone.get('game') or {}).get('turn') == 1, str(undone)[:200])
+    check('забрать незаявленный ход нельзя — 409',
+          (call('POST', f'/api/games/{ug_id}/turn/undo', {'accessToken': ug_tok}) or {}).get('ERROR') == 409)
+    call('POST', f'/api/games/{ug_id}/turn/end', {'accessToken': ug_tok})
+    # ПЕРЕДАЧА ИМПЕРИИ ИИ — С ПРЕДУПРЕЖДЕНИЕМ (field-backlog, пункт 127): хозяин закончил ход и
+    # ждёт, и сервер называет соседу срок, через который часы отдадут его империю ИИ; «я здесь»
+    # отвечает свежим сроком. Закончившему ход не грозит ничего.
+    ug_neighbour = ((ug_second or {}).get('credentials') or {}).get('playerId')
+    takeover_rows = {p.get('id'): p for p in (call('GET', f'/api/games/{ug_id}') or {}).get('players', [])}
+    neighbour_left = (takeover_rows.get(ug_neighbour) or {}).get('aiTakeoverSeconds')
+    check('ждущему соседу назван срок до передачи империи ИИ, закончившему — нет — пункт 127',
+          isinstance(neighbour_left, int) and 0 < neighbour_left <= 180
+          and (takeover_rows.get(ug_host) or {}).get('aiTakeoverSeconds') is None,
+          str({k: (v.get('aiTakeoverSeconds'), v.get('turnEnded')) for k, v in takeover_rows.items()}))
+    here = call_account('POST', f'/api/games/{ug_id}/presence', player_token, {'accessToken': ug_tok2}) or {}
+    here_row = next((p for p in here.get('players', []) if p.get('id') == ug_neighbour), {})
+    check('«я здесь» отвечает составом с новым сроком — пункт 127',
+          'ERROR' not in here and isinstance(here_row.get('aiTakeoverSeconds'), int)
+          and here_row.get('aiTakeoverSeconds') >= 170, str(here_row)[:200])
+    call_account('POST', f'/api/games/{ug_id}/turn/end', player_token, {'accessToken': ug_tok2})
+    check('посчитанный ход не забрать — пункт 128',
+          (call('POST', f'/api/games/{ug_id}/turn/undo', {'accessToken': ug_tok}) or {}).get('ERROR') == 409)
+    mine_after = next((g for g in (call('GET', '/api/games/mine') or [])
+                       if isinstance(g, dict) and g.get('id') == ug_id), {})
+    check('«Ваши партии»: после первого посчитанного хода известно своё место — пункт 109',
+          (mine_after.get('mine') or {}).get('place') in (1, 2) and mine_after.get('turn') == 2,
+          str({'turn': mine_after.get('turn'), 'mine': mine_after.get('mine')})[:200])
+    # ЧТО ИИ СДЕЛАЛ ЗА ВАС — field-backlog, пункт 112: сосед ушёл, хозяин закончил ход, и ИИ
+    # решил за ушедшего (хотя бы цель науки и стройку); вернувшийся читает решения разом, а
+    # «прочитано» очищает список.
+    call_account('POST', f'/api/games/{ug_id}/leave', player_token, {'accessToken': ug_tok2})
+    call('POST', f'/api/games/{ug_id}/turn/end', {'accessToken': ug_tok})
+    steward_list = call('GET', f'/api/games/{ug_id}/steward?accessToken={ug_tok2}')
+    check('ушедшему записаны решения, которые ИИ принял за него — пункт 112',
+          isinstance(steward_list, list) and len(steward_list) > 0
+          and all(isinstance(x.get('turn'), int) and x.get('text') for x in steward_list),
+          str(steward_list)[:300])
+    check('решения ИИ названы словами, а не ключами — пункт 112',
+          isinstance(steward_list, list) and not any('steward.' in (x.get('text') or '') for x in steward_list),
+          str(steward_list)[:300])
+    call_account('POST', f'/api/games/{ug_id}/steward/seen', player_token, {'accessToken': ug_tok2})
+    check('прочитанные решения ИИ больше не показываются — пункт 112',
+          call('GET', f'/api/games/{ug_id}/steward?accessToken={ug_tok2}') == [],
+          str(call('GET', f'/api/games/{ug_id}/steward?accessToken={ug_tok2}'))[:200])
+    call('DELETE', f'/api/games/{ug_id}/admin')
+
+# ПРИЗНАТЬ ПОРАЖЕНИЕ — field-backlog, пункт 81, и ЛЕТОПИСЬ — пункт 34. Против одного ИИ
+# признание кончает партию: победа отдаётся сильнейшей из остальных, а игрок получает итоги
+# с летописью, где признание — последний момент. Вернуться за сданную империю нельзя.
+concede_game = call('POST', '/api/games', {'name': 'Регресс признание', 'playerName': 'Сдавшийся',
+                                           'galaxySize': 'SMALL', 'totalPlayers': 2,
+                                           'galacticEvents': False, 'seed': 20261006})
+cg = ((concede_game or {}).get('game') or {}).get('id')
+cg_tok = ((concede_game or {}).get('credentials') or {}).get('accessToken')
+if cg:
+    call('POST', f'/api/games/{cg}/start', {'accessToken': cg_tok})
+    for _ in range(3):
+        call('POST', f'/api/games/{cg}/turn/end', {'accessToken': cg_tok})
+    # ОБЪЯВИТЬ ПОБЕДУ — пункт 154: на третьем ходу перевеса втрое нет ни у кого, и меню узнаёт
+    # об этом ДО нажатия — с причиной словами и числами мощи; само объявление отказывает.
+    claim = call('GET', f'/api/games/{cg}/victory-claim?accessToken={cg_tok}') or {}
+    check('право объявить победу спрашивается заранее: нельзя, с причиной и порогом втрое — пункт 154',
+          claim.get('allowed') is False and claim.get('ratio') == 3 and bool(claim.get('reason'))
+          and not claim.get('reason', '').startswith('declare.'),
+          str(claim)[:300])
+    check('объявить победу без перевеса нельзя — пункт 154',
+          (call('POST', f'/api/games/{cg}/declare-victory', {'accessToken': cg_tok}) or {}).get('ERROR') == 409)
+    conceded = call('POST', f'/api/games/{cg}/concede', {'accessToken': cg_tok}) or {}
+    cg_game = conceded.get('game') or {}
+    check('признание поражения против одного ИИ кончает партию — пункт 81',
+          cg_game.get('status') == 'FINISHED' and cg_game.get('victoryKind') == 'CONCEDED'
+          and cg_game.get('winnerPlayerId') and cg_game.get('winnerPlayerId') != concede_game['credentials'].get('playerId'),
+          str({k: cg_game.get(k) for k in ('status', 'victoryKind', 'winnerPlayerId')})[:200])
+    cg_end = call('GET', f'/api/games/{cg}/ending') or {}
+    check('конец партии называет вашу расу — пункт 98', bool(cg_end.get('raceName')), str(cg_end.get('raceName')))
+    chronicle = cg_end.get('chronicle') or []
+    check('итоги сдавшегося: «вы признали», причина с числами, победитель назван — пункты 33 и 81',
+          cg_end.get('victoryKind') == 'CONCEDED' and cg_end.get('won') is False
+          and cg_end.get('winnerName') and any(ch.isdigit() for ch in cg_end.get('reason') or ''),
+          str({k: cg_end.get(k) for k in ('victoryKind', 'won', 'winnerName', 'reason')})[:300])
+    check('летопись кончается признанием, текст переведён, а не ключом — пункт 34',
+          chronicle and chronicle[-1].get('kind') == 'CONCEDED'
+          and all(m.get('text') and not m.get('text', '').startswith(('milestone.', 'turn.')) for m in chronicle),
+          str(chronicle)[:300])
+    check('признать поражение второй раз нельзя — партия уже окончена',
+          (call('POST', f'/api/games/{cg}/concede', {'accessToken': cg_tok}) or {}).get('ERROR') == 409)
+    call('DELETE', f'/api/games/{cg}/admin')
+
+# С ДРУГИМ ЧЕЛОВЕКОМ партия идёт дальше без сдавшегося: его империю ведёт ИИ, итоги ему
+# открыты сразу (без победителя), в «Ваших партиях» она стоит оконченной, а возврата нет.
+if player_token:
+    shared = call_account('POST', '/api/games', account_token,
+                          {'name': 'Регресс признание при людях', 'playerName': 'Хозяин',
+                           'galaxySize': 'SMALL', 'totalPlayers': 2, 'galacticEvents': False})
+    sg = ((shared or {}).get('game') or {}).get('id')
+    sg_tok = ((shared or {}).get('credentials') or {}).get('accessToken')
+    sg_second = call_account('POST', f'/api/games/{sg}/join', player_token, {'playerName': 'Сдавшийся'})
+    sg_tok2 = ((sg_second or {}).get('credentials') or {}).get('accessToken')
+    call('POST', f'/api/games/{sg}/start', {'accessToken': sg_tok})
+    shared_claim = call('GET', f'/api/games/{sg}/victory-claim?accessToken={sg_tok}') or {}
+    check('при других людях за столом победу не объявить — пункт 154',
+          shared_claim.get('allowed') is False and 'люди' in (shared_claim.get('reason') or ''),
+          str(shared_claim)[:300])
+    after = call_account('POST', f'/api/games/{sg}/concede', player_token, {'accessToken': sg_tok2}) or {}
+    quitter = next((p for p in after.get('players', []) if p.get('id') == (sg_second.get('credentials') or {}).get('playerId')), {})
+    check('с другим человеком партия идёт дальше, а сдавшегося ведёт ИИ — пункт 81',
+          (after.get('game') or {}).get('status') == 'IN_PROGRESS' and quitter.get('playerType') == 'AI',
+          str({'status': (after.get('game') or {}).get('status'), 'type': quitter.get('playerType')}))
+    away_end = call_account('GET', f'/api/games/{sg}/ending', player_token) or {}
+    check('итоги сдавшемуся открыты сразу и без победителя — пункт 81',
+          away_end.get('victoryKind') == 'CONCEDED' and not away_end.get('winnerId')
+          and any(ch.isdigit() for ch in away_end.get('reason') or ''),
+          str({k: away_end.get(k) for k in ('victoryKind', 'winnerId', 'reason')})[:300])
+    check('у оставшегося партия не окончена — итогов ему нет',
+          (call('GET', f'/api/games/{sg}/ending') or {}).get('ERROR') == 409)
+    check('за сданную империю не вернуться — пункт 81',
+          (call_account('POST', f'/api/games/{sg}/rejoin', player_token) or {}).get('ERROR') == 403)
+    # ИСТОРИЯ СВОИХ ПАРТИЙ — пункт 18: признанное поражение записано сразу, и один раз.
+    own_history = call_account('GET', '/api/auth/game-history', player_token) or {}
+    sg_rows = [x for x in own_history.get('games') or [] if x.get('outcome') == 'CONCEDED']
+    check('признанное поражение — в истории партий учётной записи — пункт 18',
+          len(sg_rows) >= 1 and own_history.get('played', 0) >= len(sg_rows)
+          and all(x.get('turn') is not None and x.get('place') for x in sg_rows),
+          str(own_history)[:300])
+    # ЗВАНИЯ ЗА ТРУДНОЕ — пункт 41: все пять с ходом к ним, а признанное поражение не даёт ничего.
+    titles = own_history.get('titles') or []
+    check('история партий несёт звания за трудное с ходом к ним — пункт 41',
+          {x.get('code') for x in titles} == {'RACES', 'PATHS', 'PEACE', 'WARDEN', 'BOARDING', 'HARD', 'HOST'}
+          and all(x.get('goal') for x in titles), str(titles)[:300])
+    # Побед у этой записи в прогоне не бывает; а если бы были — звания могли бы прийти от них.
+    won_any = any(x.get('outcome') == 'WON' for x in own_history.get('games') or [])
+    check('признанное поражение звания не приносит — пункт 41',
+          won_any or not any(x.get('earned') for x in titles), str(titles)[:300])
+    # НОВИЧКА НЕ СТАВИТЬ РЯДОМ С ВЕТЕРАНОМ — пункт 118: до третьей партии ни доли среди похожих, ни рейтинга.
+    if own_history.get('played', 0) < 3:
+        check('новичку сравнения с людьми не показываются — пункт 118',
+              not own_history.get('rating') and not away_end.get('peers') and not away_end.get('rating'),
+              str({'rating': own_history.get('rating'), 'peers': away_end.get('peers')})[:300])
+    mine_after_concede = call_account('GET', '/api/games/mine', player_token) or []
+    check('в «Ваших партиях» сданная стоит оконченной для сдавшегося — пункт 81',
+          any(g.get('id') == sg and g.get('yourConcededTurn') for g in mine_after_concede if isinstance(g, dict)),
+          str([(g.get('name'), g.get('yourConcededTurn')) for g in mine_after_concede if isinstance(g, dict)])[:200])
+    call('DELETE', f'/api/games/{sg}/admin')
+
+# НАГРАДЫ РАЗВЕДКИ (backlog-promo, пункты 35 и 34). Партия по ГОСТЕВЫМ правилам (их администратор
+# вправе завести для замера): у каждой империи в пределах первых перелётов лежат свои артефакты,
+# и первый разведчик получает наследие НА ВЫБОР — три технологии, взять одну.
+rw = call('POST', '/api/games', {'name': 'Регресс награды', 'playerName': 'Разведчик', 'galaxySize': 'SMALL',
+                                  'totalPlayers': 4, 'guestRules': True, 'seed': 777}) or {}
+rw_id = (rw.get('game') or {}).get('id')
+rw_tok = (rw.get('credentials') or {}).get('accessToken')
+if rw_id:
+    call('POST', f'/api/games/{rw_id}/start', {'accessToken': rw_tok})
+    rw_map = call_auth('GET', f'/api/games/{rw_id}/map?revealAll=true', rw_tok) or {}
+    rw_systems = rw_map.get('systems', [])
+    rw_players = (call('GET', f'/api/games/{rw_id}') or {}).get('players', [])
+    nearest = {}
+    for pl in rw_players:
+        home = next((st for st in rw_systems if st['id'] == pl.get('homeSystemId')), None)
+        if not home:
+            continue
+        arts = [(math.hypot(st['x'] - home['x'], st['y'] - home['y']), st['id']) for st in rw_systems
+                for planet in st['planets'] if planet.get('find') == 'ARTIFACTS' and st['id'] != home['id']]
+        nearest[pl['id']] = min(arts) if arts else None
+    check('в гостевой партии у каждой империи артефакты в пределах первых перелётов — БП 35',
+          len(nearest) == len(rw_players) and all(v is not None and v[0] <= 6 for v in nearest.values()),
+          str({k[:4]: (round(v[0], 1) if v else None) for k, v in nearest.items()}))
+    mine_art = (nearest.get((rw.get('credentials') or {}).get('playerId')) or (None, None))[1]
+    if mine_art:
+        fly_to(rw_id, rw_tok, mine_art, limit=12)
+        for _ in range(3):
+            pending = call_auth('GET', f'/api/games/{rw_id}/artifacts', rw_tok) or []
+            if pending:
+                break
+            end_turn(rw_id, rw_tok)
+        pending = call_auth('GET', f'/api/games/{rw_id}/artifacts', rw_tok) or []
+        offer = pending[0] if pending else {}
+        check('первому разведчику наследие предложено на выбор: три технологии — БП 34',
+              len(offer.get('options', [])) == 3 and offer.get('picks', 0) >= 1
+              and all(o.get('name') and o.get('description') for o in offer.get('options', [])),
+              str(offer)[:300])
+        if offer:
+            first = offer['options'][0]['code']
+            wrong = call('POST', f"/api/games/{rw_id}/artifacts/{offer['id']}",
+                         {'accessToken': rw_tok, 'codes': ['no-such-tech']}) or {}
+            check('взять можно только из предложенного — БП 34', wrong.get('ERROR') == 409, str(wrong)[:200])
+            call('POST', f"/api/games/{rw_id}/artifacts/{offer['id']}", {'accessToken': rw_tok, 'codes': [first]})
+            known = {a['optionCode'] for a in (call_auth('GET', f'/api/games/{rw_id}/research', rw_tok) or {})
+                     .get('acquired', [])}
+            check('выбранная технология наследия изучена — БП 34', first in known, first)
+            # Сверяется само взятое: в системе бывает две планеты с наследием, и второе ждёт своего выбора.
+            left = call_auth('GET', f'/api/games/{rw_id}/artifacts', rw_tok) or []
+            check('взятое наследие уходит из ждущих — БП 34',
+                  all(one.get('id') != offer['id'] for one in left if isinstance(one, dict)), str(left)[:200])
+    # СОВЕТНИК (field-backlog, пункт 23): что выбрал бы ИИ на месте игрока — тем же правилом.
+    advice = call_auth('GET', f'/api/games/{rw_id}/advice', rw_tok) or {}
+    adv_research = advice.get('research') or {}
+    check('советник называет цель науки с причиной — пункт 23',
+          bool(adv_research.get('optionCode')) and bool(adv_research.get('reason'))
+          and bool(adv_research.get('optionName')), str(advice)[:300])
+    check('совет стройки — здание с окупаемостью у колонии игрока — пункт 23',
+          all(c.get('projectCode') and c.get('reason') and c.get('planetId') for c in advice.get('colonies', [])),
+          str(advice.get('colonies'))[:300])
+    call('DELETE', f'/api/games/{rw_id}/admin')
+
+# СВОЁ В УЧЁТНОЙ ЗАПИСИ (пункты 144, 96, 148): знамя, библиотека проектов, сыгранные вместе.
+banner_set = call('PUT', '/api/auth/banner', {'banner': 'GREEN'}) or {}
+check('своё знамя запоминается записью — пункт 144', banner_set.get('banner') == 'GREEN', str(banner_set)[:200])
+check('чужого знамени нет — пункт 144', (call('PUT', '/api/auth/banner', {'banner': 'PINK'}) or {}).get('ERROR') == 400)
+call('PUT', '/api/auth/banner', {'banner': None})
+template = call('POST', '/api/ship-templates', {'name': 'Регресс-линкор', 'hullCode': 'frigate',
+                                                'components': [{'code': 'nuclear-engine', 'count': 1}]}) or {}
+library = call('GET', '/api/ship-templates') or []
+check('проект корабля ложится в библиотеку записи составом — пункт 96',
+      bool(template.get('id')) and any(t.get('id') == template['id'] and t.get('components') for t in library),
+      str(template)[:200])
+if template.get('id'):
+    call('DELETE', f"/api/ship-templates/{template['id']}")
+    check('проект удаляется из библиотеки — пункт 96',
+          not any(t.get('id') == template['id'] for t in (call('GET', '/api/ship-templates') or [])))
+# ЛИЧНЫЙ КАБИНЕТ: игровой код, советник, псевдоним, увиденные сцены (пункты 23, 163).
+me = call('GET', '/api/auth/me') or {}
+check('у записи есть уникальный игровой код — личный кабинет',
+      isinstance(me.get('playerCode'), int) and me['playerCode'] > 0, str(me.get('playerCode')))
+adv_on = call('PUT', '/api/auth/advisor', {'advisor': True}) or {}
+check('советник включается записью — пункт 23', adv_on.get('advisor') is True, str(adv_on.get('advisor')))
+adv_default = call('PUT', '/api/auth/advisor', {'advisor': None}) or {}
+check('советник возвращается к умолчанию — пункт 23', adv_default.get('advisor') is None and 'ERROR' not in adv_default)
+scenes = call('PUT', '/api/auth/scenes', {'seenScenes': ['contact', 'council']}) or {}
+check('увиденные сцены помнит запись — пункт 163', sorted(scenes.get('seenScenes') or []) == ['contact', 'council'],
+      str(scenes.get('seenScenes')))
+call('PUT', '/api/auth/scenes', {'seenScenes': []})
+old_name = me.get('name')
+renamed = call('PUT', '/api/auth/name', {'name': 'Регресс-псевдоним'}) or {}
+check('игровой псевдоним по умолчанию меняется — личный кабинет', renamed.get('name') == 'Регресс-псевдоним',
+      str(renamed)[:200])
+check('пустой псевдоним отвергнут', (call('PUT', '/api/auth/name', {'name': '  '}) or {}).get('ERROR') == 400)
+if old_name:
+    call('PUT', '/api/auth/name', {'name': old_name})
+
+# СВОИ РАСЫ (пункты 26 и 176): сохраняется законная раса со снимком цен; незаконная — отказ.
+design_ref = call('GET', '/api/reference/race-traits') or {}
+gov = next((o['code'] for g in design_ref.get('groups', []) if g.get('code') == 'government'
+            for o in g.get('options', []) if o.get('picks') == 0), None)
+cheap = next((o for g in design_ref.get('groups', []) if g.get('code') != 'government'
+              for o in g.get('options', []) if 1 <= (o.get('picks') or 0) <= 3 and not o.get('excludes')), None)
+race_set = [code for code in (gov, cheap and cheap['code']) if code]
+own_race = call('POST', '/api/race-templates', {'name': 'Регресс-раса', 'traits': race_set}) or {}
+check('своя раса ложится в запись со снимком цен — пункт 176',
+      bool(own_race.get('id')) and own_race.get('free') == own_race.get('savedFree')
+      and all(d.get('savedPicks') == d.get('picks') for d in own_race.get('details', [])) and not own_race.get('refusal'),
+      str(own_race)[:300])
+over = [o['code'] for g in design_ref.get('groups', []) if g.get('code') != 'government'
+        for o in g.get('options', []) if (o.get('picks') or 0) > 0]
+check('незаконная раса в запись не ложится — пункт 176',
+      (call('POST', '/api/race-templates', {'name': 'Перебор', 'traits': over[:40]}) or {}).get('ERROR') in (400, 409))
+if own_race.get('id'):
+    call('DELETE', f"/api/race-templates/{own_race['id']}")
+    check('своя раса удаляется', not any(r.get('id') == own_race['id'] for r in (call('GET', '/api/race-templates') or [])))
+named_ship = call('POST', '/api/ship-templates', {'name': 'Регресс-снимок', 'hullCode': 'frigate',
+                                                  'components': [{'code': 'nuclear-engine', 'count': 1}]}) or {}
+check('проект библиотеки несёт названия и снимок частей — пункты 96 и 176',
+      bool(named_ship.get('hullName')) and bool(named_ship.get('parts')) and not named_ship.get('changed'),
+      str(named_ship)[:300])
+if named_ship.get('id'):
+    call('DELETE', f"/api/ship-templates/{named_ship['id']}")
+
+together = call('GET', '/api/games/together')
+check('«вы уже играли вместе» отвечает числами по открытым партиям — пункт 148',
+      isinstance(together, dict) and all(isinstance(v, int) for v in together.values()), str(together)[:200])
+
+# «СЫГРАТЬ С ЛЮДЬМИ» — field-backlog, пункт 65: кнопка сажает за ближайший стол подбора или
+# заводит новый, и стол стартует САМ, как только за ним двое людей. Первый садится —
+# стол заводится с ожиданием в пять минут; второй (другая запись) садится за тот же стол — и
+# остальных ждут уже полминуты (MatchmakingRules.GRACE), после чего часы стартуют стол сами.
+if player_token:
+    qm_one = call('POST', '/api/games/quick-match', {'playerName': 'Ищущий'}) or {}
+    qm_game = (qm_one.get('game') or {})
+    check('«сыграть с людьми» заводит стол подбора с отсчётом до старта — пункт 65',
+          qm_game.get('status') == 'LOBBY' and bool(qm_game.get('autoStartAt'))
+          and qm_game.get('galaxySize') == 'SMALL' and qm_game.get('turnSeconds'),
+          str(qm_one)[:200])
+    qm_again = call('POST', '/api/games/quick-match', {'playerName': 'Ищущий'}) or {}
+    check('повторное нажатие возвращает своё место, а не второе — пункт 65',
+          (qm_again.get('game') or {}).get('id') == qm_game.get('id')
+          and (qm_again.get('credentials') or {}).get('playerId') == (qm_one.get('credentials') or {}).get('playerId'),
+          str(qm_again)[:200])
+    qm_two = call_account('POST', '/api/games/quick-match', player_token, {'playerName': 'Нашедший'}) or {}
+    check('второй человек садится за тот же стол — пункт 65',
+          (qm_two.get('game') or {}).get('id') == qm_game.get('id'), str(qm_two)[:200])
+    qm_started = None
+    for _ in range(50):
+        qm_started = call('GET', f"/api/games/{qm_game.get('id')}").get('game') or {}
+        if qm_started.get('status') == 'IN_PROGRESS':
+            break
+        time.sleep(1)
+    check('стол с двумя людьми стартует сам, без нажатия создателя, добрав ИИ — пункт 65',
+          qm_started.get('status') == 'IN_PROGRESS' and qm_started.get('humanPlayers') == 2
+          and qm_started.get('totalPlayers') == 4 and not qm_started.get('autoStartAt'),
+          str({k: qm_started.get(k) for k in ('status', 'humanPlayers', 'totalPlayers', 'autoStartAt')}))
+    if qm_game.get('id'):
+        call('DELETE', f"/api/games/{qm_game['id']}/admin")
+
+# АТОМАРНАЯ СЕТЬ — field-backlog, пункт 63: партия двух людей и ИИ собирается И ДОИГРЫВАЕТСЯ. Человек
+# заводит малую галактику на четверых, друг входит по приглашению, оба заканчивают ходы, пока партия
+# не кончится одним из путей к победе; конец партии записан в историю обоих — по ней считаются
+# рейтинг, доля среди похожих и мерило сети (пункты 19, 117, 68). Обе записи временные и уходят
+# вместе с историей при уборке прогона, поэтому рейтинг настоящих игроков не трогается.
+if player_token:
+    duo_guest, _ = fresh_guest()
+    duo = call_account('POST', '/api/games', player_token,
+                       {'name': 'Регресс двое людей', 'playerName': 'Первый', 'galaxySize': 'SMALL',
+                        'totalPlayers': 4, 'galacticEvents': False, 'seed': 6303,
+                        'wardenholdVictory': True, 'mightVictory': True}) or {}
+    duo_id = (duo.get('game') or {}).get('id')
+    duo_tok = (duo.get('credentials') or {}).get('accessToken')
+    duo_code = (call('GET', f'/api/games/{duo_id}/invite?accessToken={duo_tok}') or {}).get('code') if duo_id else None
+    duo_join = call_account('POST', f'/api/invites/{duo_code}/join', duo_guest, {'playerName': 'Второй'}) or {} \
+        if duo_code and duo_guest else {}
+    duo_tok2 = (duo_join.get('credentials') or {}).get('accessToken')
+    duo_status = None
+    duo_turn = 0
+    if duo_id and duo_tok2:
+        call('POST', f'/api/games/{duo_id}/start', {'accessToken': duo_tok})
+        for _ in range(400):
+            # Своё имя переменной: `tok` — пропуск главной партии прогона, и затирать его нельзя.
+            for duo_access in (duo_tok, duo_tok2):
+                call('POST', f'/api/games/{duo_id}/turn/end', {'accessToken': duo_access})
+            duo_game = (call('GET', f'/api/games/{duo_id}') or {}).get('game') or {}
+            duo_status, duo_turn = duo_game.get('status'), duo_game.get('turn')
+            if duo_status == 'FINISHED':
+                break
+    check('партия двух людей и ИИ доигрывается до победы — пункт 63', duo_status == 'FINISHED',
+          str({'status': duo_status, 'turn': duo_turn}))
+    duo_rows = [
+        [g for g in (call_account('GET', '/api/auth/game-history', token) or {}).get('games', [])
+         if g.get('gameName') == 'Регресс двое людей']
+        for token in (player_token, duo_guest)]
+    check('доигранная партия людей записана в историю обоих — пункты 63, 18',
+          all(len(rows) == 1 and rows[0].get('outcome') in ('WON', 'LOST') for rows in duo_rows), str(duo_rows)[:300])
+    if duo_id:
+        call('DELETE', f'/api/games/{duo_id}/admin')
+
+# НИ ОДНА ПОТЕРЯ — МОЛЧА — field-backlog, пункт 161: объявления об изменениях показываются
+# записи один раз; заведённой после объявления их нет вовсе — у неё ничего не отнимали.
+if player_token:
+    fresh_notices = call_account('GET', '/api/notices', player_token)
+    check('новой записи старых объявлений не показывают — п. 161',
+          fresh_notices == [], str(fresh_notices)[:200])
+call('POST', '/api/notices/seen')
+check('прочитанные объявления больше не всплывают — п. 161',
+      call('GET', '/api/notices') == [], str(call('GET', '/api/notices'))[:200])
+
+# «ЧТО НОВОГО» И НОМЕР ВЕРСИИ — field-backlog, пункт 159: номер стоит в меню и до входа, по нему
+# открывается весь список — свежее сверху, у каждой записи версия и раздел.
+release_now = (call_account('GET', '/api/notices/release', '') or {}).get('version')
+check('номер версии отдаётся и без входа — п. 159',
+      isinstance(release_now, str) and re.fullmatch(r'\d+\.\d+(\.\d+)?', release_now) is not None,
+      str(release_now))
+# Без пропуска и по-русски: список читают и до входа, а сравнить языки можно только
+# с явно заданным языком — помощник с пропуском заголовка языка не шлёт.
+history = call_lang('GET', '/api/notices/all', 'ru')
+history = history if isinstance(history, list) else []
+history_dates = [row.get('date', '') for row in history]
+check('«что нового» отдаётся без входа, свежее сверху, с версией и разделом — п. 159',
+      bool(history) and history_dates == sorted(history_dates, reverse=True)
+      and all(row.get('kind') in ('loss', 'changed', 'prices', 'new', 'fixed') and row.get('version')
+              and row.get('text') for row in history),
+      str(history)[:300])
+check('у текущей версии есть запись «что нового»: выкладка не проходит молча — п. 159',
+      any(row.get('version') == release_now for row in history), str([r.get('version') for r in history]))
+english_history = call_lang('GET', '/api/notices/all', 'en')
+check('«что нового» говорит на языке читателя — п. 159',
+      isinstance(english_history, list) and len(english_history) == len(history)
+      and all(a.get('text') != b.get('text') for a, b in zip(history, english_history)))
+
 if player_token:
     auto_game = call_account('POST', '/api/games', account_token,
                              {'name': 'Регресс автосейв', 'playerName': 'Первый',
@@ -2206,7 +3928,7 @@ if player_token:
     advanced = call('POST', '/api/games/%s/turn/end' % ag, {'accessToken': b_tok})
     check('ход считается, когда закончили оба — п. 11.1', advanced.get('advanced') is True)
 
-    autos = [x for x in call('GET', '/api/saves') if x['gameId'] == ag and x['auto']]
+    autos = auto_saves(ag, 1)
     check('конец хода оставил автосохранение — п. 3', len(autos) == 1,
           'слепков %d' % len(autos))
     check('автосохранение снято на конец сыгранного хода — п. 3',
@@ -2217,7 +3939,7 @@ if player_token:
     # сотню слепков по сотне килобайт.
     call('POST', '/api/games/%s/turn/end' % ag, {'accessToken': a_tok})
     call('POST', '/api/games/%s/turn/end' % ag, {'accessToken': b_tok})
-    autos = [x for x in call('GET', '/api/saves') if x['gameId'] == ag and x['auto']]
+    autos = auto_saves(ag, 2)
     check('автосохранение у партии ОДНО и переписывается — п. 3',
           len(autos) == 1 and autos[0]['turn'] == 2,
           'слепков %d, ход %s' % (len(autos), autos[0]['turn'] if autos else '-'))
@@ -2271,6 +3993,82 @@ if player_token:
                   back_name)
             call_account('DELETE', '/api/games/%s/admin' % raised_id, account_token)
     call_account('DELETE', '/api/games/%s/admin' % ag, account_token)
+
+# Сыгранное в безопасности (field-backlog, пункт 160): «партия сохранена на ходу N» в меню
+# «Игра», выгрузка одиночной партии файлом и подъём из него. Партия на двоих из файла не
+# поднимается, чужой файл — тоже; поднятая из файла садит принёсшего за свою империю.
+file_game = call('POST', '/api/games', {'name': 'Регресс файл', 'playerName': 'Файловый',
+                                        'galaxySize': 'SMALL', 'totalPlayers': 2,
+                                        'galacticEvents': False, 'seed': 160160})
+fg = file_game.get('game', {}).get('id')
+if fg:
+    f_tok = file_game['credentials']['accessToken']
+    call('POST', '/api/games/%s/start' % fg, {'accessToken': f_tok})
+    check('до первого хода автосохранения нет и запрос это говорит — пункт 160',
+          not call('GET', '/api/saves/auto/%s' % fg))
+    call('POST', '/api/games/%s/turn/end' % fg, {'accessToken': f_tok})
+    # Слепок пишется за ответом, в фоне (`GameService.autoSaves`) — ждём его, как в разделе 8.1.
+    auto = {}
+    for _ in range(40):
+        auto = call('GET', '/api/saves/auto/%s' % fg) or {}
+        if auto.get('turn') == 1:
+            break
+        time.sleep(0.05)
+    check('меню знает ход автосохранения — пункт 160', auto.get('turn') == 1, str(auto)[:120])
+    file = call('GET', '/api/saves/%s/file' % auto.get('id')) if auto.get('id') else {}
+    check('слепок выгружается файлом своего формата — пункт 160',
+          file.get('format') == 'lord-of-thessar-save' and file.get('turn') == 1
+          and isinstance(file.get('state'), dict), str(file)[:120])
+    if file.get('state'):
+        raised = call('POST', '/api/saves/import', file)
+        check('одиночная партия поднимается из файла — пункт 160', raised.get('game') is not None,
+              str(raised)[:160])
+        if raised.get('game'):
+            check('поднятая из файла продолжается со следующего хода — пункт 160',
+                  raised['game'].get('turn') == 2, str(raised['game'].get('turn')))
+            call('DELETE', '/api/games/%s/admin' % raised['game']['id'])
+        # Из файла — только администратору и модератору (08.10.2026): обычному игроку отказ.
+        if globals().get('player_token'):
+            plain = call_account('POST', '/api/saves/import', player_token, file)
+            check('игроку партия из файла не открыта — только администратору и модератору',
+                  isinstance(plain, dict) and plain.get('ERROR') == 403, str(plain)[:120])
+        alien = call('POST', '/api/saves/import', {'format': 'something-else', 'state': {}})
+        check('чужой файл отвергается словами — пункт 160', alien.get('ERROR') == 409, str(alien)[:120])
+        # Партия на двоих: тот же файл, где сосед записан человеком.
+        pair = json.loads(json.dumps(file))
+        others = [x for x in pair['state'].get('players', []) if x.get('playerType') != 'HUMAN']
+        if others:
+            others[0]['playerType'] = 'HUMAN'
+            pair_raised = call('POST', '/api/saves/import', pair)
+            check('партия на двоих из файла не поднимается — пункт 160',
+                  pair_raised.get('ERROR') == 409, str(pair_raised)[:120])
+    call('DELETE', '/api/games/%s/admin' % fg)
+else:
+    check('партия для проверки файла заведена — пункт 160', False, str(file_game)[:120])
+
+# ПАРТИЯ ПОД ВЕЧЕР И ТИХАЯ ГАЛАКТИКА — field-backlog, пункты 24 и 186: срок итога — настройка партии
+# (100, 200, 300), прочие сроки — отказ; признак тихих соседей едет в сводку партии.
+evening = call('POST', '/api/games', {'name': 'Регресс вечер', 'galaxySize': 'SMALL', 'playerName': 'Вечер',
+                                      'totalPlayers': 3, 'mightVictory': True, 'mightTurn': 100,
+                                      'peacefulAi': True}) or {}
+eg = evening.get('game') or {}
+check('партия под вечер: итог на сотом ходу — пункт 24', eg.get('mightVictoryTurn') == 100, str(eg.get('mightVictoryTurn')))
+check('тихая галактика — признак партии — пункт 186', eg.get('peacefulAi') is True, str(eg.get('peacefulAi')))
+if eg.get('id'):
+    call('DELETE', '/api/games/%s/admin' % eg['id'])
+odd = call('POST', '/api/games', {'name': 'Регресс вечер', 'galaxySize': 'SMALL', 'playerName': 'Вечер',
+                                  'mightVictory': True, 'mightTurn': 150}) or {}
+check('срок итога не из списка — отказ 400 — пункт 24', odd.get('ERROR') == 400, str(odd)[:160])
+if (odd.get('game') or {}).get('id'):
+    call('DELETE', '/api/games/%s/admin' % odd['game']['id'])
+# ПРИЗНАКИ ЖИВОЙ ИГРЫ — пункт 45: только администратору и модератору.
+live = call('GET', '/api/stats/live') or {}
+check('сводка живой игры отвечает администратору — пункт 45',
+      isinstance(live.get('weekGames'), int) and isinstance(live.get('onlineNow'), int)
+      and isinstance(live.get('lastGames'), list), str(live)[:200])
+if globals().get('player_token'):
+    check('игроку сводка живой игры закрыта — пункт 45',
+          (call_account('GET', '/api/stats/live', player_token) or {}).get('ERROR') in (401, 403))
 
 # Партия без людей автосохранения не заводит: возвращаться в неё некому, а балансовый
 # прогон играет сотни таких партий по сотням ходов — слепок на каждый ход был бы работой,
@@ -2482,13 +4280,14 @@ check('расы те же, что в оригинале',
 design = call('GET', '/api/reference/race-traits')
 # Групп в конструкторе больше пяти: к выработке колоний добавились подсистемы —
 # бой, шпионаж, корабли, правительство и родной мир. Их проверяет свой раздел ниже.
-# ЧИСЛА БЮДЖЕТОВ ЗДЕСЬ НЕ ВПИСАНЫ. Они двигаются балансировкой — 10 в MOO II, потом 15,
-# 20, теперь 30, — и проверка, знающая сегодняшнее наизусть, падает на первой же честной
-# правке, не найдя ни одной поломки. Держимся за правило: оба бюджета пришли, оба
-# положительны, вернуть слабостями больше, чем можно потратить, нельзя.
+# ЧИСЛА БЮДЖЕТОВ ЗДЕСЬ НЕ ВПИСАНЫ. Они двигаются — 10 в MOO II, потом 15, 20, 30, а с
+# 07.10.2026 снова 10 и 10, как в MOO II 1.50, — и проверка, знающая сегодняшнее наизусть,
+# падает на первой же честной правке, не найдя ни одной поломки. Держимся за правило: оба
+# бюджета пришли, оба положительны, вернуть слабостями больше, чем можно потратить, нельзя
+# (поровну — можно: так в оригинале).
 check('конструктор расы отдаёт очки и группы',
       design["picks"] > 0 and design["antiPicks"] > 0
-      and design["antiPicks"] < design["picks"]
+      and design["antiPicks"] <= design["picks"]
       and {'growth', 'food', 'industry', 'science', 'money'} <= {g['code'] for g in design['groups']},
       f"очков {design.get('picks')}, анти-очков {design.get('antiPicks')},"
       f" групп {len(design.get('groups', []))}")
@@ -2933,6 +4732,55 @@ check('феодализм роняет науку колонии вдвое — 
                                          * krull['colony']['scientists'] // 2,
       f"учёных {krull['colony']['scientists']}, науки {krull['colony']['research']}")
 
+# Мораль — п. 10.1, правило MOO II: у феодализма и диктатуры колония без казарм теряет
+# пятую часть морали, то есть пятую часть всего, что дают жители. Родной мир получает
+# казармы готовыми и стартует ровно; продав их, он теряет мораль.
+check('у феодального родного мира с казармами мораль ровная — п. 10.1',
+      krull['colony'].get('moralePercent') == 0 and not krull['colony'].get('moraleIgnored'),
+      f"мораль {krull['colony'].get('moralePercent')}")
+krull_home_id = [x for st in call('GET', f"/api/games/{krull['id']}/map?accessToken={krull['token']}")['systems']
+                 for x in st['planets'] if x.get('homeworld') and x.get('ownerPlayerId') == krull_me['id']][0]['id']
+krull_sold = call('POST', f"/api/games/{krull['id']}/planets/{krull_home_id}/sell",
+                  {'accessToken': krull['token'], 'buildingCode': 'marine-barracks'})
+krull_after = krull_sold.get('colony') or {}
+check('без казарм феодальная колония теряет пятую часть морали — п. 10.1',
+      krull_after.get('moralePercent') == -20
+      and {'source': 'GOVERNMENT', 'percent': -20} in (krull_after.get('moraleParts') or []),
+      f"мораль {krull_after.get('moralePercent')}, слагаемые {krull_after.get('moraleParts')}")
+check('мораль роняет выработку жителей, а не только число на экране — п. 10.1',
+      krull_after.get('researchPercent') == -70
+      and krull_after.get('research', 0) < krull['colony']['research'],
+      f"процент науки {krull_after.get('researchPercent')}, наука "
+      f"{krull['colony']['research']} -> {krull_after.get('research')}")
+# Столица — п. 10.1: стоит на родном мире с начала партии, не продаётся и второй раз
+# не строится; у объединения её нет вовсе.
+krull_codes = [x['code'] for x in krull['colony']['buildings']]
+check('родной мир начинает со столицей — п. 10.1', 'capitol' in krull_codes, str(krull_codes))
+check('вторую столицу не предлагают — п. 10.1',
+      not any(x['code'] == 'capitol' for x in krull['colony']['available']))
+capitol_sale = call('POST', f"/api/games/{krull['id']}/planets/{krull_home_id}/sell",
+                    {'accessToken': krull['token'], 'buildingCode': 'capitol'})
+# Казармы этот родной мир уже продал на этом ходу, а за ход продаётся одна постройка, — отказ
+# поэтому сверяется по ПРИЧИНЕ: столица должна отказывать своими словами.
+check('столицу не продают — п. 10.1',
+      capitol_sale.get('ERROR') == 409 and 'толиц' in str(capitol_sale.get('body')),
+      str(capitol_sale.get('body') or capitol_sale.get('ERROR')))
+check('с живой столицей штрафа за её утрату нет — п. 10.1',
+      not any(part['source'] == 'CAPITOL' for part in krull_after.get('moraleParts') or []))
+united = race_game('Единые', ['gov-unification'])
+check('у объединения столицы нет — п. 10.1',
+      'capitol' not in [x['code'] for x in united.get('colony', {}).get('buildings', [])])
+check('объединению мораль безразлична — п. 10.1',
+      united.get('colony', {}).get('moraleIgnored') is True
+      and united.get('colony', {}).get('moralePercent') == 0,
+      str({k: united.get('colony', {}).get(k) for k in ('moralePercent', 'moraleIgnored')}))
+morale_buildings = {code: catalogue.get(code) or {} for code in
+                    ('holo-simulator', 'pleasure-dome', 'alien-management-center')}
+check('голосимулятор, Купол Элизия и центр управления чужими стоят по оригиналу — п. 10.1',
+      [(b.get('cost'), b.get('upkeep')) for b in morale_buildings.values()]
+      == [(120, 1), (250, 3), (60, 1)],
+      str({c: (b.get('cost'), b.get('upkeep')) for c, b in morale_buildings.items()}))
+
 krull_map = call('GET', f"/api/games/{krull['id']}/map?accessToken={krull['token']}")
 krull_home = [x for st in krull_map['systems'] for x in st['planets']
               if x.get('homeworld') and x.get('ownerPlayerId') == krull_me['id']][0]
@@ -3102,6 +4950,41 @@ if bridged and scouts:
     check('разведанных систем стало больше — п. 15',
           len([st for st in shadow_map()['systems'] if st['explored']]) > explored_before)
 
+    # ТУМАН ВОЙНЫ — п. 15 (решение хозяина проекта, 03.10.2026, по оригиналу): чужая колония
+    # видна со стороны — хозяин, население, оборона, — но не изнутри: ни раскладки жителей,
+    # ни стройки, ни построек сверх обороны. Под глазами она живая, без глаз — памятью.
+    def foreign_planets(system):
+        return [pl for pl in system['planets']
+                if pl.get('ownerPlayerId') and pl['ownerPlayerId'] != shadow_pid]
+
+    watched = foreign_planets(opened)
+    check('чужая колония под глазами: хозяин и оборона, без подробностей колонии — п. 15',
+          bool(watched) and all('colony' not in pl and 'seenTurn' not in pl and 'defences' in pl
+                                for pl in watched),
+          str([(pl.get('population'), 'colony' in pl, pl.get('seenTurn'), pl.get('defences'))
+               for pl in watched]))
+    leaked = [pl['name'] for st in shadow_map()['systems'] for pl in foreign_planets(st) if 'colony' in pl]
+    check('ни одна чужая колония на карте не раскрывает стройку и постройки — п. 15',
+          not leaked, str(leaked[:5]))
+    own_here = any(pl.get('ownerPlayerId') == shadow_pid for pl in opened['planets'])
+    if watched and not own_here:
+        # Память пишется в конце хода; флот уходит домой — глаз в системе больше нет.
+        end_turn(shadow_id, shadow_tok)
+        fly_to(shadow_id, shadow_tok, shadow_home_system['id'], limit=60)
+        later = [st for st in shadow_map()['systems'] if st['id'] == alien_system['id']][0]
+        remembered = foreign_planets(later)
+        check('без глаз чужая колония видна памятью — сведениями на ход наблюдения — п. 15',
+              bool(remembered) and all(pl.get('seenTurn') and 'colony' not in pl for pl in remembered),
+              str([(pl.get('population'), pl.get('seenTurn')) for pl in remembered]))
+    # Показ всей галактики — только администратору: без его пропуска карта та же, что у игрока.
+    saved_account, account_token = account_token, None
+    plain_reveal = shadow_map('true')
+    account_token = saved_account
+    check('показ всей галактики не работает без администратора — п. 15',
+          len([st for st in plain_reveal['systems'] if st['explored']])
+          == len([st for st in shadow_map()['systems'] if st['explored']]),
+          f"разведанных при показе {len([st for st in plain_reveal['systems'] if st['explored']])}")
+
 # ЗНАКОМСТВО — ТОЛЬКО ПО ДАЛЬНОСТИ, как в MOO II (п. 15, backlog-promo, пункт 5): прилёт
 # флота к чужой колонии больше не знакомит. Знакомятся, когда одна из империй дотягивается
 # БЕЗ баков до системы, занятой другой, — колонией или заставой. Поэтому до хозяев чужой
@@ -3123,6 +5006,21 @@ check('заставы у соседа знакомят по дальности �
       and alien_owners <= {r['playerId'] for r in relations}
       and all(r['metTurn'] >= 1 for r in relations),
       str([(r['raceName'], r['stance'], r['metTurn']) for r in relations]))
+# Знакомого соседа видно на карте — п. 15 (09.10.2026): у его ближайшей системы известен хозяин
+# даже без разведки, а состав её не приходит.
+shadow_map = call_auth('GET', f'/api/games/{shadow_id}/map', shadow_tok) or {}
+seen_owners = set()
+fogged_known = []
+for st in shadow_map.get('systems', []):
+    seen_owners |= {p.get('ownerPlayerId') for p in st.get('planets', []) if p.get('ownerPlayerId')}
+    if st.get('knownOwners'):
+        seen_owners |= set(st['knownOwners'])
+        fogged_known.append(st)
+contact_ids = {r['playerId'] for r in relations} if isinstance(relations, list) else set()
+check('знакомую империю видно на карте: хозяин её ближайшей системы известен — п. 15',
+      bool(contact_ids) and contact_ids <= seen_owners
+      and all(not st.get('explored') and not st.get('planets') and st.get('name') for st in fogged_known),
+      f"знакомых {len(contact_ids)}, видно {len(contact_ids & seen_owners)}, в тумане с хозяином {len(fogged_known)}")
 
 # ИИ исследует сам — п. 9. Своими глазами его дерево не увидеть, зато видно то, ради чего
 # это и сделано: у знакомого ИИ появляется чем меняться (п. 15). До выбора цели за ИИ
@@ -3138,17 +5036,31 @@ check('заставы у соседа знакомят по дальности �
 # прогон на пустом списке — говорить о неисследующем ИИ там, где просто некому знакомиться,
 # было бы неправдой.
 ai_id = sorted({r['playerId'] for r in relations})[0] if relations else None
-ai_wanted = []
-for _ in range(60 if ai_id else 0):
-    ai_wanted = call_auth('GET', f'/api/games/{shadow_id}/diplomacy/{ai_id}/technologies',
-                          shadow_tok)['wanted']
-    if ai_wanted:
-        break
+# Изученное соседом игрок не видит (п. 15, туман войны): доклад показывает только
+# увиденное в бою или сканерами флота. Уровень его науки — число изученного — виден на
+# графике «Инфо», по нему и судим, что ИИ исследует сам.
+
+
+def ai_science():
+    empires = call_auth('GET', f'/api/games/{shadow_id}/info', shadow_tok).get('empires', [])
+    rows = [e for e in empires if e.get('playerId') == ai_id and e.get('history')]
+    return rows[0]['history'][-1].get('technologies', 0) if rows else 0
+
+
+ai_science_before = ai_science() if ai_id else 0
+for _ in range(30 if ai_id else 0):
     end_turn(shadow_id, shadow_tok)
-check('ИИ исследует сам, и с ним есть что обменять — п. 9, п. 15',
-      len(ai_wanted) > 0,
-      f"у соседа есть чего нет у нас: {[t['name'] for t in ai_wanted][:5]}" if ai_id
+    if ai_science() > ai_science_before:
+        break
+check('ИИ исследует сам: его наука растёт на графике «Инфо» — п. 9, п. 15',
+      bool(ai_id) and ai_science() > ai_science_before,
+      f"изучено было {ai_science_before}, стало {ai_science() if ai_id else '—'}" if ai_id
       else 'знакомых империй нет: до соседей не дотянулись')
+ai_report = call_auth('GET', f'/api/games/{shadow_id}/diplomacy/{ai_id}/technologies', shadow_tok) if ai_id else {}
+check('доклад о расе не показывает изученного соседом сверх увиденного — п. 15',
+      not ai_id or set(t['code'] for t in ai_report.get('wanted', []))
+      <= set(t['code'] for t in ai_report.get('observed', [])),
+      str([t['name'] for t in ai_report.get('observed', [])][:5]))
 
 # Характер правителя — п. 15: по нему игрок судит, чего от соседа ждать, и он же решает
 # всё поведение ИИ. У человека характера нет: это про империи ИИ.
@@ -3214,6 +5126,9 @@ for treaty in peace['treaties']:
 war = call('POST', f'/api/games/{shadow_id}/diplomacy',
            {'accessToken': shadow_tok, 'targetPlayerId': neighbour, 'action': 'DECLARE_WAR'})
 check('война объявляется без согласия — п. 15', war['stance'] == 'WAR', war['stanceLabel'])
+# РЕЧЬ ПОСЛА — field-backlog, пункт 139: реплика в характере правителя, за ней сам ответ.
+check('посол отвечает репликой по характеру — пункт 139',
+      (war.get('answer') or '').startswith('«') and '»' in (war.get('answer') or ''), str(war.get('answer')))
 refused = call('POST', f'/api/games/{shadow_id}/diplomacy',
                {'accessToken': shadow_tok, 'targetPlayerId': neighbour, 'action': 'PROPOSE_PEACE'})
 # Планку согласия на мир опускает характер соседа: миролюбивый и дипломат снимают
@@ -3223,6 +5138,15 @@ refused = call('POST', f'/api/games/{shadow_id}/diplomacy',
 check('после войны мир даётся не даром — п. 15',
       refused['stance'] == 'WAR' or refused['trust'] >= 20,
       f"{refused['stanceLabel']}, доверие {refused['trust']}")
+# Сосед помнит вслух (пункт 139): объявленная нами война лежит в хронике, и на просьбу о мире
+# посол её припоминает с ходом.
+check('посол припоминает объявленную войну с ходом — пункт 139',
+      'помним' in (refused.get('answer') or '') and any(c.isdigit() for c in (refused.get('answer') or '')),
+      str(refused.get('answer')))
+own_chronicle = call('GET', f'/api/games/{shadow_id}/chronicle?accessToken={shadow_tok}') or []
+check('объявленная игроком война — в его хронике — пункты 138 и 139',
+      any(x.get('kind') == 'WAR' and 'объявили' in (x.get('text') or '') for x in own_chronicle),
+      str(own_chronicle)[-300:])
 
 # Незнакомый — это тот, кого нет в списке знакомых, а не просто «не сосед»: за полсотни
 # ходов флот и дальность знакомят империю не с одним соседом, и второй в списке игроков
@@ -3338,9 +5262,15 @@ if 'game' in early_game:
 # на пять-шесть партий, и три проверки под ним то были, то молча пропадали — число
 # проверок прогона плавало на три. На зерне 505 знакомых двое, и так каждый раз.
 REPULSIVE_SEED = 505
+# Совет выключен: проверка о дипломатии, а не о конце партии. 03.10.2026 Высший совет избрал
+# правителя на 177-м ходу посреди проверки («игра ещё не идёт»). Тянулось так оттого, что
+# помощники науки целили во второй уровень без первого (сервер отказывал молча для них), а
+# землетрясение снимало фермеров и родной мир голодал; обе беды починены, знакомство теперь
+# к 128-му ходу, но совет здесь всё равно ни при чём.
 rep_game = call('POST', '/api/games', {'name': 'Отталкивающие', 'playerName': 'Р',
                                        'galaxySize': 'SMALL', 'raceName': 'Силикоид',
-                                       'raceTraits': ['repulsive'], 'seed': REPULSIVE_SEED})
+                                       'raceTraits': ['repulsive'], 'seed': REPULSIVE_SEED,
+                                       'council': False})
 rep_id, rep_tok = rep_game['game']['id'], rep_game['credentials']['accessToken']
 rep_pid = rep_game['credentials']['playerId']
 call('POST', f'/api/games/{rep_id}/start', {'accessToken': rep_tok})
@@ -3399,7 +5329,7 @@ call('DELETE', f'/api/games/{rep_id}?accessToken={rep_tok}')
 # прежде партия из двух империй обрывалась голосованием на двадцать пятом ходу.
 duo = call('POST', '/api/games', {'name': 'Обмен', 'playerName': 'Первый',
                                   'galaxySize': 'SMALL', 'raceTraits': [], 'seed': 3131,
-                                  'totalPlayers': 2})
+                                  'totalPlayers': 2, 'galacticEvents': False})
 duo_id, tok_one = duo['game']['id'], duo['credentials']['accessToken']
 pid_one = duo['credentials']['playerId']
 duo_two = call('POST', f'/api/games/{duo_id}/join', {'playerName': 'Второй'})
@@ -3460,7 +5390,30 @@ check('две империи людей познакомились — п. 15', 
       str(duo_known) if duo_reached else 'до соседа не дотянулись заставами: чужой мир вне дальности')
 
 if duo_known:
+    # ТУМАН ВОЙНЫ (п. 15): технологии соседа видны только увиденными — в бою или сканерами
+    # флота. Гость стоит у первого дома; первый изучает космический сканер и ставит у себя
+    # корабль — сканер флота разглядывает гостя до третьего уровня дерева.
+    before_scan = call_auth('GET', f'/api/games/{duo_id}/diplomacy/{pid_two}/technologies', tok_one)
+    check('без боя и сканеров технологии соседа не видны — п. 15',
+          not before_scan.get('observed') and not before_scan.get('wanted'),
+          str([t['name'] for t in before_scan.get('observed', [])][:5]))
+    duo_research(tok_one, tok_two, 'physics', 1, 'space-scanner')
+    duo_home_one_planet = [p for p in duo_home_one['planets']
+                           if p.get('homeworld') and p.get('ownerPlayerId') == pid_one][0]
+    build_ship(duo_id, tok_one, duo_home_one_planet['id'], tok_two)
+    end_turn(duo_id, tok_one, tok_two)
     trade = call_auth('GET', f'/api/games/{duo_id}/diplomacy/{pid_two}/technologies', tok_one)
+    theirs_acquired = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_two)['acquired']}
+    # Чужой флот под глазами виден на карте (п. 8, п. 15): гость стоит у дома первого.
+    seen_fleets = call_auth('GET', f'/api/games/{duo_id}/map', tok_one).get('foreignFleets', [])
+    check('чужой флот у своей колонии виден на карте игрока — п. 15',
+          any(f['ownerPlayerId'] == pid_two and f['starSystemId'] == duo_home_one['id']
+              and 'designId' not in f for f in seen_fleets),
+          str([(f['ownerPlayerId'] == pid_two, f['ships'], f.get('targetSystemId')) for f in seen_fleets]))
+    check('сканер флота открывает технологии кораблей соседа в той же системе — п. 15',
+          bool(trade.get('observed'))
+          and {t['code'] for t in trade['observed']} <= theirs_acquired,
+          str([t['name'] for t in trade.get('observed', [])]))
     check('список обмена показывает обе половины сделки — п. 15',
           len(trade['offer']) > 0 and len(trade['wanted']) > 0
           and all(t['value'] > 0 for t in trade['offer'] + trade['wanted']),
@@ -3471,19 +5424,47 @@ if duo_known:
           all(t['code'] not in mine_codes for t in trade['wanted']),
           str([t['code'] for t in trade['wanted']][:5]))
 
+    # «Что отдать» строится без знания чужого изученного (п. 15, туман войны): там всё
+    # своё, кроме увиденного у соседа. Сосед может это уже знать — и откажет; прогон знает
+    # его изученное и берёт то, чего у него нет, как поступил бы игрок после отказа.
+    two_known = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_two)['acquired']}
     fair = next(((g, t) for g in trade['offer'] for t in trade['wanted']
-                 if g['value'] >= t['value']), None)
+                 if g['value'] >= t['value'] and g['code'] not in two_known), None)
     if fair:
         give, take = fair
+        # ПРЕДЛОЖЕНИЕ ЧЕЛОВЕКУ РЕШАЕТ ЧЕЛОВЕК (field-backlog, пункт 182): обмен с живым игроком
+        # не решается доверием на месте, а ждёт его ответа и исполняется в конце хода.
         swap = call('POST', f'/api/games/{duo_id}/diplomacy',
                     {'accessToken': tok_one, 'targetPlayerId': pid_two,
                      'action': 'EXCHANGE_TECH',
                      'offeredTech': give['code'], 'requestedTech': take['code']})
         got_mine = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_one)['acquired']}
+        incoming = call_auth('GET', f'/api/games/{duo_id}/diplomacy/proposals', tok_two).get('incoming', [])
+        outgoing = call_auth('GET', f'/api/games/{duo_id}/diplomacy/proposals', tok_one).get('outgoing', [])
+        check('обмен с человеком становится предложением, а не решается доверием — пункт 182',
+              take['code'] not in got_mine
+              and [p['action'] for p in incoming] == ['EXCHANGE_TECH']
+              and len(outgoing) == 1 and incoming[0].get('offeredTechName') and 'accepted' not in incoming[0],
+              f"{swap.get('answer')} / {incoming}")
+        again = call('POST', f'/api/games/{duo_id}/diplomacy',
+                     {'accessToken': tok_one, 'targetPlayerId': pid_two,
+                      'action': 'EXCHANGE_TECH',
+                      'offeredTech': give['code'], 'requestedTech': take['code']})
+        check('второе такое же предложение, пока первое ждёт, — отказ словами — пункт 182',
+              again.get('ERROR') == 409 and 'ещё не ответила' in str(again.get('body')), str(again)[:200])
+        if incoming:
+            call('POST', f"/api/games/{duo_id}/diplomacy/proposals/{incoming[0]['id']}",
+                 {'accessToken': tok_two, 'accept': True})
+        end_turn(duo_id, tok_one, tok_two)
+        got_mine = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_one)['acquired']}
         got_theirs = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_two)['acquired']}
-        check('равноценный обмен состоялся и технологии ушли в обе стороны — п. 15',
-              take['code'] in got_mine and give['code'] in got_theirs,
-              str(swap.get('answer')))
+        one_keys = [e.get('key') for e in call_auth('GET', f'/api/games/{duo_id}/turn/report', tok_one)['events']]
+        check('принятый человеком обмен исполнен в конце хода, технологии ушли в обе стороны — пункт 182',
+              take['code'] in got_mine and give['code'] in got_theirs
+              and 'turn.diplomacy.proposalAccepted' in one_keys,
+              str(one_keys))
+        check('решённое предложение уходит из списка ждущих — пункт 182',
+              not call_auth('GET', f'/api/games/{duo_id}/diplomacy/proposals', tok_two).get('incoming'))
 
     # Невыгодный обмен: второй берёт дорогой уровень, первый просит его за дешёвый.
     duo_research(tok_two, tok_one, 'chemistry', 2, 'deuterium-fuel-cells')
@@ -3492,15 +5473,40 @@ if duo_known:
                    if g['value'] < t['value']), None)
     if unfair:
         give, take = unfair
-        refused = call('POST', f'/api/games/{duo_id}/diplomacy',
-                       {'accessToken': tok_one, 'targetPlayerId': pid_two,
-                        'action': 'EXCHANGE_TECH',
-                        'offeredTech': give['code'], 'requestedTech': take['code']})
+        call('POST', f'/api/games/{duo_id}/diplomacy',
+             {'accessToken': tok_one, 'targetPlayerId': pid_two,
+              'action': 'EXCHANGE_TECH',
+              'offeredTech': give['code'], 'requestedTech': take['code']})
+        # Человек вправе отказаться (пункт 182): отказ исполняется в конце хода и называется
+        # отказом правителя, а не нехваткой доверия.
+        pending = call_auth('GET', f'/api/games/{duo_id}/diplomacy/proposals', tok_two).get('incoming', [])
+        for one in pending:
+            call('POST', f"/api/games/{duo_id}/diplomacy/proposals/{one['id']}",
+                 {'accessToken': tok_two, 'accept': False})
+        end_turn(duo_id, tok_one, tok_two)
         after = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_one)['acquired']}
-        # Правило MOO II: соглашаются только на выгодную себе сделку.
-        check('дешёвое за дорогое не меняют — п. 15',
-              str(refused.get('answer', '')).startswith('Отказ') and take['code'] not in after,
-              f"{give['value']} ОИ за {take['value']} ОИ: {refused.get('answer')}")
+        one_keys = [e.get('key') for e in call_auth('GET', f'/api/games/{duo_id}/turn/report', tok_one)['events']]
+        check('отклонённый человеком обмен не состоялся, и предложивший узнал об отказе — пункт 182',
+              take['code'] not in after and 'turn.diplomacy.proposalDeclined' in one_keys,
+              f"{give['value']} ОИ за {take['value']} ОИ: {one_keys}")
+
+        # Не ответил до конца следующего хода — решает доверие, как прежде (пункт 182), а
+        # правило MOO II остаётся: дешёвое за дорогое не меняют.
+        call('POST', f'/api/games/{duo_id}/diplomacy',
+             {'accessToken': tok_one, 'targetPlayerId': pid_two,
+              'action': 'EXCHANGE_TECH',
+              'offeredTech': give['code'], 'requestedTech': take['code']})
+        end_turn(duo_id, tok_one, tok_two)
+        still = call_auth('GET', f'/api/games/{duo_id}/diplomacy/proposals', tok_two).get('incoming', [])
+        check('без ответа предложение ждёт до конца следующего хода — пункт 182', len(still) == 1, str(still))
+        end_turn(duo_id, tok_one, tok_two)
+        after = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_one)['acquired']}
+        one_keys = [e.get('key') for e in call_auth('GET', f'/api/games/{duo_id}/turn/report', tok_one)['events']]
+        two_keys = [e.get('key') for e in call_auth('GET', f'/api/games/{duo_id}/turn/report', tok_two)['events']]
+        check('дешёвое за дорогое не меняют, когда решает доверие — п. 15, пункт 182',
+              take['code'] not in after and 'turn.diplomacy.proposalTrustRefused' in one_keys
+              and 'turn.diplomacy.proposalTimedOut' in two_keys,
+              f"{give['value']} ОИ за {take['value']} ОИ: {one_keys} / {two_keys}")
 
     # Подарок деньгами: казна убывает, чужое доверие растёт — и это видно на экране.
     trust_before = [r for r in call_auth('GET', f'/api/games/{duo_id}/diplomacy', tok_one)
@@ -3518,8 +5524,10 @@ if duo_known:
 
     # Подарок технологией: согласия не требует, и подаренное уходит из списка предложений.
     trade = call_auth('GET', f'/api/games/{duo_id}/diplomacy/{pid_two}/technologies', tok_one)
-    if trade['offer']:
-        present = trade['offer'][0]
+    two_known = {a['optionCode'] for a in call_auth('GET', f'/api/games/{duo_id}/research', tok_two)['acquired']}
+    fresh_offer = [g for g in trade['offer'] if g['code'] not in two_known]
+    if fresh_offer:
+        present = fresh_offer[0]
         call('POST', f'/api/games/{duo_id}/diplomacy',
              {'accessToken': tok_one, 'targetPlayerId': pid_two,
               'action': 'GIFT_TECH', 'offeredTech': present['code']})
@@ -3569,6 +5577,16 @@ check('загрузка: флот на месте — п. 8',
 # проверка падала на пустом списке флотов, не дойдя до конца прогона. Списание к войне
 # отношения не имеет, и ставить его в зависимость от военной удачи незачем.
 scout = scrap_fleets[0]
+# ИМЯ ФЛОТА — пункт 141: имя игрока ложится во флот как есть, слишком длинное — 400.
+call('PUT', f"/api/games/{shadow_id}/fleets/{scout['id']}/name", {'accessToken': shadow_tok, 'name': ' Третья ударная '})
+named = [f for f in call_auth('GET', f'/api/games/{shadow_id}/ships', shadow_tok)['fleets'] if f['id'] == scout['id']]
+check('флот получает имя игрока и счёт боёв — пункт 141',
+      bool(named) and named[0].get('name') == 'Третья ударная'
+      and isinstance(named[0].get('battlesWon'), int) and isinstance(named[0].get('battlesLost'), int),
+      str(named[0] if named else None)[:300])
+check('слишком длинное имя флота — 400 — пункт 141',
+      (call('PUT', f"/api/games/{shadow_id}/fleets/{scout['id']}/name",
+            {'accessToken': shadow_tok, 'name': 'x' * 49}) or {}).get('ERROR') == 400)
 scrap_one = call('POST', f"/api/games/{shadow_id}/fleets/{scout['id']}/scrap",
                  {'accessToken': shadow_tok,
                   'ships': [{'designId': scout['composition'][0]['designId'],
@@ -3753,6 +5771,11 @@ def treaties(answer):
     return answer.get('treaties') or []
 
 
+# Здесь проверяется ПРАВИЛО ДОВЕРИЯ, а с человеком за столом просьбу решает он сам (пункт 182)
+# и только в конце хода. Поэтому вор на время этих проверок выходит из-за стола: ушедшему
+# предложений не шлют, и доверие отвечает тут же, как отвечало всегда. Возвращается он ниже,
+# перед контрразведкой.
+call('POST', f'/api/games/{duel_id}/leave', {'accessToken': thief_tok})
 trade = diplomacy(victim_tok, thief_pid, 'PROPOSE_TREATY', 'TRADE')
 check('торговый договор подписан — п. 15', 'TRADE' in treaties(trade),
       str(trade.get('answer', trade.get('body', {}).get('message'))))
@@ -3805,6 +5828,8 @@ broken = diplomacy(victim_tok, thief_pid, 'BREAK_TREATY', 'ALLIANCE')
 check('разрыв союза уносит и ненападение — п. 15',
       'ALLIANCE' not in treaties(broken) and 'NON_AGGRESSION' not in treaties(broken),
       str(broken.get('treatyLabels', broken)))
+
+call('POST', f'/api/games/{duel_id}/presence', {'accessToken': thief_tok})
 
 # Контрразведка: агенты жертвы ловят чужих — п. 13.
 victim_spies = call('GET', f'/api/games/{duel_id}/espionage?accessToken={victim_tok}')
@@ -4074,6 +6099,18 @@ check('решает тот, чья инициатива выше — п. 8',
       mine_enc and theirs_enc and mine_enc[0]['yourTurn'] != theirs_enc[0]['yourTurn'],
       f"первый {mine_enc and mine_enc[0]['yourTurn']}, второй {theirs_enc and theirs_enc[0]['yourTurn']}")
 
+# ПРОГНОЗ ВСТРЕЧИ — field-backlog, пункты 84 и 153: своя сила названа всегда, чужая — только
+# увиденной (иначе пусто и прогноз «неизвестно»), и прогноз — одно из четырёх слов.
+forecast_row = mine_enc[0] if mine_enc else {}
+check('во встрече названа своя сила и прогноз исхода — пункты 84 и 153',
+      isinstance(forecast_row.get('yourPower'), int) and forecast_row.get('yourPower') > 0
+      and forecast_row.get('forecast') in ('LIKELY_WIN', 'UNCLEAR', 'LIKELY_LOSS', 'UNKNOWN')
+      and (forecast_row.get('forecast') == 'UNKNOWN') == (forecast_row.get('opponentPower') is None),
+      str({k: forecast_row.get(k) for k in ('yourPower', 'opponentPower', 'forecast', 'unseenTechnologies')}))
+check('неувиденная сила соперника названа неизвестной с числом неувиденного — пункт 153',
+      forecast_row.get('forecast') != 'UNKNOWN' or (forecast_row.get('unseenTechnologies') or 0) > 0,
+      str({k: forecast_row.get(k) for k in ('forecast', 'unseenTechnologies')}))
+
 navy_report = call_auth('GET', f'/api/games/{navy_id}/turn/report', navy_tok)
 check('встреча попала в итоги хода — п. 11.1',
       any(e['code'] == 'ENCOUNTER' for e in navy_report['events']),
@@ -4139,11 +6176,24 @@ check('бой попал в итоги хода обеих сторон — п. 
 BATTLE_WITH_CAUSE = {'turn.battle.wonBy', 'turn.battle.wonByBlasts', 'turn.battle.lostBy',
                      'turn.battle.mutualBy', 'turn.battle.attackedWonBy',
                      'turn.battle.attackedWonByBlasts', 'turn.battle.attackedLostBy'}
-battle_lines = [e for e in navy_after['events'] + foe_after['events'] if e['code'] == 'BATTLE']
+# Слагаемые сил (field-backlog, пункт 102) идут своей строкой того же раздела — в проверку
+# строки исхода они не входят.
+battle_lines = [e for e in navy_after['events'] + foe_after['events']
+                if e['code'] == 'BATTLE' and e.get('key') != 'turn.battle.parts']
 check('строка боя «авто» называет силы обеих сторон — backlog-promo, пункт 6',
       bool(battle_lines) and all(e.get('key') in BATTLE_WITH_CAUSE and 'сил' in e['text']
                                  for e in battle_lines),
       str([(e.get('key'), e['text']) for e in battle_lines]))
+# ИЗ ЧЕГО СИЛА — пункт 102: каждой стороне — слагаемые обеих (корабли, залп, прочность, щит),
+# своими словами, а не ключом. ЧТО ИЗМЕНИТЬ — пункт 103: рычаг, если есть, — только проигравшему.
+parts_lines = [[e for e in report['events'] if e.get('key') == 'turn.battle.parts']
+               for report in (navy_after, foe_after)]
+check('каждой стороне боя названы слагаемые сил — пункт 102',
+      all(len(lines) == 1 and 'залп' in lines[0]['text'] for lines in parts_lines),
+      str([[e['text'] for e in lines] for lines in parts_lines])[:300])
+lever_owners = [any(e['code'] == 'LEVER' for e in report['events']) for report in (navy_after, foe_after)]
+check('строка «что изменить» достаётся не больше чем одной стороне — пункт 103',
+      not all(lever_owners), str(lever_owners))
 
 # Дипломатия соседа тоже попадает в итоги хода — п. 11.1.
 call('POST', f'/api/games/{navy_id}/diplomacy',
@@ -4581,12 +6631,19 @@ check('до двигателя и топлива корабля в стройк�
 
 # Первые уровни Power, Chemistry и Physics — то, с чего игрок начинает флот.
 study(ship_id, ship_tok, ['power:1', 'chemistry:1', 'physics:1'])
+early_parts = [x['code'] for x in call_auth(
+    'GET', f'/api/games/{ship_id}/ship-designs/catalog', ship_tok)['components'] if x['available']]
+# Масс-драйвер и титановую обшивку изучают (12.10.2026, решение хозяина проекта): обшивку —
+# базовой химией за 50, пушку — продвинутым магнетизмом.
+check('титановую обшивку открывает базовая химия, масс-драйвер ещё закрыт — п. 8, п. 9',
+      'titanium-armor' in early_parts and 'mass-driver' not in early_parts, str(early_parts))
+study(ship_id, ship_tok, ['force_fields:1:mass-driver'])
 ship_catalog = call_auth('GET', f'/api/games/{ship_id}/ship-designs/catalog', ship_tok)
 hull_codes = [x['code'] for x in ship_catalog['hulls']]
 check('справочник отдаёт шесть корпусов MOO II — п. 8',
       hull_codes == ['frigate', 'destroyer', 'cruiser', 'battleship', 'titan', 'doom-star'],
       str(hull_codes))
-check('ячеек проектов шесть, как в оригинале — п. 8', ship_catalog['maxDesigns'] == 6)
+check('ячеек проектов восемь — п. 8 (в оригинале шесть)', ship_catalog['maxDesigns'] == 8)
 check('крупные корпуса закрыты до своих технологий — п. 8',
       [x['code'] for x in ship_catalog['hulls'] if not x['available']] == ['titan', 'doom-star'],
       str([x['code'] for x in ship_catalog['hulls'] if not x['available']]))
@@ -4603,7 +6660,7 @@ check('первые уровни дают двигатель, броню и пу
 weapon_kinds = {x['code']: x.get('weaponKind') for x in ship_catalog['components']
                 if x['slot'] == 'WEAPON'}
 check('у каждой пушки в справочнике есть вид выстрела — п. 8',
-      all(kind in ('BEAM', 'PROJECTILE', 'MISSILE') for kind in weapon_kinds.values()),
+      all(kind in ('BEAM', 'PROJECTILE', 'MISSILE', 'BOMB') for kind in weapon_kinds.values()),
       str(sorted({k for k in weapon_kinds.values()})))
 check('вид выстрела есть только у оружия — п. 8',
       all(x.get('weaponKind') is None for x in ship_catalog['components']
@@ -4672,6 +6729,29 @@ ship_home = [x for st in ship_map['systems'] for x in st['planets']
 check('родной мир начинает со звёздной базой — п. 8',
       any(b['code'] == 'star-base' for b in ship_home['colony']['buildings']),
       str([b['code'] for b in ship_home['colony']['buildings']]))
+
+# Строят КОРАБЛЬ ячейки, а не строку проекта (09.10.2026, баг хозяина проекта): колония,
+# заказавшая корабль до правки проекта, оставалась на вытесненной строке — «проект снят с
+# производства», без цены, бесконечной стройкой. Новый проект ячейки забирает и стройку, и очередь.
+slot1 = next(x for x in call_auth('GET', f'/api/games/{ship_id}/ship-designs', ship_tok) if x['slot'] == 1)
+call('POST', f'/api/games/{ship_id}/planets/{ship_home["id"]}/project',
+     {'accessToken': ship_tok, 'projectCode': 'SHIP:' + slot1['id']})
+call('POST', f'/api/games/{ship_id}/planets/{ship_home["id"]}/queue',
+     {'accessToken': ship_tok, 'projectCode': 'SHIP:' + slot1['id']})
+redesign = call_auth('POST', f'/api/games/{ship_id}/ship-designs', ship_tok, {
+    'slot': 1, 'name': 'Переделанный', 'hullCode': 'frigate',
+    'components': [{'code': 'nuclear-drive', 'count': 1}]})
+re_home = [x for st in call_auth('GET', f'/api/games/{ship_id}/map', ship_tok)['systems']
+           for x in st['planets'] if x['id'] == ship_home['id']][0]['colony']
+check('новый проект ячейки забирает стройку и очередь колонии — п. 8, п. 10',
+      redesign.get('id') is not None
+      and re_home.get('projectCode') == 'SHIP:' + str(redesign.get('id'))
+      and re_home.get('projectCost') is not None
+      and [q['code'] for q in re_home.get('queue', [])] == ['SHIP:' + str(redesign.get('id'))],
+      f"{re_home.get('projectCode')} {re_home.get('projectCost')} {[q['code'] for q in re_home.get('queue', [])]}")
+call('POST', f'/api/games/{ship_id}/planets/{ship_home["id"]}/project',
+     {'accessToken': ship_tok, 'projectCode': 'TRADE_GOODS'})
+call('DELETE', f'/api/games/{ship_id}/planets/{ship_home["id"]}/queue/0?accessToken={ship_tok}')
 # Казармы морской пехоты стоят на родном мире с первого хода, как в MOO II, где это
 # стартовая технология, — п. 12. Колонию защищают обученные бойцы, а не жители с винтовками.
 check('родной мир начинает с казармами — п. 12',
@@ -5169,16 +7249,6 @@ check('отправка всего состава — перелёт целик�
       len(split_final) == 2 and all(f['targetSystemId'] == split_target['id'] for f in split_final),
       str([(f['systemName'], f['ships'], f.get('targetSystemName')) for f in split_final]))
 
-# Флот в пути приказов не слышит: связи с ним нет, пока не изучена Hyperspace Communications.
-redirect_to = [st for st in call_auth('GET', f'/api/games/{ship_id}/map', ship_tok)['systems']
-               if st['id'] not in (split_target['id'], source['starSystemId'])
-               and st['id'] in split_reach]
-if redirect_to:
-    denied = call('POST', f"/api/games/{ship_id}/fleets/{split_final[0]['id']}/move",
-                  {'accessToken': ship_tok, 'targetSystemId': redirect_to[0]['id']})
-    check('курс флота в пути не сменить без Hyperspace Communications — п. 8',
-          denied.get('ERROR') == 409, str(denied.get('body', {}).get('message')))
-
 # Обе части приходят к цели и встают в один строй: двух своих флотов в системе не держим.
 for _ in range(20):
     split_final = call_auth('GET', f'/api/games/{ship_id}/fleets', ship_tok)
@@ -5189,6 +7259,51 @@ check('пришедшие корабли встают в общий строй �
       len(split_final) == 1 and split_final[0]['ships'] == source['ships']
       and split_final[0]['starSystemId'] == split_target['id'],
       str([(f['systemName'], f['ships']) for f in split_final]))
+
+# Флот в пути слышит приказ только у своей звёздной базы (без связи — ближе парсека) или с
+# Hyperspace Communications (п. 8, перенос MOO II, 14.10.2026). Собранный флот возвращается к родной
+# базе и уходит оттуда к САМОЙ ДАЛЬНЕЙ досягаемой звезде: в ход вылета он у базы и курс ему сменить
+# можно, а через ход он в пути дальше парсека — и нельзя. Цель дальняя, чтобы через ход флот
+# гарантированно был в пути: иначе проверка отказа шла бы через раз. Проверки — последние в разделе:
+# одинокий флот рядом с живым ИИ может и погибнуть, а после них он уже ни для чего не нужен.
+rover = split_final[0]['id'] if split_final else None
+for _ in range(20):
+    fleets_now = {f['id']: f for f in call_auth('GET', f'/api/games/{ship_id}/fleets', ship_tok)}
+    here = fleets_now.get(rover)
+    if not here or (not here.get('targetSystemId') and here['starSystemId'] == source['starSystemId']):
+        break
+    if not here.get('targetSystemId'):
+        call('POST', f"/api/games/{ship_id}/fleets/{rover}/move",
+             {'accessToken': ship_tok, 'targetSystemId': source['starSystemId']})
+    end_turn(ship_id, ship_tok)
+split_systems = call_auth('GET', f'/api/games/{ship_id}/map', ship_tok)['systems']
+split_home = next(st for st in split_systems if st['id'] == source['starSystemId'])
+redirect_to = sorted((st for st in split_systems if st['id'] != source['starSystemId'] and st['id'] in split_reach
+                      and not st.get('monster') and not st.get('special')),
+                     key=lambda st: -math.hypot(st['x'] - split_home['x'], st['y'] - split_home['y']))
+check('флот вернулся к родной базе, и есть дальняя звезда для смены курса — п. 8',
+      bool(redirect_to) and rover in {f['id'] for f in call_auth('GET', f'/api/games/{ship_id}/fleets', ship_tok)})
+if len(redirect_to) >= 2:
+    sent_far = call('POST', f"/api/games/{ship_id}/fleets/{rover}/move",
+                    {'accessToken': ship_tok, 'targetSystemId': redirect_to[1]['id']})
+    near = call('POST', f"/api/games/{ship_id}/fleets/{rover}/move",
+                {'accessToken': ship_tok, 'targetSystemId': redirect_to[0]['id']})
+    check('у своей базы флот в пути слышит приказ и без связи — п. 8',
+          sent_far.get('orderable') is True and near.get('targetSystemId') == redirect_to[0]['id']
+          and near.get('arrivalTurn', 0) - near.get('departureTurn', 0) >= 2,
+          str(near.get('body', (near.get('targetSystemName'), near.get('departureTurn'), near.get('arrivalTurn')))))
+    end_turn(ship_id, ship_tok)
+    flying = [f for f in call_auth('GET', f'/api/games/{ship_id}/fleets', ship_tok) if f.get('targetSystemId')]
+    away = next((f for f in flying if f['id'] == rover), {})
+    denied = call('POST', f"/api/games/{ship_id}/fleets/{rover}/move",
+                  {'accessToken': ship_tok, 'targetSystemId': redirect_to[1]['id']})
+    check('вдали от своей базы курс без связи не сменить — п. 8',
+          away.get('orderable') is False and denied.get('ERROR') == 409
+          and 'базы' in str(denied.get('body', {}).get('message')),
+          str((away.get('orderable'), denied.get('body', {}).get('message'))))
+    check('у флотов в пути сервер отдаёт, слышат ли они приказ — п. 8',
+          bool(flying) and all(f.get('orderable') in (True, False) for f in flying),
+          str([(f.get('systemName'), f.get('orderable')) for f in flying]))
 
 call('DELETE', f'/api/games/{ship_id}?accessToken={ship_tok}')
 
@@ -5680,6 +7795,495 @@ if 'ERROR' not in demo:
           stranger.get('ERROR') in (403, 404),
           str(stranger.get('body', {}).get('message')))
 
+# --- 13.4a. ИИ сбивает ракеты в полёте противоракетами (backlog-promo, пункт 30) ---
+#
+# В демонстрации залпов в полёте не бывает: ракетчики ИИ подходят на половину пути ракеты за
+# круг, и всё долетает сразу. Залп в полёте — это человек, стреляющий издалека, и сбивать его
+# ИИ должен именно тогда. Дуэль двух людей: у «Стража» фрегаты с противоракетами, у
+# «Ракетчика» — с ракетами. Страж покидает партию, и его корабли ведёт ИИ (пункт 11), а
+# Ракетчик пускает ракеты издалека. Ближней обороны у Стража нет — значит, любой перехват его
+# кораблём сделан противоракетами и его же ходом.
+amr_game = call('POST', '/api/games', {'name': 'Тактика перехват', 'playerName': 'Страж',
+                                       'homeStarName': 'Застава', 'galaxySize': 'SMALL',
+                                       'galacticEvents': False, 'seed': 20260915, 'totalPlayers': 2})
+amr_id = amr_game['game']['id']
+amr_tok, amr_pid = amr_game['credentials']['accessToken'], amr_game['credentials']['playerId']
+amr_join = call('POST', f'/api/games/{amr_id}/join', {'playerName': 'Ракетчик', 'homeStarName': 'Пусковая'})
+rkt_tok, rkt_pid = amr_join['credentials']['accessToken'], amr_join['credentials']['playerId']
+call('POST', f'/api/games/{amr_id}/start', {'accessToken': amr_tok})
+research_shipbuilding(amr_id, amr_tok, rkt_tok)
+research_shipbuilding(amr_id, rkt_tok, amr_tok)
+research_option(amr_id, amr_tok, 'force_fields', 1, 'mass-driver', rkt_tok)
+# Противоракеты — первый уровень инженерии; ход идёт, когда закончили оба.
+for _ in range(60):
+    if any(x['optionCode'] == 'anti-missile-rockets'
+           for x in call_auth('GET', f'/api/games/{amr_id}/research', amr_tok)['acquired']):
+        break
+    call('POST', f'/api/games/{amr_id}/research',
+         {'accessToken': amr_tok, 'categoryCode': 'engineering', 'levelOrder': 1,
+          'optionCode': 'anti-missile-rockets'})
+    end_turn(amr_id, amr_tok, rkt_tok)
+
+# Свои проекты ИИ не собирает: противоракеты ему достаются только в проектах, которые игра
+# снаряжает сама, — на любой корпус, где после них остаётся хоть один ствол. Своих проектов у
+# Стража пока нет, кроме будущей второй ячейки, поэтому всё прочее — проекты игры.
+amr_auto = [d for d in call_auth('GET', f'/api/games/{amr_id}/ship-designs', amr_tok)
+            if d.get('slot') != 2 and any(c['code'] == 'anti-missile-rockets' for c in d.get('components', []))]
+check('изученные противоракеты встают в проекты, которые игра собирает сама — пункт 30',
+      len(amr_auto) > 0, f"проектов с ними {len(amr_auto)}")
+amr_parts = call_auth('GET', f'/api/games/{amr_id}/ship-designs/catalog', amr_tok)
+amr_module = next((c for c in amr_parts.get('components', []) if c['code'] == 'anti-missile-rockets'), {})
+check('противоракеты — особый модуль корабля с технологией того же имени — пункт 30',
+      amr_module.get('slot') == 'SPECIAL' and amr_module.get('requiredTechCode') == 'anti-missile-rockets',
+      str({k: amr_module.get(k) for k in ('slot', 'requiredTechCode')}))
+
+amr_guard = call_auth('POST', f'/api/games/{amr_id}/ship-designs', amr_tok, {
+    'slot': 2, 'name': 'Guard', 'hullCode': 'frigate',
+    'components': [{'code': 'nuclear-drive', 'count': 1}, {'code': 'mass-driver', 'count': 1},
+                   {'code': 'anti-missile-rockets', 'count': 1}]})
+amr_rocketeer = call_auth('POST', f'/api/games/{amr_id}/ship-designs', rkt_tok, {
+    'slot': 2, 'name': 'Rocketeer', 'hullCode': 'frigate',
+    'components': [{'code': 'nuclear-drive', 'count': 1}, {'code': 'nuclear-missile', 'count': 2}]})
+check('противоракеты ставятся в проект, когда изучены — пункт 30',
+      'id' in amr_guard, str(amr_guard.get('body', amr_guard))[:200])
+
+
+def amr_home(player_id, token):
+    for system in call_auth('GET', f'/api/games/{amr_id}/map', token)['systems']:
+        for planet in system['planets']:
+            if planet.get('ownerPlayerId') == player_id:
+                return system, planet
+    return None, None
+
+
+def amr_build(token, player_id, design, count):
+    """Строит на родном мире столько кораблей проекта, сколько просили; пусто — не вышло."""
+    system, planet = amr_home(player_id, token)
+    code = 'SHIP:' + design.get('id', '')
+    for _ in range(90):
+        fleets = call_auth('GET', f'/api/games/{amr_id}/fleets', token)
+        if isinstance(fleets, list) and sum(fleet['ships'] for fleet in fleets) >= count:
+            return system, planet
+        systems = call_auth('GET', f'/api/games/{amr_id}/map', token)['systems']
+        colony = next(p for s in systems for p in s['planets'] if p['id'] == planet['id'])
+        if colony['colony'].get('projectCode') != code:
+            call('POST', f"/api/games/{amr_id}/planets/{planet['id']}/project",
+                 {'accessToken': token, 'projectCode': code})
+        end_turn(amr_id, amr_tok, rkt_tok)
+    return None, None
+
+
+amr_battle_id = None
+if 'id' in amr_guard and 'id' in amr_rocketeer:
+    amr_system, _ = amr_build(amr_tok, amr_pid, amr_guard, 2)
+    # Ракетчиков четверо, а не двое: проверке отхода нужен корабль, который ДОЖИВЁТ до своего
+    # следующего хода, а со сглаженными промахами (пункт 86) двое гибли до него без всякой удачи.
+    _, rkt_planet = amr_build(rkt_tok, rkt_pid, amr_rocketeer, 4)
+    if amr_system and rkt_planet:
+        reach_towards(amr_id, rkt_tok, rkt_planet['id'], amr_system['id'], amr_tok)
+        if fly_to(amr_id, rkt_tok, amr_system['id'], amr_tok, limit=60) is not None:
+            amr_enc = next((e for e in call_auth('GET', f'/api/games/{amr_id}/encounters', amr_tok)
+                            if e.get('opponentPlayerId') == rkt_pid), None)
+            if amr_enc:
+                call('POST', f"/api/games/{amr_id}/encounters/{amr_enc['id']}",
+                     {'accessToken': amr_tok if amr_enc['yourTurn'] else rkt_tok,
+                      'decision': 'ATTACK', 'auto': False})
+                amr_battles = call_auth('GET', f'/api/games/{amr_id}/battles', amr_tok)
+                amr_battle_id = amr_battles[0]['id'] if isinstance(amr_battles, list) and amr_battles else None
+check('дуэль ракет против противоракет доходит до боя — пункт 30', amr_battle_id is not None)
+
+amr_downs = 0
+amr_volleys = 0
+if amr_battle_id:
+    amr_path = f'/api/games/{amr_id}/battles/{amr_battle_id}'
+    # Стражу пропускаем ходы, пока очередь не у Ракетчика: ушедшего ход ждал бы вечно —
+    # ИИ вступает в бой на следующем действии, а не сам по себе.
+    for _ in range(20):
+        amr_state = call_auth('GET', amr_path, amr_tok)
+        amr_now = next((s for s in amr_state['ships'] if s['id'] == amr_state.get('currentShipId')), None)
+        if amr_now is None or amr_now['ownerPlayerId'] == rkt_pid:
+            break
+        call_auth('POST', amr_path + '/action', amr_tok, {'shipId': amr_now['id'], 'action': 'PASS'})
+    call('POST', f'/api/games/{amr_id}/leave', {'accessToken': amr_tok})
+
+    guard_ids = set()
+    for _ in range(120):
+        amr_state = call_auth('GET', amr_path, rkt_tok)
+        if amr_state.get('state') != 'IN_PROGRESS':
+            break
+        guard_ids |= {s['id'] for s in amr_state['ships'] if s['ownerPlayerId'] == amr_pid}
+        amr_now = next(s for s in amr_state['ships'] if s['id'] == amr_state['currentShipId'])
+        if amr_now['ownerPlayerId'] != rkt_pid:
+            break
+        foes = [s for s in amr_state['ships'] if s['ownerPlayerId'] == amr_pid and not s['destroyed']]
+        if not foes:
+            break
+        foe = min(foes, key=lambda s: max(abs(s['x'] - amr_now['x']), abs(s['y'] - amr_now['y'])))
+        gap = max(abs(foe['x'] - amr_now['x']), abs(foe['y'] - amr_now['y']))
+        if gap > amr_now['weaponRange'] and amr_now['moveLeft'] > 0:
+            step = min(amr_now['moveLeft'], gap - 16)
+            body = {'shipId': amr_now['id'], 'action': 'MOVE', 'x': amr_now['x'] + (
+                step if foe['x'] > amr_now['x'] else -step), 'y': amr_now['y']}
+            call_auth('POST', amr_path + '/action', rkt_tok, body)
+            amr_state = call_auth('GET', amr_path, rkt_tok)
+            amr_now = next(s for s in amr_state['ships'] if s['id'] == amr_now['id'])
+            gap = max(abs(foe['x'] - amr_now['x']), abs(foe['y'] - amr_now['y']))
+        # Издалека: дальше пути ракеты за круг залп остаётся в полёте.
+        if 10 < gap <= amr_now['weaponRange'] and not amr_now['fired']:
+            amr_volleys += 1
+            acted = call_auth('POST', amr_path + '/action', rkt_tok,
+                              {'shipId': amr_now['id'], 'action': 'FIRE', 'targetShipId': foe['id']})
+        else:
+            acted = call_auth('POST', amr_path + '/action', rkt_tok,
+                              {'shipId': amr_now['id'], 'action': 'PASS'})
+        # В ответ на действие Ракетчика уходят и ходы ИИ за Стража — среди них перехват.
+        amr_downs += len([e for e in acted.get('events', [])
+                          if e['type'] == 'INTERCEPT' and e.get('shipId') in guard_ids])
+        if amr_downs:
+            break
+check('ИИ сам сбивает ракеты в полёте противоракетами — пункт 30',
+      amr_downs > 0, f"залпов издалека {amr_volleys}, перехватов Стражем {amr_downs}")
+
+# Отход — приказ кораблю (п. 8, 06.10.2026): Ракетчик уводит свои корабли по одному. Первый
+# сперва делает шаг — ход тронут, и он разворачивается, бой идёт дальше, а уходит корабль в свой
+# следующий ход; прочие получают приказ на нетронутом ходу и уходят сразу (09.10.2026). Не
+# оставив на поле никого, флот улетает к ближайшей своей колонии.
+retreat_order, warped, retreating_ship, amr_end = None, [], None, None
+instant_order = None
+if amr_battle_id:
+    for _ in range(120):
+        amr_end = call_auth('GET', amr_path, rkt_tok)
+        if amr_end.get('state') != 'IN_PROGRESS':
+            break
+        amr_now = next(s for s in amr_end['ships'] if s['id'] == amr_end['currentShipId'])
+        if amr_now['ownerPlayerId'] != rkt_pid:
+            break
+        moved_first = False
+        if retreat_order is None and amr_now.get('moveLeft', 0) > 0:
+            for dx in (-1, 1):
+                stepped = call_auth('POST', amr_path + '/action', rkt_tok,
+                                    {'shipId': amr_now['id'], 'action': 'MOVE', 'x': amr_now['x'] + dx, 'y': amr_now['y']})
+                if not stepped.get('ERROR'):
+                    moved_first = True
+                    break
+        acted = call_auth('POST', amr_path + '/action', rkt_tok, {'shipId': amr_now['id'], 'action': 'RETREAT'})
+        if acted.get('ERROR'):
+            acted = call_auth('POST', amr_path + '/action', rkt_tok, {'shipId': amr_now['id'], 'action': 'PASS'})
+        elif retreat_order is None and moved_first:
+            retreat_order = acted
+            retreating_ship = next((x for x in acted.get('ships', []) if x['id'] == amr_now['id']), None)
+        elif instant_order is None and not moved_first:
+            instant_order = (amr_now['id'], acted)
+        warped += [e for e in (acted.get('events') or []) if e.get('type') == 'WARP_OUT']
+    amr_end = call_auth('GET', amr_path, rkt_tok) if amr_battle_id else None
+# Приказ не уводит корабль тут же: он ещё на поле (ответ может нести и его уход — если ходы
+# ИИ за Стража довели очередь до нового круга, — но тогда между приказом и уходом ходят другие).
+order_events = (retreat_order or {}).get('events', []) if isinstance(retreat_order, dict) else []
+order_at = next((i for i, e in enumerate(order_events) if e.get('type') == 'RETREAT'), None)
+left_at = next((i for i, e in enumerate(order_events)
+                if e.get('type') == 'WARP_OUT' and isinstance(retreating_ship, dict)
+                and e.get('shipId') == retreating_ship.get('id')), None)
+check('отход — приказ кораблю: он разворачивается, а бой идёт дальше — п. 8',
+      order_at is not None and isinstance(retreating_ship, dict)
+      and (retreating_ship.get('retreating') and not retreating_ship.get('retreated')
+           or left_at is not None and any(e.get('shipId') != retreating_ship.get('id')
+                                          for e in order_events[order_at + 1:left_at])),
+      str([e.get('type') for e in order_events])[:200])
+inst_events = (instant_order[1].get('events') or []) if instant_order else []
+inst_at = next((i for i, e in enumerate(inst_events) if e.get('type') == 'RETREAT'), None)
+check('на нетронутом ходу отход — сразу: следом за приказом уходит сам корабль — п. 8',
+      inst_at is not None and inst_at + 1 < len(inst_events)
+      and inst_events[inst_at + 1].get('type') == 'WARP_OUT'
+      and inst_events[inst_at + 1].get('shipId') == instant_order[0],
+      str([e.get('type') for e in inst_events])[:200])
+check('отходящий уходит в гиперпространство в свой следующий ход — п. 8',
+      len(warped) >= 1 and isinstance(amr_end, dict) and amr_end.get('state') != 'IN_PROGRESS',
+      f"ушло {len(warped)}, бой {amr_end.get('state') if isinstance(amr_end, dict) else None}")
+rkt_fleets = call_auth('GET', f'/api/games/{amr_id}/fleets', rkt_tok) if amr_battle_id else []
+rkt_flying = [f for f in rkt_fleets if f.get('targetSystemId')] if isinstance(rkt_fleets, list) else []
+check('флот, ушедший с поля целиком, летит к ближайшей своей колонии — п. 8',
+      len(rkt_flying) >= 1 and all(f['targetSystemId'] != amr_system['id'] for f in rkt_flying),
+      str([(f.get('starSystemId'), f.get('targetSystemId')) for f in rkt_flying])[:200])
+call('DELETE', f'/api/games/{amr_id}/admin')
+
+# --- 13.4b. Абордаж (п. 8, кнопка BOARD оригинала) ---
+#
+# Дуэль двух людей: у «Абордажника» раса телепатов — им абордаж не ждёт ни опущенного щита,
+# ни разбитого двигателя (правило оригинала), — и два эсминца по пять пехотинцев; у «Купца»
+# фрегаты с двумя. Первый эсминец берёт фрегат, второй громит другой рейдом; Купец, не
+# телепат, пробует взять эсминец на ходу и получает отказ. Купец уводит флот, бой кончается,
+# и взятый корабль встаёт во флот захватчика трофеем.
+brd_game = call('POST', '/api/games', {'name': 'Тактика абордаж', 'playerName': 'Абордажник',
+                                       'homeStarName': 'Причал', 'galaxySize': 'SMALL',
+                                       'raceName': 'Телепаты', 'raceTraits': ['telepathic'],
+                                       'galacticEvents': False, 'seed': 20260915, 'totalPlayers': 2})
+brd_id = brd_game['game']['id']
+brd_tok, brd_pid = brd_game['credentials']['accessToken'], brd_game['credentials']['playerId']
+brd_join = call('POST', f'/api/games/{brd_id}/join', {'playerName': 'Купец', 'homeStarName': 'Гавань'})
+mer_tok, mer_pid = brd_join['credentials']['accessToken'], brd_join['credentials']['playerId']
+call('POST', f'/api/games/{brd_id}/start', {'accessToken': brd_tok})
+research_shipbuilding(brd_id, brd_tok, mer_tok)
+research_shipbuilding(brd_id, mer_tok, brd_tok)
+research_option(brd_id, brd_tok, 'force_fields', 1, 'mass-driver', mer_tok)
+research_option(brd_id, mer_tok, 'force_fields', 1, 'mass-driver', brd_tok)
+# Купец изучает противоракеты и ставит их на фрегаты: трофей с ними абордажник разберёт на
+# технологию, которой у него нет (п. 8, «captured ships can be scrapped for tech»).
+for _ in range(60):
+    if any(x['optionCode'] == 'anti-missile-rockets'
+           for x in call_auth('GET', f'/api/games/{brd_id}/research', mer_tok)['acquired']):
+        break
+    call('POST', f'/api/games/{brd_id}/research',
+         {'accessToken': mer_tok, 'categoryCode': 'engineering', 'levelOrder': 1,
+          'optionCode': 'anti-missile-rockets'})
+    end_turn(brd_id, brd_tok, mer_tok)
+brd_design = call_auth('POST', f'/api/games/{brd_id}/ship-designs', brd_tok, {
+    'slot': 2, 'name': 'Boarder', 'hullCode': 'destroyer',
+    'components': [{'code': 'nuclear-drive', 'count': 1}, {'code': 'mass-driver', 'count': 1}]})
+mer_design = call_auth('POST', f'/api/games/{brd_id}/ship-designs', mer_tok, {
+    'slot': 2, 'name': 'Trader', 'hullCode': 'frigate',
+    'components': [{'code': 'nuclear-drive', 'count': 1}, {'code': 'mass-driver', 'count': 1},
+                   {'code': 'anti-missile-rockets', 'count': 1}]})
+
+
+def brd_home(player_id, token):
+    for system in call_auth('GET', f'/api/games/{brd_id}/map', token)['systems']:
+        for planet in system['planets']:
+            if planet.get('ownerPlayerId') == player_id:
+                return system, planet
+    return None, None
+
+
+def brd_build(token, player_id, design, count):
+    """Строит на родном мире столько кораблей проекта, сколько просили; пусто — не вышло."""
+    system, planet = brd_home(player_id, token)
+    code = 'SHIP:' + design.get('id', '')
+    for _ in range(90):
+        fleets = call_auth('GET', f'/api/games/{brd_id}/fleets', token)
+        if isinstance(fleets, list) and sum(fleet['ships'] for fleet in fleets) >= count:
+            return system, planet
+        systems = call_auth('GET', f'/api/games/{brd_id}/map', token)['systems']
+        colony = next(p for s in systems for p in s['planets'] if p['id'] == planet['id'])
+        if colony['colony'].get('projectCode') != code:
+            call('POST', f"/api/games/{brd_id}/planets/{planet['id']}/project",
+                 {'accessToken': token, 'projectCode': code})
+        end_turn(brd_id, brd_tok, mer_tok)
+    return None, None
+
+
+brd_battle = None
+if 'id' in brd_design and 'id' in mer_design:
+    brd_system, _ = brd_build(brd_tok, brd_pid, brd_design, 2)
+    _, mer_planet = brd_build(mer_tok, mer_pid, mer_design, 2)
+    if brd_system and mer_planet:
+        reach_towards(brd_id, mer_tok, mer_planet['id'], brd_system['id'], brd_tok)
+        if fly_to(brd_id, mer_tok, brd_system['id'], brd_tok, limit=60) is not None:
+            brd_enc = next((e for e in call_auth('GET', f'/api/games/{brd_id}/encounters', brd_tok)
+                            if e.get('opponentPlayerId') == mer_pid), None)
+            if brd_enc:
+                call('POST', f"/api/games/{brd_id}/encounters/{brd_enc['id']}",
+                     {'accessToken': brd_tok if brd_enc['yourTurn'] else mer_tok,
+                      'decision': 'ATTACK', 'auto': False})
+                battles_now = call_auth('GET', f'/api/games/{brd_id}/battles', brd_tok)
+                brd_battle = battles_now[0]['id'] if isinstance(battles_now, list) and battles_now else None
+check('дуэль абордажника доходит до боя — п. 8', brd_battle is not None)
+
+brd_event = None
+brd_raid = None
+brd_refusal = None
+brd_fleet_before = None
+if brd_battle:
+    brd_path = f'/api/games/{brd_id}/battles/{brd_battle}'
+    brd_tokens = {brd_pid: brd_tok, mer_pid: mer_tok}
+    brd_fleet_before = sum(f['ships'] for f in call_auth('GET', f'/api/games/{brd_id}/fleets', brd_tok))
+    state = call_auth('GET', brd_path, brd_tok)
+    boarder = next((s for s in state['ships'] if s['ownerPlayerId'] == brd_pid), {})
+    check('у эсминца на борту пять пехотинцев — п. 8', boarder.get('marines') == 5,
+          str(boarder.get('marines')))
+
+    def brd_dist(a, b):
+        return max(abs(a['x'] - b['x']), abs(a['y'] - b['y']))
+
+    for _ in range(160):
+        state = call_auth('GET', brd_path, brd_tok)
+        if state.get('state') != 'IN_PROGRESS' or (brd_event and brd_raid and brd_refusal):
+            break
+        now = next(s for s in state['ships'] if s['id'] == state['currentShipId'])
+        token = brd_tokens[now['ownerPlayerId']]
+        if now['ownerPlayerId'] == mer_pid:
+            # Не телепат: у цели на ходу абордаж обязан получить отказ (п. 8).
+            near = [s for s in state['ships'] if s['ownerPlayerId'] == brd_pid and not s['destroyed']
+                    and brd_dist(s, now) <= 1 and not s['immobile']]
+            if brd_refusal is None and near and not now['fired']:
+                brd_refusal = call_auth('POST', brd_path + '/action', token,
+                                        {'shipId': now['id'], 'action': 'BOARD', 'targetShipId': near[0]['id']})
+            call_auth('POST', brd_path + '/action', token, {'shipId': now['id'], 'action': 'PASS'})
+            continue
+        prey = [s for s in state['ships'] if s['ownerPlayerId'] == mer_pid and not s['destroyed']]
+        if now['marines'] <= 0 or now['fired'] or not prey:
+            call_auth('POST', brd_path + '/action', token, {'shipId': now['id'], 'action': 'PASS'})
+            continue
+        target = min(prey, key=lambda s: brd_dist(s, now))
+        gap = brd_dist(target, now)
+        if gap > 1:
+            taken = {(s['x'], s['y']) for s in state['ships'] if not s['destroyed']}
+            cells = [(target['x'] + dx, target['y'] + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                     if (dx or dy) and (target['x'] + dx, target['y'] + dy) not in taken
+                     and 0 <= target['x'] + dx < state['width'] and 0 <= target['y'] + dy < state['height']]
+            near = [c for c in cells if max(abs(c[0] - now['x']), abs(c[1] - now['y'])) <= now['moveLeft']]
+            if near:
+                cell = min(near, key=lambda c: max(abs(c[0] - now['x']), abs(c[1] - now['y'])))
+                call_auth('POST', brd_path + '/action', token,
+                          {'shipId': now['id'], 'action': 'MOVE', 'x': cell[0], 'y': cell[1]})
+                gap = 1
+            else:
+                step = min(now['moveLeft'], gap - 1)
+                call_auth('POST', brd_path + '/action', token, {
+                    'shipId': now['id'], 'action': 'MOVE',
+                    'x': now['x'] + (step if target['x'] > now['x'] else -step if target['x'] < now['x'] else 0),
+                    'y': now['y']})
+        # Рейд — после попытки Купца: громить того, кто должен ещё попробовать абордаж, рано.
+        action = 'BOARD' if brd_event is None else 'RAID' if brd_refusal is not None else None
+        if gap <= 1 and action:
+            acted = call_auth('POST', brd_path + '/action', token,
+                              {'shipId': now['id'], 'action': action, 'targetShipId': target['id']})
+            found = next((e for e in acted.get('events', []) if e['type'] == action), acted)
+            if action == 'BOARD':
+                brd_event = found
+            else:
+                brd_raid = found
+            continue
+        call_auth('POST', brd_path + '/action', token, {'shipId': now['id'], 'action': 'PASS'})
+    after = call_auth('GET', brd_path, brd_tok)
+    taken_ships = [s for s in after.get('ships', []) if s.get('captured')]
+    check('абордаж берёт корабль: он переходит к захватчику — п. 8',
+          isinstance(brd_event, dict) and brd_event.get('damage') == 1 and len(taken_ships) == 1
+          and taken_ships[0]['ownerPlayerId'] == brd_pid and taken_ships[0]['marines'] >= 1,
+          str(brd_event)[:200])
+    check('рейд громит системы цели, не забирая её — п. 8',
+          isinstance(brd_raid, dict) and brd_raid.get('type') == 'RAID' and (brd_raid.get('damage') or 0) > 0,
+          str(brd_raid)[:200])
+    check('без телепатии и тягового луча корабль на ходу на абордаж не взять — п. 8',
+          isinstance(brd_refusal, dict) and brd_refusal.get('ERROR') == 409
+          and 'ходу' in str(brd_refusal.get('body', {}).get('message')),
+          str(brd_refusal)[:200])
+    # Купец уводит флот: каждый его корабль получает приказ отходить и уходит в свой
+    # следующий ход (п. 8, 06.10.2026); неподвижному уйти нечем — он взрывает себя. Бой
+    # кончается, когда у купца на поле не осталось никого; трофей встаёт во флот захватчика.
+    for _ in range(80):
+        after = call_auth('GET', brd_path, brd_tok)
+        if after.get('state') != 'IN_PROGRESS':
+            break
+        now = next(s for s in after['ships'] if s['id'] == after['currentShipId'])
+        if now['ownerPlayerId'] == mer_pid:
+            acted = call_auth('POST', brd_path + '/action', mer_tok, {'shipId': now['id'], 'action': 'RETREAT'})
+            if acted.get('ERROR'):
+                call_auth('POST', brd_path + '/action', mer_tok, {'shipId': now['id'], 'action': 'SELF_DESTRUCT'})
+        else:
+            call_auth('POST', brd_path + '/action', brd_tok, {'shipId': now['id'], 'action': 'PASS'})
+    brd_fleet_after = sum(f['ships'] for f in call_auth('GET', f'/api/games/{brd_id}/fleets', brd_tok))
+    check('взятый корабль после боя встаёт во флот захватчика — п. 8',
+          brd_fleet_before is not None and brd_fleet_after == brd_fleet_before + 1,
+          f"было {brd_fleet_before}, стало {brd_fleet_after}")
+    # Разбор трофея (п. 8): на слом — и противоракеты Купца достаются абордажнику.
+    brd_known_before = {x['optionCode'] for x in call_auth('GET', f'/api/games/{brd_id}/research', brd_tok)['acquired']}
+    trophy_fleet, trophy_row = next(((f, row) for f in call_auth('GET', f'/api/games/{brd_id}/fleets', brd_tok)
+                                     for row in f['composition'] if row.get('designName') == 'Trader'), (None, None))
+    if trophy_fleet:
+        call('POST', f"/api/games/{brd_id}/fleets/{trophy_fleet['id']}/scrap",
+             {'accessToken': brd_tok, 'ships': [{'designId': trophy_row['designId'], 'ships': 1}]})
+    brd_known_after = {x['optionCode'] for x in call_auth('GET', f'/api/games/{brd_id}/research', brd_tok)['acquired']}
+    check('разобранный трофей приносит технологию из своего состава — п. 8',
+          'anti-missile-rockets' not in brd_known_before and 'anti-missile-rockets' in brd_known_after,
+          f"трофей {'найден' if trophy_fleet else 'не найден'}, новые: {sorted(brd_known_after - brd_known_before)}")
+    # Бой открывает технологии кораблей противника (п. 15, туман войны): абордажник видел
+    # противоракеты на кораблях купца — нажимал он «осмотр» или нет. У самого абордажника
+    # на кораблях только стартовое, и купцу из его проектов открывать нечего.
+    seen_by_boarder = call_auth('GET', f'/api/games/{brd_id}/diplomacy/{mer_pid}/technologies', brd_tok)
+    check('после боя доклад о расе показывает технологии её кораблей — п. 15',
+          'anti-missile-rockets' in {t['code'] for t in seen_by_boarder.get('observed', [])},
+          str([t['name'] for t in seen_by_boarder.get('observed', [])][:8]))
+call('DELETE', f'/api/games/{brd_id}/admin')
+
+# --- 13.4c. Бомбардировка (пункт 25, диалог оригинала «Select Combat at …: BOMBARD») ---
+#
+# Сосед продаёт звёздную базу родного мира — колония остаётся без обороны. Бомбардир
+# изучает основу кораблестроения (с ядерным уровнем приходит и ядерная бомба), строит
+# эсминцы с бомбами и ведёт их к соседу. Встреча у беззащитной колонии предлагает бомбить, и
+# после бомбёжки у колонии меньше жителей.
+bmb_game = call('POST', '/api/games', {'name': 'Тактика бомбёжка', 'playerName': 'Бомбардир',
+                                       'homeStarName': 'Арсенал', 'galaxySize': 'SMALL',
+                                       'galacticEvents': False, 'seed': 20260915, 'totalPlayers': 2})
+bmb_id = bmb_game['game']['id']
+bmb_tok, bmb_pid = bmb_game['credentials']['accessToken'], bmb_game['credentials']['playerId']
+vic_join = call('POST', f'/api/games/{bmb_id}/join', {'playerName': 'Мишень', 'homeStarName': 'Мишень'})
+vic_tok, vic_pid = vic_join['credentials']['accessToken'], vic_join['credentials']['playerId']
+call('POST', f'/api/games/{bmb_id}/start', {'accessToken': bmb_tok})
+research_shipbuilding(bmb_id, bmb_tok, vic_tok)
+bmb_known = {x['optionCode'] for x in call_auth('GET', f'/api/games/{bmb_id}/research', bmb_tok)['acquired']}
+check('ядерная бомба приходит с первым уровнем энергетики — пункт 25',
+      'nuclear-bomb' in bmb_known, str(sorted(bmb_known))[:200])
+bmb_design = {}
+for bombs in (5, 4, 3):
+    bmb_design = call_auth('POST', f'/api/games/{bmb_id}/ship-designs', bmb_tok, {
+        'slot': 2, 'name': 'Bomber', 'hullCode': 'destroyer',
+        'components': [{'code': 'nuclear-drive', 'count': 1}, {'code': 'nuclear-bomb', 'count': bombs}]})
+    if 'id' in bmb_design:
+        break
+check('бомбардировщик собирается в окне дизайна — пункт 25', 'id' in bmb_design,
+      str(bmb_design.get('body', bmb_design))[:200])
+bmb_ship = next((s for s in call_auth('GET', f'/api/games/{bmb_id}/ships', bmb_tok).get('designs', [])
+                 if s.get('id') == bmb_design.get('id')), {})
+check('бомбы не входят в силу корабля: по кораблям они не бьют — пункт 25',
+      bmb_ship.get('attack', 0) == 0, str({k: bmb_ship.get(k) for k in ('attack', 'name')}))
+
+
+def bmb_home(player_id, token):
+    for system in call_auth('GET', f'/api/games/{bmb_id}/map', token)['systems']:
+        for planet in system['planets']:
+            if planet.get('ownerPlayerId') == player_id:
+                return system, planet
+    return None, None
+
+
+bmb_system, _ = bmb_home(bmb_pid, bmb_tok)
+vic_system, vic_planet = bmb_home(vic_pid, vic_tok)
+bmb_outcome = None
+bmb_pop_before = None
+if 'id' in bmb_design and bmb_system and vic_planet:
+    # Звёздная база — единственная оборона родного мира; без неё колония беззащитна.
+    call('POST', f"/api/games/{bmb_id}/planets/{vic_planet['id']}/sell",
+         {'accessToken': vic_tok, 'buildingCode': 'star-base'})
+    code = 'SHIP:' + bmb_design['id']
+    _, bmb_planet = bmb_home(bmb_pid, bmb_tok)
+    for _ in range(90):
+        fleets = call_auth('GET', f'/api/games/{bmb_id}/fleets', bmb_tok)
+        if isinstance(fleets, list) and sum(f['ships'] for f in fleets) >= 3:
+            break
+        systems = call_auth('GET', f'/api/games/{bmb_id}/map', bmb_tok)['systems']
+        colony = next(p for s in systems for p in s['planets'] if p['id'] == bmb_planet['id'])
+        if colony['colony'].get('projectCode') != code:
+            call('POST', f"/api/games/{bmb_id}/planets/{bmb_planet['id']}/project",
+                 {'accessToken': bmb_tok, 'projectCode': code})
+        end_turn(bmb_id, bmb_tok, vic_tok)
+    reach_towards(bmb_id, bmb_tok, bmb_planet['id'], vic_system['id'], vic_tok)
+    if fly_to(bmb_id, bmb_tok, vic_system['id'], vic_tok, limit=60) is not None:
+        bmb_enc = next((e for e in call_auth('GET', f'/api/games/{bmb_id}/encounters', bmb_tok)
+                        if e.get('opponentPlayerId') == vic_pid), None)
+        check('у беззащитной колонии флот с бомбами получает выбор «бомбить» — пункт 25',
+              isinstance(bmb_enc, dict) and bmb_enc.get('bombard') is True, str(bmb_enc)[:200])
+        if bmb_enc:
+            bmb_pop_before = next(p for s in call_auth('GET', f'/api/games/{bmb_id}/map', vic_tok)['systems']
+                                  for p in s['planets'] if p['id'] == vic_planet['id'])['population']
+            bmb_outcome = call('POST', f"/api/games/{bmb_id}/encounters/{bmb_enc['id']}",
+                               {'accessToken': bmb_tok, 'decision': 'BOMBARD', 'auto': True})
+    bmb_after = next(p for s in call_auth('GET', f'/api/games/{bmb_id}/map', vic_tok)['systems']
+                     for p in s['planets'] if p['id'] == vic_planet['id'])
+    check('бомбёжка убивает жителей колонии — пункт 25',
+          isinstance(bmb_outcome, dict) and bmb_pop_before is not None
+          and (bmb_after.get('population') or 0) < bmb_pop_before,
+          f"было {bmb_pop_before}, стало {bmb_after.get('population')}; {str(bmb_outcome)[:160]}")
+call('DELETE', f'/api/games/{bmb_id}/admin')
+
 # --- 13.5. Расселение, застава и десант (п. 4.1, п. 8, п. 12) ---
 #
 # Здесь проверяются правила, а не постройка: колониальный корабль стоит 500 единиц
@@ -5916,6 +8520,15 @@ check('телеметрия отдаёт все империи партии — 
       len(telemetry['empires']) == 3 and telemetry['seed'] == 909,
       f"империй {len(telemetry['empires'])}, зерно {telemetry['seed']}")
 first = telemetry['empires'][0]
+openings = [[row for row in empire.get('researched') or [] if row.get('turn') is not None]
+            for empire in telemetry['empires']]
+# Сколько изучено, зависит от длины партии (за дюжину ходов ИИ порой не изучает ничего): проверяется
+# сам список и его порядок, а не число.
+check('телеметрия несёт изученное с ходом — дебют империи, пункт 92',
+      all(isinstance(empire.get('researched'), list) for empire in telemetry['empires'])
+      and all(row.get('category') and row.get('option') for rows in openings for row in rows)
+      and all([row['turn'] for row in rows] == sorted(row['turn'] for row in rows) for rows in openings),
+      f"изучено {[len(rows) for rows in openings]}")
 check('у империи в телеметрии есть раса, строй и характер — этап 0',
       first['traits'] is not None and first['government'] and first['personality'],
       f"{first['government']}, {first['personality']}, сторон {len(first['traits'])}")
@@ -6066,6 +8679,16 @@ check('потерянные колонии считаются, и их ровн�
 check('высадка считается обеими дорогами — п. 12',
       war_used['INVASION'] >= war_used['CAPTURE'],
       f'высадок {war_used["INVASION"]}, из них взяли колонию {war_used["CAPTURE"]}')
+
+# Столица одна на империю — п. 10.1: какой бы дорогой ни менялись хозяева колоний за
+# сто двадцать ходов войны, ни у кого не должно оказаться двух престолов, а захваченная
+# столица захватчику не достаётся.
+war_capitols = collections.Counter(
+    pl['ownerPlayerId'] for st in war_map['systems'] for pl in st['planets']
+    if pl.get('colony') and any(b['code'] == 'capitol' for b in pl['colony'].get('buildings', [])))
+check('у каждой империи не больше одной столицы — п. 10.1',
+      war_capitols and max(war_capitols.values()) == 1,
+      f'столиц по империям {sorted(war_capitols.values())}')
 
 call('DELETE', f'/api/games/{wargid}?accessToken={wartok}')
 
@@ -6246,6 +8869,25 @@ if lstate.get('offers'):
         check('дважды одного лидера не нанять — п. 6', again.get('ERROR') == 409,
               str(again.get('body', {}).get('message')))
 
+        # ЛИДЕРЫ В СОХРАНЕНИИ — трек техдолга, пункт 28: прежде поднятое сохранение теряло всех
+        # лидеров. Нанятый лидер переживает сохранение и загрузку с тем же кодом и опытом.
+        l_save = call('POST', f'/api/games/{lgid}/save', {'accessToken': ltok}) or {}
+        l_loaded = call('POST', f"/api/saves/{l_save.get('id')}/load") or {}
+        if (l_loaded.get('game') or {}).get('id'):
+            l_gid2 = l_loaded['game']['id']
+            l_tok2 = l_loaded['credentials']['accessToken']
+            l_state2 = call_auth('GET', f'/api/games/{l_gid2}/leaders', l_tok2) or {}
+            kept = [x for x in l_state2.get('colony', []) + l_state2.get('ship', []) if x.get('code') == hero.get('code')]
+            check('нанятый лидер переживает сохранение и загрузку — трек техдолга, пункт 28',
+                  bool(kept) and kept[0].get('state') == 'HIRED'
+                  and kept[0].get('experience') == (serving[0].get('experience') if serving else kept[0].get('experience')),
+                  str([(x.get('name'), x.get('state'), x.get('experience')) for x in kept]))
+            call('DELETE', f'/api/games/{l_gid2}/admin')
+        else:
+            check('нанятый лидер переживает сохранение и загрузку — трек техдолга, пункт 28', False, str(l_loaded)[:200])
+        if l_save.get('id'):
+            call('DELETE', f"/api/saves/{l_save['id']}")
+
         # Назначение: колониального — в систему, корабельного — во флот. В родную
         # систему лидер попадает сразу, в прочие добирается пять ходов — п. 6.
         home_id = [st['id'] for st in call_auth('GET', f'/api/games/{lgid}/map', ltok)['systems']
@@ -6258,6 +8900,11 @@ if lstate.get('offers'):
             check('колониальный лидер занимает свою систему — п. 6',
                   spot.get('systemId') == home_id and spot.get('arrivesTurn') is not None,
                   str((spot.get('systemName'), spot.get('arrivesTurn'))))
+            # ПОСЛУЖНОЙ СПИСОК — пункт 140: срок губернатора с хода назначения, рост с нуля.
+            check('губернатор помнит начало срока и рост системы — пункт 140',
+                  spot.get('termStartTurn') is not None and spot.get('systemGrowth') == 0
+                  and spot.get('battlesWon') == 0 and spot.get('battlesLost') == 0,
+                  str({k: spot.get(k) for k in ('termStartTurn', 'systemGrowth', 'battlesWon', 'battlesLost')}))
             back = call_auth('POST', f"/api/games/{lgid}/leaders/{hero['id']}/assign",
                              ltok, {'targetId': None})
             spot = ([x for x in back.get('colony', []) if x['id'] == hero['id']] or [{}])[0]
@@ -6323,12 +8970,24 @@ if 'game' in mon_game:
     def far(one, other):
         return ((one['x'] - other['x']) ** 2 + (one['y'] - other['y']) ** 2) ** 0.5
 
-    guarded.sort(key=lambda st: far(mhome, st))
-    lair = guarded[0] if guarded else None
+    # Логово берётся ДОСЯГАЕМОЕ: ближайшее сторожевое бывает дальше стартовой дальности (с
+    # цветом звезды, пункт 132, галактика зерна стала другой — угорь встал в 6,1 пк при
+    # дальности 4), и флот туда не летел вовсе. Досягаемого нет — тянемся к ближайшему топливом
+    # и заставами, как игрок (`reach_towards`): дальний список с баками сервер считает по уже
+    # построенным флотам, а флота у охотника пока нет.
+    def reachable_lairs():
+        near = set(reachable_ids(call_auth('GET', f'/api/games/{mgid}/ships', mtok)))
+        return [st for st in guarded if st['id'] in near and not st.get('special')]
+
+    wild = sorted((st for st in guarded if not st.get('special')), key=lambda st: far(mhome, st))
+    if wild and not reachable_lairs():
+        reach_towards(mgid, mtok, mcolony['id'], wild[0]['id'])
+    lairs = sorted(reachable_lairs(), key=lambda st: far(mhome, st))
+    lair = lairs[0] if lairs else None
 
     # Четыре фрегата: одного чудищу мало даже на залп, а нам нужен бой, а не казнь.
     frigate = [a for a in mcolony['colony']['available']
-               if a['code'].startswith('SHIP:') and a['name'].endswith('Frigate')]
+               if a['code'].startswith('SHIP:') and a['name'].endswith(('Frigate', 'Фрегат'))]
     # Блок ниже стоит под условием, и молчащее условие — это пропуск, а не отказ: так он и
     # пропал однажды целиком. Поэтому то, без чего он не идёт, проверяется явно.
     check('для похода на чудище есть и логово, и фрегат в стройке — п. 8, п. 11.1',
@@ -6389,7 +9048,22 @@ if 'game' in mon_game:
                               for one in fight['ships'] for gun in one['weapons']),
                       str(fight['ships'][0])[:200])
 
-                mine_ships = [one for one in fight['ships'] if one['yours']]
+                # Гибели боя копятся с самоподрыва: у слабого сторожа потерь бывает только он
+                # и задетые взрывом соседи, а причина обязана быть у каждой (пункт 204).
+                monster_deaths = []
+                # Чудище быстрее фрегата и ходит первым (13.10.2026): бой, начавшийся с его хода,
+                # доигрывает за него запрос «ходы соперников» — так же поступает экран боя.
+                if not fight.get('yourTurn'):
+                    opening = call('POST', f"/api/games/{mgid}/battles/{fight['id']}/opponents",
+                                   {'accessToken': mtok})
+                    check('бой с чудищем начинается его ходом, и сервер ходит за него — п. 8',
+                          isinstance(opening, dict) and bool(opening.get('events'))
+                          and (opening.get('yourTurn') or opening.get('state') != 'IN_PROGRESS'),
+                          str(opening)[:160])
+                    monster_deaths += [e for e in (opening.get('events') or [])
+                                       if e.get('type') == 'DESTROYED']
+                    fight = call_auth('GET', f"/api/games/{mgid}/battles/{fight['id']}", mtok)
+                mine_ships = [one for one in fight['ships'] if one['yours'] and not one['destroyed']]
                 if len(mine_ships) >= 2:
                     bomb = mine_ships[0]
                     # Сосед по строю стоит вплотную: взрыв обязан его задеть.
@@ -6400,6 +9074,7 @@ if 'game' in mon_game:
                     boom = call('POST', f"/api/games/{mgid}/battles/{fight['id']}/action",
                                 {'accessToken': mtok, 'shipId': bomb['id'],
                                  'action': 'SELF_DESTRUCT'})
+                    monster_deaths += [e for e in (boom.get('events') or []) if e.get('type') == 'DESTROYED']
                     after_blast = call_auth('GET', f"/api/games/{mgid}/battles/{fight['id']}", mtok)
                     blown = [one for one in after_blast.get('ships', [])
                              if one['id'] == bomb['id']]
@@ -6431,7 +9106,13 @@ if 'game' in mon_game:
                     if not isinstance(state, dict) or state.get('state') != 'IN_PROGRESS':
                         break
                     if not state.get('yourTurn'):
-                        break
+                        nudge = call('POST', f"/api/games/{mgid}/battles/{fight['id']}/opponents",
+                                     {'accessToken': mtok})
+                        monster_deaths += [e for e in (nudge.get('events') or [])
+                                           if e.get('type') == 'DESTROYED']
+                        if not nudge.get('yourTurn'):
+                            break
+                        continue
                     ship = [one for one in state['ships'] if one['id'] == state.get('currentShipId')]
                     foes = [one for one in state['ships']
                             if one['side'] != state['yourSide'] and not one['destroyed']]
@@ -6449,6 +9130,7 @@ if 'game' in mon_game:
                                 * min(ship.get('moveLeft', 1), abs(foe['y'] - ship['y']))}
                     answer = call('POST', f"/api/games/{mgid}/battles/{fight['id']}/action",
                                   dict(step, accessToken=mtok))
+                    monster_deaths += [e for e in (answer.get('events') or []) if e.get('type') == 'DESTROYED']
                     if answer.get('ERROR'):
                         # Ход не прошёл (клетка занята, шагов не осталось) — пропускаем
                         # ход этим кораблём, как поступил бы игрок. Без этого бой
@@ -6461,6 +9143,14 @@ if 'game' in mon_game:
                 check('бой с чудищем доигрывается до конца — п. 8',
                       done.get('state') == 'FINISHED' and bool(done.get('outcome')),
                       str(done.get('state')) + ' ' + str(done.get('outcome'))[:100])
+                # ПОТЕРЯ НАЗЫВАЕТ ПРИЧИНУ — field-backlog, пункт 204: у каждой гибели в событиях
+                # боя есть причина, а у удара и задевшего взрыва — тот, кто их нанёс.
+                check('у каждой потери в бою с чудищем есть причина — пункт 204',
+                      len(monster_deaths) > 0
+                      and all(e.get('cause') in ('SHOT', 'BLAST', 'BLAST_HIT', 'SELF_DESTRUCT', 'STRANDED')
+                              and (e.get('cause') not in ('SHOT', 'BLAST_HIT') or e.get('targetShipId'))
+                              for e in monster_deaths),
+                      str([(e.get('cause'), (e.get('text') or '')[:60]) for e in monster_deaths])[:300])
                 after = call('GET', f'/api/games/{mgid}/map?accessToken={mtok}&revealAll=true')
                 lair_now = [st for st in after['systems'] if st['id'] == lair['id']][0]
                 beaten = [one for one in done.get('ships', []) if one.get('monster')]
@@ -6480,11 +9170,12 @@ if 'game' in mon_game:
 # партия: голоса записаны, счёт сходится, а избрание согласовано с двумя третями.
 # Зерно меняется вместе с поведением ИИ: партия трёх ИИ без событий идёт так, как решают они,
 # и правка ИИ уводит её в другую историю. 909096 перестало избирать после пункта 8
-# backlog-promo (02.10.2026, ИИ видит чужие флоты только своими глазами); 909098 избирает
-# на 150-м ходу.
+# backlog-promo (02.10.2026, ИИ видит чужие флоты только своими глазами); 909098 — после гонки
+# вооружений ИИ (14.10.2026: воинственные правители берут оружие и в мирное время); 909099 избирает
+# на 175-м ходу (из шести соседних зёрен избирают четыре, на 175–225-м).
 council_game = call('POST', '/api/games', {'name': 'Совет', 'playerName': 'Наблюдатель',
                                            'galaxySize': 'SMALL', 'observer': True,
-                                           'seed': 909098, 'totalPlayers': 3,
+                                           'seed': 909099, 'totalPlayers': 3,
                                            'galacticEvents': False})
 if 'game' in council_game:
     council_id = council_game['game']['id']
@@ -6679,6 +9370,13 @@ if 'game' in ballot_game:
                   and all(v.get('pending') is False for v in silent.get('voters', [])),
                   str({'созыв': second.get('turn'), 'открыт': second.get('open'),
                        'после': silent.get('open')}))
+            # Что случилось с голосом, сцена говорит словами — для этого свой голос помечен
+            # поданным по доверию, а выбранный сам — нет (07.10.2026).
+            silent_mine = [v for v in silent.get('voters', []) if v.get('yours')]
+            check('голос промолчавшего помечен поданным по доверию, выбранный сам — нет — п. 3',
+                  silent_mine and silent_mine[0].get('silent') is True
+                  and closed_mine and not closed_mine[0].get('silent'),
+                  str(silent_mine)[:200])
     call('DELETE', f'/api/games/{ballot_id}?accessToken={ballot_tok}')
 
 # --- 14. Удаление партии ---
@@ -6743,6 +9441,27 @@ check('наплыв запросов с одного адреса упирает
       burst_codes.get(429, 0) > 0, str(burst_codes))
 check('предел частоты называет, сколько ждать',
       str(burst_codes.get('retry_after', '')).isdigit(), str(burst_codes.get('retry_after')))
+
+# ===================== СЛУЖЕБНЫЙ ЯЗЫК НЕ ПОПАДАЕТ НА ЭКРАН — field-backlog, пункт 198 =====================
+# Словари клиента, тексты сервера и справочников — целиком; а тексты, которые игра собрала по
+# дороге всего прогона (итоги хода на двух языках, отказы по правилам), — живьём. Правило и
+# исключения живут в tools/language_check.py: одно на прогон и на ручной запуск.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import language_check
+    dictionary_findings = language_check.check_dictionaries()
+    check('в словарях, текстах сервера и справочниках нет служебного языка — п. 198',
+          not dictionary_findings,
+          '; '.join(f'{where} {lang} {key}: {hits}' for where, key, lang, _, hits in dictionary_findings[:8]))
+    live_findings = language_check.check_live(shown_texts)
+    langs = collections.Counter(lang for lang, _, _ in shown_texts)
+    check('прогон собрал тексты игры на обоих языках для проверки языка — п. 198',
+          langs.get('ru', 0) >= 50 and langs.get('en', 0) >= 20, str(dict(langs)))
+    check('в собранных игрой текстах нет служебного языка — п. 198',
+          not live_findings,
+          '; '.join(f'{source} {lang}: {hits} | {text[:80]}' for source, lang, text, hits in live_findings[:6]))
+except (OSError, subprocess.CalledProcessError, ValueError) as failure:
+    check('проверка служебного языка запустилась (нужен node 22+) — п. 198', False, repr(failure))
 
 # СВОИ УЧЁТНЫЕ ЗАПИСИ ПРОГОН СНОСИТ ЗДЕСЬ — последним делом, когда все проверки уже
 # отработали: до этой строки они ещё нужны (вход, повторная отправка письма, подбор

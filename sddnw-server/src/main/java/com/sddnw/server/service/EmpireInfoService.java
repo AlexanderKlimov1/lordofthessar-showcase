@@ -57,6 +57,7 @@ public class EmpireInfoService {
     private final PopulationCalculator populationCalculator;
     private final FleetService fleetService;
     private final EmpireMightRules empireMightRules;
+    private final Messages messages;
 
     public EmpireInfoService(GameAccess gameAccess,
                              EmpireHistoryRepository historyRepository,
@@ -72,7 +73,9 @@ public class EmpireInfoService {
                              ColonyService colonyService,
                              PopulationCalculator populationCalculator,
                              FleetService fleetService,
-                             EmpireMightRules empireMightRules) {
+                             EmpireMightRules empireMightRules,
+                             Messages messages) {
+        this.messages = messages;
         this.gameAccess = gameAccess;
         this.historyRepository = historyRepository;
         this.playerRepository = playerRepository;
@@ -99,7 +102,57 @@ public class EmpireInfoService {
      */
     @Transactional
     public void record(TurnContext context) {
-        historyRepository.saveAll(measured(context));
+        List<EmpireHistoryEntity> now = measured(context);
+        historyRepository.saveAll(now);
+        turningPoints(context, now);
+    }
+
+    /**
+     * Переломы партии — field-backlog, пункт 142: игрок стал сильнейшим среди знакомых или
+     * потерял первое место, и новое положение удержалось {@link TurningPointRules#HOLD_TURNS}
+     * хода. Только людям: у соседа ИИ читателя нет, и партия без людей сюда не ходит вовсе —
+     * одна выборка летописи и одна отношений на ход, и только когда люди есть.
+     */
+    private void turningPoints(TurnContext context, List<EmpireHistoryEntity> now) {
+        List<PlayerEntity> humans = context.players().stream()
+                .filter(player -> player.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.HUMAN)
+                .toList();
+        if (humans.isEmpty()) {
+            return;
+        }
+        int turn = context.turn();
+        int hold = TurningPointRules.HOLD_TURNS;
+        java.util.Map<Integer, java.util.Map<UUID, Integer>> byTurn = new java.util.TreeMap<>();
+        for (EmpireHistoryEntity row : historyRepository.findAllByGameIdAndTurnBetween(
+                context.game().getId(), turn - hold, turn - 1)) {
+            byTurn.computeIfAbsent(row.getTurn(), key -> new HashMap<>()).put(row.getPlayerId(), mightOf(row));
+        }
+        java.util.Map<UUID, Integer> current = new HashMap<>();
+        now.forEach(row -> current.put(row.getPlayerId(), mightOf(row)));
+        byTurn.put(turn, current);
+        if (byTurn.size() < hold + 1) {
+            return;
+        }
+        List<java.util.Map<UUID, Integer>> series = new java.util.ArrayList<>(byTurn.values());
+        java.util.Map<UUID, java.util.Set<UUID>> known = new HashMap<>();
+        relationRepository.findAllByPlayerIdIn(humans.stream().map(PlayerEntity::getId).toList()).stream()
+                .filter(relation -> Boolean.TRUE.equals(relation.getInContact()))
+                .forEach(relation -> known.computeIfAbsent(relation.getPlayerId(), key -> new java.util.HashSet<>())
+                        .add(relation.getOtherPlayerId()));
+        for (PlayerEntity human : humans) {
+            TurningPointRules.Turn point = TurningPointRules.turn(series, human.getId(),
+                    known.getOrDefault(human.getId(), java.util.Set.of()));
+            if (point != null) {
+                context.report().add(human.getId(), "TURNING", new MessageKey(
+                        point == TurningPointRules.Turn.BECAME_FIRST ? "turn.turning.first" : "turn.turning.lostFirst",
+                        turn - hold + 1));
+            }
+        }
+    }
+
+    private Integer mightOf(EmpireHistoryEntity row) {
+        return empireMightRules.might(row.getFleetPower(), row.getPopulationK(), row.getProduction(),
+                row.getResearch(), row.getTechnologies());
     }
 
     /**
@@ -270,7 +323,7 @@ public class EmpireInfoService {
                 .filter(player -> shown.contains(player.getId()))
                 .map(player -> new EmpireProfileDto(
                         player.getId(),
-                        player.getName(),
+                        messages.empire(player.getName()),
                         raceService.raceName(player, raceNames::get),
                         player.getColor(),
                         player.getId().equals(self.getId()),

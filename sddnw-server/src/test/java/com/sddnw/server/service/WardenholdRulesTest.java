@@ -49,10 +49,11 @@ class WardenholdRulesTest {
     }
 
     @Test
-    @DisplayName("Двадцатый ход удержания — победа, девятнадцатый — ещё нет")
-    void twentyTurnsWin() {
-        assertThat(WardenholdRules.turnsLeft(10, 28)).isEqualTo(1);
-        assertThat(WardenholdRules.turnsLeft(10, 29)).isZero();
+    @DisplayName("Последний ход удержания — победа, предпоследний — ещё нет (срок — из правила, 25)")
+    void holdTurnsWin() {
+        int last = 10 + WardenholdRules.HOLD_TURNS - 1;
+        assertThat(WardenholdRules.turnsLeft(10, last - 1)).isEqualTo(1);
+        assertThat(WardenholdRules.turnsLeft(10, last)).isZero();
         assertThat(WardenholdRules.heldTurns(10, 10)).isEqualTo(1);
     }
 
@@ -61,7 +62,7 @@ class WardenholdRulesTest {
     void guestGameIsRestricted() {
         CreateGameRequest asked = new CreateGameRequest("Партия", GalaxySize.HUGE, "Игрок", null,
                 null, null, null, 42L, Boolean.FALSE, Boolean.TRUE, 8, Boolean.FALSE,
-                Boolean.FALSE, null, Boolean.FALSE, Boolean.FALSE, null);
+                Boolean.FALSE, null, Boolean.FALSE, Boolean.FALSE, null, null, null, null, null, null, null);
 
         CreateGameRequest given = GuestGameRules.restrict(asked);
 

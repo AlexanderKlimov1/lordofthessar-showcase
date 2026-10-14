@@ -16,14 +16,15 @@
 
 import { t, type Key } from '../../i18n';
 
-/** Что показывает значок: еда, производство, наука, деньги. */
-export type ResourceKind = 'grain' | 'hammer' | 'microscope' | 'coins';
+/** Что показывает значок: еда, производство, наука, деньги и отходы производства. */
+export type ResourceKind = 'grain' | 'hammer' | 'microscope' | 'coins' | 'barrel';
 
 const LABELS: Record<ResourceKind, Key> = {
   grain: 'colony.resource.grain',
   hammer: 'colony.resource.hammer',
   microscope: 'colony.resource.microscope',
   coins: 'colony.resource.coins',
+  barrel: 'colony.resource.barrel',
 };
 
 const SHAPES: Record<ResourceKind, JSX.Element> = {
@@ -63,7 +64,52 @@ const SHAPES: Record<ResourceKind, JSX.Element> = {
       <path d="M6.2 8.1v3.4" />
     </>
   ),
+  // Бочка отходов — загрязнение, как жёлтая бочка в строке рабочих оригинала
+  // (`docs/moo2/colony.png`): обручи и знак радиации на боку.
+  barrel: (
+    <>
+      <path d="M4.2 3c0-.8 7.6-.8 7.6 0v10c0 .8-7.6.8-7.6 0Z" />
+      <path d="M4.2 5.2c1.9.6 5.7.6 7.6 0M4.2 10.8c1.9.6 5.7.6 7.6 0" />
+      <circle cx="8" cy="8" r=".6" />
+      <path d="M8 6.4 7.2 5.2h1.6ZM6.6 8.9l-1.3.6.8 1.2ZM9.4 8.9l1.3.6-.8 1.2Z" />
+    </>
+  ),
 };
+
+/**
+ * Выработка значками, по одному на единицу, — как строки жителей оригинала: кирки рабочих и
+ * бочки отходов за ними (`docs/moo2/colony.png`). Каждые десять единиц сворачиваются в один
+ * значок стопкой: строка колонии с сорока единицами иначе уходила бы за край экрана, а
+ * оригинал делает так же. Число целиком — в подсказке строки.
+ */
+export function UnitIcons({
+  kind,
+  count,
+  className,
+}: {
+  kind: ResourceKind;
+  count: number;
+  className: string;
+}) {
+  if (count <= 0) {
+    return null;
+  }
+  const tens = Math.floor(count / 10);
+  const ones = count % 10;
+  return (
+    <span className="flex items-center gap-px" aria-hidden>
+      {Array.from({ length: tens }).map((_, index) => (
+        <span key={`t${index}`} className="relative mr-1 inline-flex">
+          <ResourceIcon kind={kind} label="" className={className} />
+          <ResourceIcon kind={kind} label="" className={className + ' absolute left-[3px] top-[-3px] opacity-70'} />
+        </span>
+      ))}
+      {Array.from({ length: ones }).map((_, index) => (
+        <ResourceIcon key={`o${index}`} kind={kind} label="" className={className} />
+      ))}
+    </span>
+  );
+}
 
 /**
  * Значок ресурса. Подпись обязательна: значок стоит вместо слова, и без неё строка
@@ -150,6 +196,8 @@ export function HeldColonists({
           className={'whitespace-nowrap border bg-space-950/90 px-1.5 py-0.5 text-14 '
             + (refused ? 'border-danger text-danger' : 'border-space-700 text-ink')}
         >
+          {/* Отказ отличён от вести о рейсе не одним цветом (пункт 169): у курсора тот же вид строки. */}
+          {refused ? <span aria-hidden className="mr-1">✕</span> : null}
           {note}
         </span>
       ) : null}

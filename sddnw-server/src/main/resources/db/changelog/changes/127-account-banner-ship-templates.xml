@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Своё знамя (field-backlog, пункт 144): знамя, которое игрок выбирает раз за разом, —
+        по умолчанию в новой партии, если свободно.
+    -->
+    <changeSet id="127-account-banner" author="sddnw">
+        <addColumn tableName="account">
+            <column name="banner" type="varchar(16)"/>
+        </addColumn>
+    </changeSet>
+
+    <!--
+        Библиотека проектов кораблей (field-backlog, пункт 96): собранный игроком проект живёт в
+        учётной записи СОСТАВОМ (корпус, компоненты, модификации — коды справочника) и берётся в
+        новую партию. Внешнего ключа на запись нет — как у шаблонов стройки (миграция 079).
+    -->
+    <changeSet id="127-ship-template" author="sddnw">
+        <createTable tableName="ship_template">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="hull_code" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="components" type="varchar(2000)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="ship_template" indexName="idx_ship_template_account">
+            <column name="account_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

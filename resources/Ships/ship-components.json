@@ -5,7 +5,7 @@
   "notes": {
     "hull": "Space is the room for components, cost is in production points (PP), structure is the hull hit points, command is the command points the ship takes from the empire, hit_chance_percent is the MOO II chance for an enemy shot to hit a hull of this size.",
     "system_factor": "Armour, shields, engines, computers, ECM and specials cover the whole ship, so their space and cost are multiplied by this factor. Weapons are not: a laser takes the same room on any hull, which is why a big hull carries proportionally more guns, as in MOO II.",
-    "required_tech": "Code of the technology in tech.json that unlocks the hull or component. Absent means available from the start: Nuclear Drive, Titanium Armour and the Mass Driver, the three MOO II races start every game with, plus the four smaller hulls.",
+    "required_tech": "Code of the technology in tech.json that unlocks the hull or component. Absent means available from the start: Nuclear Drive and the four smaller hulls. Titanium Armour (basic Chemistry, 50 RP) and the Mass Driver (Advanced Magnetism) are researched like everything else.",
     "effects": "What the component gives the ship: a type and an amount. Effects of all components add up.",
     "effect_types": {
       "WEAPON_DAMAGE": "Damage of one shot",
@@ -93,7 +93,7 @@
       "name": { "en": "Titan", "ru": "Титан" },
       "description": {
         "en": "A huge hull, requires Titan Construction.",
-        "ru": "Огромный корпус, требует технологии Titan Construction."
+        "ru": "Огромный корпус, требует технологии «Строительство титанов»."
       },
       "space": 500,
       "cost": 700,
@@ -434,9 +434,10 @@
       "code": "titanium-armor",
       "name": { "en": "Titanium Armor", "ru": "Титановая обшивка" },
       "description": {
-        "en": "Titanium plating, known from the first turn.",
-        "ru": "Титановая обшивка, известна с первого хода."
+        "en": "Titanium plating, the first hull armour. Opened by the basic Chemistry level.",
+        "ru": "Титановая обшивка, первая броня корпуса. Открывается базовым уровнем химии."
       },
+      "required_tech": "titanium-armor",
       "slot": "ARMOR",
       "space": 3,
       "cost": 3,
@@ -518,7 +519,7 @@
     {
       "code": "class-i-shield",
       "name": { "en": "Class I Shield", "ru": "Щит I класса" },
-      "description": { "en": "A class I shield.", "ru": "Щит первого класса." },
+      "description": { "en": "Class I shield: takes 1 damage off every shot without weakening, and absorbs 5 per hull size class before falling; recovers 30% of that every round.", "ru": "Щит первого класса: срезает 1 урона с каждого выстрела, не слабея, и поглощает 5 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 % этого запаса." },
       "slot": "SHIELD",
       "space": 5,
       "cost": 10,
@@ -526,7 +527,7 @@
       "effects": [
         {
           "type": "SHIELD",
-          "amount": 2
+          "amount": 1
         }
       ],
       "sort_order": 20
@@ -534,7 +535,7 @@
     {
       "code": "class-iii-shield",
       "name": { "en": "Class III Shield", "ru": "Щит III класса" },
-      "description": { "en": "A class III shield.", "ru": "Щит третьего класса." },
+      "description": { "en": "Class III shield: takes 3 damage off every shot without weakening, and absorbs 15 per hull size class before falling; recovers 30% of that every round.", "ru": "Щит третьего класса: срезает 3 урона с каждого выстрела, не слабея, и поглощает 15 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 % этого запаса." },
       "slot": "SHIELD",
       "space": 5,
       "cost": 20,
@@ -542,7 +543,7 @@
       "effects": [
         {
           "type": "SHIELD",
-          "amount": 6
+          "amount": 3
         }
       ],
       "sort_order": 21
@@ -550,7 +551,7 @@
     {
       "code": "class-v-shield",
       "name": { "en": "Class V Shield", "ru": "Щит V класса" },
-      "description": { "en": "A class V shield.", "ru": "Щит пятого класса." },
+      "description": { "en": "Class V shield: takes 5 damage off every shot without weakening, and absorbs 25 per hull size class before falling; recovers 30% of that every round.", "ru": "Щит пятого класса: срезает 5 урона с каждого выстрела, не слабея, и поглощает 25 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 % этого запаса." },
       "slot": "SHIELD",
       "space": 5,
       "cost": 32,
@@ -558,7 +559,7 @@
       "effects": [
         {
           "type": "SHIELD",
-          "amount": 10
+          "amount": 5
         }
       ],
       "sort_order": 22
@@ -566,7 +567,7 @@
     {
       "code": "class-vii-shield",
       "name": { "en": "Class VII Shield", "ru": "Щит VII класса" },
-      "description": { "en": "A class VII shield.", "ru": "Щит седьмого класса." },
+      "description": { "en": "Class VII shield: takes 7 damage off every shot without weakening, and absorbs 35 per hull size class before falling; recovers 30% of that every round.", "ru": "Щит седьмого класса: срезает 7 урона с каждого выстрела, не слабея, и поглощает 35 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 % этого запаса." },
       "slot": "SHIELD",
       "space": 5,
       "cost": 48,
@@ -574,7 +575,7 @@
       "effects": [
         {
           "type": "SHIELD",
-          "amount": 14
+          "amount": 7
         }
       ],
       "sort_order": 23
@@ -582,10 +583,7 @@
     {
       "code": "class-x-shield",
       "name": { "en": "Class X Shield", "ru": "Щит X класса" },
-      "description": {
-        "en": "A class X shield, the best in the game.",
-        "ru": "Щит десятого класса, лучший в игре."
-      },
+      "description": { "en": "Class X shield: takes 10 damage off every shot without weakening, and absorbs 50 per hull size class before falling; recovers 30% of that every round.", "ru": "Щит десятого класса: срезает 10 урона с каждого выстрела, не слабея, и поглощает 50 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 % этого запаса." },
       "slot": "SHIELD",
       "space": 5,
       "cost": 70,
@@ -593,7 +591,7 @@
       "effects": [
         {
           "type": "SHIELD",
-          "amount": 20
+          "amount": 10
         }
       ],
       "sort_order": 24
@@ -737,9 +735,10 @@
       "code": "mass-driver",
       "name": { "en": "Mass Driver", "ru": "Масс-драйвер" },
       "description": {
-        "en": "A kinetic gun: the empire has it from the first turn, as in MOO II.",
-        "ru": "Кинетическая пушка: есть у империи с первого хода, как в MOO II."
+        "en": "A kinetic gun firing metal slugs. Opened by Advanced Magnetism.",
+        "ru": "Кинетическая пушка, бьёт металлическими болванками. Открывается продвинутым магнетизмом."
       },
+      "required_tech": "mass-driver",
       "slot": "WEAPON",
       "space": 10,
       "cost": 4,
@@ -822,7 +821,10 @@
     {
       "code": "neutron-blaster",
       "name": { "en": "Neutron Blaster", "ru": "Нейтронный бластер" },
-      "description": { "en": "A neutron blaster.", "ru": "Нейтронный бластер." },
+      "description": {
+        "en": "A neutron blaster: besides damage, it kills one marine aboard for every 5 points that get through the shield.",
+        "ru": "Нейтронный бластер: кроме урона убивает одного пехотинца на борту за каждые 5 очков, прошедших сквозь щит."
+      },
       "slot": "WEAPON",
       "space": 10,
       "cost": 20,
@@ -836,6 +838,10 @@
         {
           "type": "WEAPON_SHOTS",
           "amount": 1
+        },
+        {
+          "type": "KILLS_MARINES",
+          "amount": 5
         }
       ],
       "sort_order": 54
@@ -1269,6 +1275,554 @@
       "sort_order": 94
     },
     {
+      "code": "high-energy-focus",
+      "name": { "en": "High Energy Focus", "ru": "Фокусировщик энергии" },
+      "description": {
+        "en": "Beam weapons and mass drivers deal 50% more damage. Missiles are unaffected.",
+        "ru": "Лучевое оружие и масс-драйверы бьют на 50 % сильнее. На ракеты не действует."
+      },
+      "slot": "SPECIAL",
+      "space": 4,
+      "cost": 20,
+      "required_tech": "high-energy-focus",
+      "effects": [
+        {
+          "type": "BEAM_DAMAGE_PERCENT",
+          "amount": 50
+        }
+      ],
+      "sort_order": 113
+    },
+    {
+      "code": "rangemaster-targeting-unit",
+      "name": { "en": "Rangemaster Targeting Unit", "ru": "Прицел дальнего боя" },
+      "description": {
+        "en": "Beams lose strength with distance as if the target were three times closer.",
+        "ru": "Лучи слабеют с расстоянием так, будто цель втрое ближе."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 15,
+      "required_tech": "rangemaster-targeting-unit",
+      "effects": [
+        {
+          "type": "LONG_RANGE_TARGETING",
+          "amount": 3
+        }
+      ],
+      "sort_order": 114
+    },
+    {
+      "code": "achilles-targeting-unit",
+      "name": { "en": "Achilles Targeting Unit", "ru": "Прицел «Ахилл»" },
+      "description": {
+        "en": "Beams that get through the shield ignore armor and hit the hull; three times the chance to wreck a system. Heavy armor stops it.",
+        "ru": "Лучи, пробившие щит, идут мимо брони прямо в корпус; втрое чаще выбивают системы. Тяжёлая броня это останавливает."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 30,
+      "required_tech": "achilles-targeting-unit",
+      "effects": [
+        {
+          "type": "ARMOUR_BYPASS",
+          "amount": 3
+        }
+      ],
+      "sort_order": 115
+    },
+    {
+      "code": "energy-absorber",
+      "name": { "en": "Energy Absorber", "ru": "Энергопоглотитель" },
+      "description": {
+        "en": "The ship takes 25% less damage to its armor and hull.",
+        "ru": "Корабль получает на 25 % меньше урона по броне и корпусу."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 18,
+      "required_tech": "energy-absorber",
+      "effects": [
+        {
+          "type": "DAMAGE_ABSORB_PERCENT",
+          "amount": 25
+        }
+      ],
+      "sort_order": 116
+    },
+    {
+      "code": "security-stations",
+      "name": { "en": "Security Stations", "ru": "Станции безопасности" },
+      "description": {
+        "en": "Marines on board are 20% stronger against boarding parties.",
+        "ru": "Пехота на борту на 20 % сильнее против абордажа."
+      },
+      "slot": "SPECIAL",
+      "space": 2,
+      "cost": 6,
+      "required_tech": "security-stations",
+      "effects": [
+        {
+          "type": "MARINE_DEFENSE_PERCENT",
+          "amount": 20
+        }
+      ],
+      "sort_order": 117
+    },
+    {
+      "code": "automated-repair-unit",
+      "name": { "en": "Automated Repair Unit", "ru": "Ремонтный модуль" },
+      "description": {
+        "en": "Restores 20% of armor and hull every combat round.",
+        "ru": "Каждый круг боя восстанавливает 20 % брони и корпуса."
+      },
+      "slot": "SPECIAL",
+      "space": 4,
+      "cost": 20,
+      "required_tech": "automated-repair-unit",
+      "effects": [
+        {
+          "type": "REPAIR_PERCENT",
+          "amount": 20
+        }
+      ],
+      "sort_order": 118
+    },
+    {
+      "code": "warp-dissipater",
+      "name": { "en": "Warp Dissipater", "ru": "Варп-рассеиватель" },
+      "description": {
+        "en": "While this ship is intact, enemy ships cannot retreat from the battle.",
+        "ru": "Пока этот корабль цел, чужие корабли не могут уйти с поля боя."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 15,
+      "required_tech": "warp-dissipater",
+      "effects": [
+        {
+          "type": "RETREAT_BLOCK",
+          "amount": 1
+        }
+      ],
+      "sort_order": 119
+    },
+    {
+      "code": "scout-lab",
+      "name": { "en": "Scout Lab", "ru": "Разведлаборатория" },
+      "description": {
+        "en": "The ship brings research points every turn: 1 on a frigate, doubling with each larger hull. Ships fighting monsters alongside it aim 20 better.",
+        "ru": "Корабль приносит очки исследований каждый ход: 1 на фрегате и вдвое больше с каждым корпусом крупнее. Флот рядом с ним на 20 метче против чудищ."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 12,
+      "required_tech": "scout-lab",
+      "effects": [
+        {
+          "type": "SCOUT_LAB",
+          "amount": 1
+        }
+      ],
+      "sort_order": 120
+    },
+    {
+      "code": "hyper-x-capacitors",
+      "name": { "en": "Hyper-X Capacitors", "ru": "Гиперконденсаторы" },
+      "description": {
+        "en": "Beams and mass drivers fire twice in one turn, then stay silent for the next round.",
+        "ru": "Лучи и масс-драйверы стреляют дважды за ход, а следующий круг молчат."
+      },
+      "slot": "SPECIAL",
+      "space": 4,
+      "cost": 25,
+      "required_tech": "hyper-x-capacitors",
+      "effects": [
+        {
+          "type": "DOUBLE_BEAM_VOLLEY",
+          "amount": 1
+        }
+      ],
+      "sort_order": 121
+    },
+    {
+      "code": "fast-missile-racks",
+      "name": { "en": "Fast Missile Racks", "ru": "Скоростные ракетные стойки" },
+      "description": {
+        "en": "Missiles fire twice in one turn, then stay silent for the next round.",
+        "ru": "Ракеты уходят дважды за ход, а следующий круг стойки молчат."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 15,
+      "required_tech": "fast-missile-racks",
+      "effects": [
+        {
+          "type": "DOUBLE_MISSILE_VOLLEY",
+          "amount": 1
+        }
+      ],
+      "sort_order": 122
+    },
+    {
+      "code": "shield-capacitor",
+      "name": { "en": "Shield Capacitor", "ru": "Щитовой конденсатор" },
+      "description": {
+        "en": "The shield recovers three times faster between rounds: 90% of its strength instead of 30%.",
+        "ru": "Щит восстанавливается между кругами втрое быстрее: 90 % запаса вместо 30 %."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 15,
+      "required_tech": "shield-capacitor",
+      "effects": [
+        {
+          "type": "SHIELD_RECHARGE_MULTIPLIER",
+          "amount": 3
+        }
+      ],
+      "sort_order": 123
+    },
+    {
+      "code": "stealth-field",
+      "name": { "en": "Stealth Field", "ru": "Стелс-поле" },
+      "description": {
+        "en": "A fleet whose every ship carries it is invisible on the galaxy map to other empires, except the omniscient.",
+        "ru": "Флот, у которого оно стоит на каждом корабле, невидим на карте галактики для других империй, кроме всевидящих."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 15,
+      "required_tech": "stealth-field",
+      "effects": [
+        {
+          "type": "STEALTH",
+          "amount": 1
+        }
+      ],
+      "sort_order": 124
+    },
+    {
+      "code": "cloaking-device",
+      "name": { "en": "Cloaking Device", "ru": "Маскировочное устройство" },
+      "description": {
+        "en": "Invisible on the galaxy map like the stealth field; in battle +80 defence against beams and missiles miss twice as often while the ship does not fire. After firing it must hold fire for a round to cloak again.",
+        "ru": "Невидим на карте, как со стелс-полем; в бою +80 к защите от лучей и вдвое больше промахов ракет, пока корабль не стреляет. Выстрелив, чтобы снова скрыться, ему нужно круг не стрелять."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 30,
+      "required_tech": "cloaking-device",
+      "effects": [
+        {
+          "type": "STEALTH",
+          "amount": 1
+        },
+        {
+          "type": "CLOAK",
+          "amount": 80
+        }
+      ],
+      "sort_order": 125
+    },
+    {
+      "code": "phasing-cloak",
+      "name": { "en": "Phasing Cloak", "ru": "Фазовый плащ" },
+      "description": {
+        "en": "Like the cloaking device, and for the first 10 rounds of battle the ship cannot be attacked at all while it does not fire.",
+        "ru": "Как маскировочное устройство, а первые 10 кругов боя корабль вовсе нельзя атаковать, пока он не стреляет."
+      },
+      "slot": "SPECIAL",
+      "space": 10,
+      "cost": 60,
+      "required_tech": "phasing-cloak",
+      "effects": [
+        {
+          "type": "STEALTH",
+          "amount": 1
+        },
+        {
+          "type": "CLOAK",
+          "amount": 80
+        },
+        {
+          "type": "PHASING",
+          "amount": 10
+        }
+      ],
+      "sort_order": 126
+    },
+    {
+      "code": "subspace-teleporter",
+      "name": { "en": "Subspace Teleporter", "ru": "Подпространственный телепорт" },
+      "description": {
+        "en": "The ship jumps up to 20 squares through subspace each turn, and normal movement is still available afterwards.",
+        "ru": "Корабль прыгает через подпространство на 20 клеток в свой ход, и обычный ход у него после прыжка остаётся."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 30,
+      "required_tech": "subspace-teleporter",
+      "effects": [
+        {
+          "type": "TELEPORT",
+          "amount": 20
+        }
+      ],
+      "sort_order": 128
+    },
+    {
+      "code": "displacement-device",
+      "name": { "en": "Displacement Device", "ru": "Смещающее устройство" },
+      "description": {
+        "en": "Any shot aimed at this ship has a 30% chance to miss outright, whatever else is in play.",
+        "ru": "Любой выстрел по этому кораблю с шансом 30 % уходит мимо, что бы ещё ни было в бою."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 30,
+      "required_tech": "displacement-device",
+      "effects": [
+        {
+          "type": "DISPLACEMENT",
+          "amount": 30
+        }
+      ],
+      "sort_order": 129
+    },
+    {
+      "code": "inertial-nullifier",
+      "name": { "en": "Inertial Nullifier", "ru": "Инерционный нейтрализатор" },
+      "description": {
+        "en": "A warp field around the ship: +100 defence against beams and +50 missile evasion.",
+        "ru": "Варп-поле вокруг корабля: +100 к защите от лучей и +50 к уклонению от ракет."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 30,
+      "required_tech": "inertial-nullifier",
+      "effects": [
+        {
+          "type": "DEFENSE",
+          "amount": 100
+        },
+        {
+          "type": "MISSILE_EVASION",
+          "amount": 50
+        }
+      ],
+      "sort_order": 130
+    },
+    {
+      "code": "hard-shields",
+      "name": { "en": "Hard Shields", "ru": "Прочные щиты" },
+      "description": {
+        "en": "Every hit loses 3 more damage on top of the shield class; weapons that pierce shields no longer get through, and enemy transporters cannot board even when the shield is down.",
+        "ru": "Каждый удар теряет ещё 3 урона сверх класса щита; щитопробивающее оружие больше не пробивает, а чужой телепорт не высаживает абордаж даже при опущенном щите."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 25,
+      "required_tech": "hard-shields",
+      "effects": [
+        {
+          "type": "HARD_SHIELD",
+          "amount": 3
+        }
+      ],
+      "sort_order": 131
+    },
+    {
+      "code": "multi-phased-shields",
+      "name": { "en": "Multi-Phased Shields", "ru": "Многофазные щиты" },
+      "description": {
+        "en": "The shield strength of the ship is half again as large.",
+        "ru": "Запас щита корабля становится в полтора раза больше."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 25,
+      "required_tech": "multi-phased-shields",
+      "effects": [
+        {
+          "type": "SHIELD_POOL_PERCENT",
+          "amount": 50
+        }
+      ],
+      "sort_order": 132
+    },
+    {
+      "code": "lightning-field",
+      "name": { "en": "Lightning Field", "ru": "Поле молний" },
+      "description": {
+        "en": "Each missile, torpedo or fighter strike reaching the ship has a 50% chance to be burnt before it hits.",
+        "ru": "Каждая ракета, торпеда или удар истребителя, долетевшие до корабля, с шансом 50 % сгорают, не успев ударить."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 30,
+      "required_tech": "lightning-field",
+      "effects": [
+        {
+          "type": "LIGHTNING_PERCENT",
+          "amount": 50
+        }
+      ],
+      "sort_order": 133
+    },
+    {
+      "code": "pulsar",
+      "name": { "en": "Pulsar", "ru": "Пульсар" },
+      "description": {
+        "en": "Fires with the volley: every enemy ship within 6 squares takes 1–24 damage per hull class through shields, and enemy volleys in flight there are destroyed.",
+        "ru": "Бьёт с залпом: каждый чужой корабль в пределах 6 клеток получает 1–24 урона на класс корпуса через щит, а чужие залпы в полёте рядом сбиваются."
+      },
+      "slot": "SPECIAL",
+      "space": 8,
+      "cost": 40,
+      "required_tech": "pulsar",
+      "effects": [
+        {
+          "type": "PULSAR",
+          "amount": 6
+        }
+      ],
+      "sort_order": 134
+    },
+    {
+      "code": "gyro-destabilizer",
+      "name": { "en": "Gyro Destabilizer", "ru": "Гиродестабилизатор" },
+      "description": {
+        "en": "Fires with the volley at a target up to 15 squares away: 1–4 structural damage per hull class, past shields and armour.",
+        "ru": "Бьёт с залпом по цели в пределах 15 клеток: 1–4 урона корпусу на класс корпуса цели, мимо щита и брони."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 25,
+      "required_tech": "gyro-destabilizer",
+      "effects": [
+        {
+          "type": "GYRO",
+          "amount": 15
+        }
+      ],
+      "sort_order": 135
+    },
+    {
+      "code": "plasma-web",
+      "name": { "en": "Plasma Web", "ru": "Плазменная сеть" },
+      "description": {
+        "en": "Fires with the volley at a target up to 15 squares away: 5–25 damage, and the web keeps burning it every round, 5 weaker each time.",
+        "ru": "Бьёт с залпом по цели в пределах 15 клеток: 5–25 урона, и сеть жжёт её каждый круг, слабея на 5."
+      },
+      "slot": "SPECIAL",
+      "space": 8,
+      "cost": 40,
+      "required_tech": "plasma-web",
+      "effects": [
+        {
+          "type": "PLASMA_WEB",
+          "amount": 15
+        }
+      ],
+      "sort_order": 136
+    },
+    {
+      "code": "time-warp-facilitator",
+      "name": { "en": "Time Warp Facilitator", "ru": "Ускоритель времени" },
+      "description": {
+        "en": "The ship takes an extra turn at the end of every combat round: it moves and fires again.",
+        "ru": "Корабль получает лишний ход в конце каждого круга боя: снова ходит и стреляет."
+      },
+      "slot": "SPECIAL",
+      "space": 10,
+      "cost": 50,
+      "required_tech": "time-warp-facilitator",
+      "effects": [
+        {
+          "type": "TIME_WARP",
+          "amount": 1
+        }
+      ],
+      "sort_order": 137
+    },
+    {
+      "code": "stasis-field",
+      "name": { "en": "Stasis Field", "ru": "Стазисное поле" },
+      "description": {
+        "en": "Fires with the volley at a target up to 3 squares away and freezes it until the end of the next round: it cannot move, fire or be attacked.",
+        "ru": "Бьёт с залпом по цели в пределах 3 клеток и замораживает её до конца следующего круга: она не ходит, не стреляет, и атаковать её нельзя."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 30,
+      "required_tech": "stasis-field",
+      "effects": [
+        {
+          "type": "STASIS",
+          "amount": 3
+        }
+      ],
+      "sort_order": 127
+    },
+    {
+      "code": "fighter-bays",
+      "name": { "en": "Fighter Bays", "ru": "Отсек перехватчиков" },
+      "description": {
+        "en": "Launches four interceptors with every volley: each strikes four times with the best point-defence beam, at 8 squares plus twice the drive speed. Point defence can shoot them down.",
+        "ru": "С каждым залпом выпускает четыре перехватчика: каждый бьёт четырежды лучшим лучом ближней обороны, летит со скоростью 8 клеток плюс удвоенная скорость двигателя. Ближняя оборона их сбивает."
+      },
+      "slot": "SPECIAL",
+      "space": 30,
+      "cost": 10,
+      "required_tech": "fighter-bays",
+      "effects": [
+        {
+          "type": "FIGHTER_BAY",
+          "amount": 1
+        }
+      ],
+      "sort_order": 128
+    },
+    {
+      "code": "bomber-bays",
+      "name": { "en": "Bomber Bays", "ru": "Отсек бомбардировщиков" },
+      "description": {
+        "en": "Launches four bombers with every volley: each drops the best bomb on the target ship, at 4 squares plus four times the drive speed.",
+        "ru": "С каждым залпом выпускает четыре бомбардировщика: каждый сбрасывает лучшую бомбу на корабль-цель, летит со скоростью 4 клетки плюс учетверённая скорость двигателя."
+      },
+      "slot": "SPECIAL",
+      "space": 60,
+      "cost": 30,
+      "required_tech": "bomber-bays",
+      "effects": [
+        {
+          "type": "FIGHTER_BAY",
+          "amount": 2
+        }
+      ],
+      "sort_order": 129
+    },
+    {
+      "code": "heavy-fighters",
+      "name": { "en": "Heavy Fighter Bays", "ru": "Отсек тяжёлых истребителей" },
+      "description": {
+        "en": "Launches four heavy fighters with every volley: each strikes twice with the best point-defence beam and twice with the best bomb.",
+        "ru": "С каждым залпом выпускает четыре тяжёлых истребителя: каждый бьёт дважды лучшим лучом ближней обороны и дважды лучшей бомбой."
+      },
+      "slot": "SPECIAL",
+      "space": 80,
+      "cost": 50,
+      "required_tech": "heavy-fighters",
+      "effects": [
+        {
+          "type": "FIGHTER_BAY",
+          "amount": 3
+        }
+      ],
+      "sort_order": 130
+    },
+    {
       "code": "battle-scanner",
       "name": { "en": "Battle Scanner", "ru": "Боевой сканер" },
       "description": {
@@ -1307,11 +1861,163 @@
       "sort_order": 96
     },
     {
+      "code": "death-spores",
+      "name": { "en": "Death Spores", "ru": "Споры смерти" },
+      "description": {
+        "en": "A biological bomb: hits planets only. Each bomb has a 10% chance to kill a colonist; buildings are untouched. Medicine of the victim weakens it, and relations suffer badly.",
+        "ru": "Биологическая бомба: бьёт только по планетам. Каждая с шансом 10 % убивает жителя, постройки не трогает. Медицина жертвы её ослабляет, а отношения страдают сильно."
+      },
+      "slot": "WEAPON",
+      "space": 10,
+      "cost": 6,
+      "weapon_kind": "BOMB",
+      "required_tech": "death-spores",
+      "effects": [
+        {
+          "type": "BIO_KILL_PERCENT",
+          "amount": 10
+        },
+        {
+          "type": "WEAPON_DAMAGE",
+          "amount": 1
+        },
+        {
+          "type": "WEAPON_SHOTS",
+          "amount": 1
+        }
+      ],
+      "sort_order": 89
+    },
+    {
+      "code": "bio-terminator",
+      "name": { "en": "Bio Terminator", "ru": "Биотерминатор" },
+      "description": {
+        "en": "A biological bomb: hits planets only. Each bomb has a 20% chance to kill a colonist; buildings are untouched. Medicine of the victim weakens it, and relations suffer badly.",
+        "ru": "Биологическая бомба: бьёт только по планетам. Каждая с шансом 20 % убивает жителя, постройки не трогает. Медицина жертвы её ослабляет, а отношения страдают сильно."
+      },
+      "slot": "WEAPON",
+      "space": 10,
+      "cost": 10,
+      "weapon_kind": "BOMB",
+      "required_tech": "bio-terminator",
+      "effects": [
+        {
+          "type": "BIO_KILL_PERCENT",
+          "amount": 20
+        },
+        {
+          "type": "WEAPON_DAMAGE",
+          "amount": 1
+        },
+        {
+          "type": "WEAPON_SHOTS",
+          "amount": 1
+        }
+      ],
+      "sort_order": 89
+    },
+    {
+      "code": "nuclear-bomb",
+      "name": { "en": "Nuclear Bomb", "ru": "Ядерная бомба" },
+      "description": {
+        "en": "A bomb: hits planets only, from an adjacent square — kills colonists and wrecks buildings. Up to 12 damage per bomb.",
+        "ru": "Бомба: бьёт только по планетам, вплотную — убивает жителей и рушит постройки. До 12 урона за бомбу."
+      },
+      "slot": "WEAPON",
+      "space": 10,
+      "cost": 5,
+      "weapon_kind": "BOMB",
+      "required_tech": "nuclear-bomb",
+      "effects": [
+        {
+          "type": "WEAPON_DAMAGE",
+          "amount": 12
+        },
+        {
+          "type": "WEAPON_SHOTS",
+          "amount": 1
+        }
+      ],
+      "sort_order": 70
+    },
+    {
+      "code": "fusion-bomb",
+      "name": { "en": "Fusion Bomb", "ru": "Термоядерная бомба" },
+      "description": {
+        "en": "A fusion bomb: hits planets only. Up to 24 damage per bomb.",
+        "ru": "Термоядерная бомба: бьёт только по планетам. До 24 урона за бомбу."
+      },
+      "slot": "WEAPON",
+      "space": 10,
+      "cost": 8,
+      "weapon_kind": "BOMB",
+      "required_tech": "fusion-bomb",
+      "effects": [
+        {
+          "type": "WEAPON_DAMAGE",
+          "amount": 24
+        },
+        {
+          "type": "WEAPON_SHOTS",
+          "amount": 1
+        }
+      ],
+      "sort_order": 71
+    },
+    {
+      "code": "anti-matter-bomb",
+      "name": { "en": "Anti-Matter Bomb", "ru": "Антиматериевая бомба" },
+      "description": {
+        "en": "An anti-matter bomb: hits planets only. Up to 40 damage per bomb.",
+        "ru": "Антиматериевая бомба: бьёт только по планетам. До 40 урона за бомбу."
+      },
+      "slot": "WEAPON",
+      "space": 10,
+      "cost": 12,
+      "weapon_kind": "BOMB",
+      "required_tech": "anti-matter-bomb",
+      "effects": [
+        {
+          "type": "WEAPON_DAMAGE",
+          "amount": 40
+        },
+        {
+          "type": "WEAPON_SHOTS",
+          "amount": 1
+        }
+      ],
+      "sort_order": 72
+    },
+    {
+      "code": "neutronium-bomb",
+      "name": { "en": "Neutronium Bomb", "ru": "Нейтрониевая бомба" },
+      "description": {
+        "en": "A neutronium bomb: hits planets only. Up to 60 damage per bomb.",
+        "ru": "Нейтрониевая бомба: бьёт только по планетам. До 60 урона за бомбу."
+      },
+      "slot": "WEAPON",
+      "space": 10,
+      "cost": 18,
+      "weapon_kind": "BOMB",
+      "required_tech": "neutronium-bomb",
+      "effects": [
+        {
+          "type": "WEAPON_DAMAGE",
+          "amount": 60
+        },
+        {
+          "type": "WEAPON_SHOTS",
+          "amount": 1
+        }
+      ],
+      "sort_order": 73
+    },
+    {
       "code": "troop-pods",
       "name": { "en": "Troop Pods", "ru": "Десантные отсеки" },
       "description": {
-        "en": "Troop pods: the ship carries marines — s. 12.",
-        "ru": "Десантные отсеки: корабль везёт морскую пехоту — п. 12."
+        "en": "Troop pods double the marines aboard: for boarding enemy ships and for fighting off boarders.",
+        "ru": "Десантные отсеки удваивают морскую пехоту на борту: ею берут чужие корабли на абордаж и ею же отбиваются."
       },
       "slot": "SPECIAL",
       "space": 2,
@@ -1319,8 +2025,8 @@
       "required_tech": "troop-pods",
       "effects": [
         {
-          "type": "TROOPS",
-          "amount": 2
+          "type": "MARINES_PERCENT",
+          "amount": 100
         }
       ],
       "sort_order": 97
@@ -1343,6 +2049,82 @@
         }
       ],
       "sort_order": 98
+    },
+    {
+      "code": "anti-missile-rockets",
+      "name": { "en": "Anti-Missile Rockets", "ru": "Противоракеты" },
+      "description": {
+        "en": "Shoots down enemy missiles in flight: 60% per missile, 3% less for every square to the volley. Fired instead of the ship's salvo; useless against ships.",
+        "ru": "Сбивают чужие ракеты в полёте: 60 % на ракету и на 3 % меньше за каждую клетку до залпа. Пускаются вместо залпа корабля; по кораблям бесполезны."
+      },
+      "slot": "SPECIAL",
+      "space": 2,
+      "cost": 8,
+      "required_tech": "anti-missile-rockets",
+      "effects": [
+        {
+          "type": "ANTI_MISSILE",
+          "amount": 60
+        }
+      ],
+      "sort_order": 99
+    },
+    {
+      "code": "transporters",
+      "name": { "en": "Transporters", "ru": "Телепорты" },
+      "description": {
+        "en": "Beam marines aboard an enemy ship or base up to 12 squares away whose shields are down; the target need not be immobilized.",
+        "ru": "Переносят пехоту на чужой корабль или базу с опущенным щитом за 12 клеток; обездвиживать цель не нужно."
+      },
+      "slot": "SPECIAL",
+      "space": 4,
+      "cost": 20,
+      "required_tech": "transporters",
+      "effects": [
+        {
+          "type": "TRANSPORTER",
+          "amount": 12
+        }
+      ],
+      "sort_order": 100
+    },
+    {
+      "code": "tractor-beam",
+      "name": { "en": "Tractor Beam", "ru": "Тяговый луч" },
+      "description": {
+        "en": "Fires with the salvo and holds the target: one beam per hull class (four for a battleship) immobilizes it until the end of the round. Beams of several ships add up. An immobilized ship can be boarded.",
+        "ru": "Бьёт вместе с залпом и держит цель: луч на класс корпуса (линкору четыре) обездвиживает её до конца круга. Лучи разных кораблей складываются. Обездвиженный корабль можно взять на абордаж."
+      },
+      "slot": "SPECIAL",
+      "space": 3,
+      "cost": 15,
+      "required_tech": "tractor-beam",
+      "effects": [
+        {
+          "type": "TRACTOR",
+          "amount": 1
+        }
+      ],
+      "sort_order": 101
+    },
+    {
+      "code": "assault-shuttles",
+      "name": { "en": "Assault Shuttles", "ru": "Штурмовые шаттлы" },
+      "description": {
+        "en": "A bay of two shuttles that fly at the salvo's target with two marines each and board it on arrival — capturing a ship or raiding a base. They can be shot down on the way.",
+        "ru": "Отсек на два шаттла: они летят к цели залпа, по два пехотинца в каждом, и на подлёте идут на абордаж — берут корабль или громят базу. В пути их можно сбить."
+      },
+      "slot": "SPECIAL",
+      "space": 5,
+      "cost": 12,
+      "required_tech": "assault-shuttles",
+      "effects": [
+        {
+          "type": "SHUTTLE_BAY",
+          "amount": 2
+        }
+      ],
+      "sort_order": 102
     },
 
     {

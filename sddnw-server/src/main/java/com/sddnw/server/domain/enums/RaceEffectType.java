@@ -268,7 +268,38 @@ public enum RaceEffectType {
     GRAVITY_LOW(null),
 
     /** Раса большой тяжести — п. 4.1: тяжёлые и обычные миры ей нипочём, лёгкие — нет. */
-    GRAVITY_HIGH(null);
+    GRAVITY_HIGH(null),
+
+    /**
+     * Строй, которому мораль безразлична, — п. 10.1: объединение и галактическое единство.
+     * «Not affected by morale, either positively or negatively»: ни казармы, ни голосимулятор,
+     * ни утрата чего-либо их выработку не меняют. Читается в {@code MoraleRules}.
+     */
+    NO_MORALE(null),
+
+    /**
+     * Мораль колонии без казарм, в процентах — п. 10.1: диктатура, феодализм и конфедерация
+     * (−20). Колония оригинала «struggles at −20% morale until it builds a Marine Barracks».
+     */
+    MORALE_WITHOUT_BARRACKS(null),
+
+    /** Мораль колонии с казармами, в процентах — п. 10.1: Империум (+20). */
+    MORALE_WITH_BARRACKS(null),
+
+    /**
+     * Прибавка к морали от изученной псионики, в процентах — п. 10.1: феодализм, диктатура и
+     * их развитые строи (+10). Демократии и федерации псионика морали не даёт.
+     */
+    PSIONICS_MORALE(null),
+
+    /**
+     * Мораль всех колоний империи без столицы, в процентах — п. 10.1: феодализм и
+     * конфедерация −50, диктатура −35, демократия и федерация −20 («if the empire's capitol is
+     * captured or destroyed, the whole empire suffers a N% morale penalty, until a new Capitol
+     * is built»). У Империума числа первоисточник не называет — взято число диктатуры, из
+     * которой он вырос (<i>реконструкция</i>). У объединения столицы нет вовсе.
+     */
+    CAPITOL_LOSS_MORALE(null);
 
     private final BuildingEffectType colonyEffect;
 

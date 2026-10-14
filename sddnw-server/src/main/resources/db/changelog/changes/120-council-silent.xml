@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Голос совета подан по доверию, потому что человек не ответил (07.10.2026): сцена совета
+        говорит игроку, что случилось с его голосом, а не выдаёт молчание за его выбор.
+    -->
+    <changeSet id="120-council-silent" author="sddnw">
+        <addColumn tableName="council_vote">
+            <column name="silent" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -37,6 +37,16 @@ public record FleetGroupDto(
         String targetSystemName,
         Integer departureTurn,
         Integer arrivalTurn,
-        Boolean autoExplore
+        Boolean autoExplore,
+        /** Имя флота (пункт 141); пусто — безымянный. */
+        String name,
+        /** Бои флота, выигранные и проигранные (пункт 141). */
+        Integer battlesWon,
+        Integer battlesLost,
+        /**
+         * Флот в пути слышит приказ сейчас — п. 8: гиперпространственная связь или близость своей
+         * орбитальной базы ({@code FlightRules.canOrder}). У стоящего флота — пусто.
+         */
+        Boolean orderable
 ) {
 }

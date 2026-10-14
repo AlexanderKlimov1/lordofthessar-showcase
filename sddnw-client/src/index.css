@@ -8,21 +8,34 @@
     требует `rgb(var(--x) / <alpha-value>)` в `tailwind.config.js`: так у ролей работают
     модификаторы прозрачности.
 
-    Контраст на основном фоне (#05070f) измерен и подписан у каждой ступени. Всё, кроме
-    `off`, проходит 4,5 : 1 даже на самой светлой панели (#121829); `off` — это
+    Контраст на основном фоне измерен и подписан у каждой ступени. Всё, кроме
+    `off`, проходит 4,5 : 1 даже на самой светлой панели; `off` — это
     НЕДОСТУПНОЕ, а не текст, и к нему требование читаемости не относится вовсе.
   */
   :root {
-    --ink-bright: 238 244 255; /* 18,2 : 1 — заголовки и числа, на которые смотрят */
-    --ink: 204 216 234; /*        14,0 : 1 — основной текст */
-    --ink-soft: 163 180 204; /*    9,5 : 1 — второстепенный */
-    --ink-dim: 138 155 180; /*     7,1 : 1 — подписи полей и столбцов */
-    --ink-faint: 115 131 156; /*   5,2 : 1 — примечания, единицы, сноски */
-    --ink-off: 85 99 122; /*       3,3 : 1 — недоступное и выключенное */
-    --accent: 127 212 255;
+    /*
+      ПАЛИТРА «ЛАМПА» (07.10.2026, решение хозяина проекта): текст тёплый, акцент — янтарь.
+      Контраст на основном фоне #0d0a07 пересчитан; на самой светлой панели (#241b14) всё,
+      кроме `off`, по-прежнему не ниже 4,5 : 1.
+    */
+    --ink-bright: 239 228 210; /* 15,7 : 1 — заголовки и числа, на которые смотрят */
+    --ink: 224 211 189; /*        13,4 : 1 — основной текст */
+    --ink-soft: 205 190 165; /*   10,8 : 1 — второстепенный */
+    --ink-dim: 184 166 140; /*     8,3 : 1 — подписи полей и столбцов */
+    --ink-faint: 156 140 116; /*   6,0 : 1 — примечания, единицы, сноски */
+    --ink-off: 105 92 75; /*       3,0 : 1 — недоступное и выключенное */
+    /* Акцент — янтарь лампы: активное, выбранное, ссылка под курсором. */
+    --accent: 230 168 74;
     --danger: 251 138 138;
     --warn: 251 191 36;
     --good: 74 222 128;
+    /*
+      ЛАМПА — тёплый свет на столе игрока (атмосфера «спокойного вечера», 04.10.2026). Пара к
+      `accent`: холодный свет космоса за окном и тёплый круг, в котором о нём думают. Цвет
+      редкий НАРОЧНО — главная звезда знака, приглашение заставки, — иначе тепло станет фоном
+      и перестанет что-либо значить. 11,8 : 1 на основном фоне.
+    */
+    --lamp: 247 205 128;
 
     /*
       Масштаб текста — п. 11.1. Всё в игре меряется в `rem`, поэтому одна эта величина
@@ -47,6 +60,88 @@
     @apply bg-space-950 text-ink font-mono antialiased;
     margin: 0;
     overflow: hidden;
+  }
+
+  /*
+    ПОЛОСЫ ПРОКРУТКИ — в цветах игры, одним правилом на все сцены (08.10.2026, решение хозяина
+    проекта): без него браузер рисовал свою светлую системную полосу, и на тёмной панели она
+    выбивалась белым — заметнее всего на странице пакета основателя. Правило стоит на ВСЕХ
+    элементах, а не на списке экранов: прокручивается двадцать с лишним мест, и список отстал бы
+    от первого же нового.
+
+    `color-scheme: dark` — чтобы и то, что браузер рисует сам (выпадающий список, поле числа,
+    уголок между двумя полосами), было тёмным. Цвета — ступени подложки `space-*` из
+    `tailwind.config.js`: ползунок `space-600`, под курсором `space-500`, дорожка прозрачна и
+    показывает подложку своей панели. Стандартные свойства понимают Firefox и новые Chrome и Edge
+    (там они главнее старых правил `::-webkit-scrollbar`), а старые правила остаются Safari и
+    прежним Chrome — внешне то же самое.
+  */
+  html {
+    color-scheme: dark;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #4f3c29 transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: #4f3c29;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #6b5238;
+  }
+
+  /*
+    Ползунок громкости (09.10.2026) — в цветах игры, как полосы прокрутки: дорожка цвета подложки,
+    пройденная часть и бегунок — `accent`. Белый системный ползунок выбивался бы так же, как
+    белая полоса прокрутки на странице пакета основателя.
+  */
+  .sddnw-range {
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: #4f3c29;
+    accent-color: rgb(var(--accent));
+    cursor: pointer;
+  }
+  .sddnw-range:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+  .sddnw-range::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: rgb(var(--accent));
+    border: 2px solid #1a130c;
+  }
+  .sddnw-range::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgb(var(--accent));
+    border: 2px solid #1a130c;
+  }
+  .sddnw-range::-moz-range-progress {
+    height: 4px;
+    border-radius: 2px;
+    background: rgb(var(--accent) / 0.6);
   }
 }
 
@@ -102,7 +197,7 @@
     transition: filter 120ms ease-out;
   }
   .cs-hit:hover {
-    filter: brightness(1.35) drop-shadow(0 0 6px rgba(159, 230, 255, 0.95));
+    filter: brightness(1.35) drop-shadow(0 0 6px rgba(247, 205, 128, 0.95));
   }
 
   .panel-title {
@@ -189,6 +284,19 @@
   Попадание — вспышка в точке удара, когда выстрел долетел (п. 8). Без неё залп читался
   «прилетело и пропало»: попал выстрел или нет, было видно лишь по яркости линии.
 */
+/* Тяговый луч (п. 8): появляется, держит и гаснет; по нему бегут кольца к цели. */
+@keyframes sddnw-tractor {
+  0% { opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes sddnw-tractor-flow {
+  from { stroke-dashoffset: 40; }
+  to { stroke-dashoffset: 0; }
+}
+
 @keyframes sddnw-impact {
   /* Первый кадр невидим: вспышка ждёт своего мига задержкой (`both`) и до него не видна. */
   0% {
@@ -244,6 +352,35 @@
 }
 
 /* Залп в полёте появляется, когда его донесла анимация пуска (backlog-promo, пункт 30). */
+/* Уход в гиперпространство (п. 8, ui/battle/WarpOut.tsx): разворот, воронка, провал в неё. */
+@keyframes sddnw-warp-turn {
+  0% { transform: rotate(180deg); }
+  25%, 100% { transform: rotate(0deg); }
+}
+@keyframes sddnw-warp-portal {
+  0%, 18% { transform: scale(0.1, 0); opacity: 0; }
+  38% { transform: scale(1, 1); opacity: 1; }
+  80% { transform: scale(1, 1); opacity: 1; }
+  92%, 100% { transform: scale(0.15, 0); opacity: 0; }
+}
+@keyframes sddnw-warp-fall {
+  0%, 38% { transform: translate(0, 0) scale(1); opacity: 1; }
+  68% { transform: translate(var(--dx), 0) scale(0.45); opacity: 1; }
+  80%, 100% { transform: translate(var(--dx), 0) scale(0.02); opacity: 0; }
+}
+@keyframes sddnw-warp-flash {
+  0%, 82% { transform: scale(0.2); opacity: 0; }
+  88% { transform: scale(1); opacity: 0.9; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes sddnw-ship-turn {
+  from { transform: rotate(180deg); }
+  to { transform: rotate(0deg); }
+}
+@keyframes sddnw-warp-swirl {
+  to { stroke-dashoffset: -22; }
+}
+
 @keyframes sddnw-missile-wait {
   0%,
   70% {
@@ -325,4 +462,110 @@
   to {
     stroke-dashoffset: -104;
   }
+}
+
+/*
+  ЗАСТАВКА ВЕЧЕРА (`ui/brand/EveningIntro.tsx`, `ui/brand/Logo.tsx`). Движения медленные и
+  без отскоков: заставка обещает спокойный вечер, и пружинящая анимация спорила бы с этим
+  обещанием раньше первого слова. Задержки ставит сам знак — ритмом темы.
+*/
+@keyframes sddnw-star-in {
+  0% { opacity: 0; transform: scale(0.2); }
+  60% { opacity: 1; transform: scale(1.25); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes sddnw-line-draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes sddnw-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sddnw-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.sddnw-logo-star,
+.sddnw-logo-peak {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sddnw-star-in 0.9s ease-out forwards;
+}
+
+.sddnw-logo-peak {
+  animation-duration: 1.8s;
+}
+
+.sddnw-logo-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: sddnw-line-draw 1.4s ease-in-out forwards;
+}
+
+.sddnw-logo-word,
+.sddnw-fade-in {
+  opacity: 0;
+  animation: sddnw-fade-in 1.6s ease-out forwards;
+}
+
+.sddnw-breathe {
+  animation: sddnw-breathe 4s ease-in-out infinite;
+}
+
+/* Кому движение мешает — знак и приглашение стоят сразу целиком. */
+@media (prefers-reduced-motion: reduce) {
+  .sddnw-logo-star,
+  .sddnw-logo-peak,
+  .sddnw-logo-word,
+  .sddnw-fade-in,
+  .sddnw-logo-line {
+    animation: none;
+    opacity: 1;
+    stroke-dashoffset: 0;
+  }
+  .sddnw-breathe {
+    animation: none;
+  }
+}
+
+/*
+  Меньше движения — field-backlog, пункт 170. Признак ставит `ui/motion.ts`: выбор игрока, а без
+  него — системная настройка. Одно правило на всю игру: анимации и переходы проходят мгновенно
+  и один раз — элемент встаёт в конечное положение, а `animationend` всё равно приходит, и то,
+  что ждёт конца анимации (обломки, вспышки), не залипает. Вращение, что ведут скрипты, тот же
+  признак спрашивает через `reducedMotion()`.
+*/
+:root[data-motion='reduce'] *,
+:root[data-motion='reduce'] *::before,
+:root[data-motion='reduce'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/*
+  Цель нажатия не мельче пальца — field-backlog, пункт 172 (закон Фиттса). Невидимый
+  псевдоэлемент растягивает зону нажатия до 24 точек (1.5rem — растёт и с размером текста),
+  не двигая вёрстку: рисунок остаётся своего размера. Соседние зоны могут заходить друг на
+  друга на пару точек — выигрывает стоящий позже, и это лучше промаха.
+*/
+.hit-24 {
+  position: relative;
+}
+.hit-24::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 1.5rem);
+  height: max(100%, 1.5rem);
+  transform: translate(-50%, -50%);
 }

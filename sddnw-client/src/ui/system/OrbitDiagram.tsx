@@ -1,7 +1,10 @@
+import { bannerGlyph } from '../race/banners';
 import type { Planet, StarSystem } from '../../api/types';
 import { AsteroidRing, climateColor, planetImage, planetRadius } from './planetVisuals';
 import { useGameStore } from '../../state/gameStore';
-import { t, useT } from '../../i18n';
+import { t, useT, type Key } from '../../i18n';
+import { hoverOnly, justTouched } from '../touch';
+import { climateName, planetSizeName } from '../planetLabels';
 
 /**
  * Схема звёздной системы — п. 4.1, разметкой окна «Star System» MOO II.
@@ -138,7 +141,7 @@ export function OrbitDiagram({
         );
       })}
 
-      <Star color={system.colorHex} />
+      <Star color={system.colorHex} code={system.color} />
 
       {system.planets.map((planet) => (
         <PlanetOnOrbit
@@ -160,9 +163,19 @@ export function OrbitDiagram({
  * Звезда системы. В MOO II она заметно мельче планет: центр отдан не ей, а орбитам,
  * и на месте звезды стоит белая искра с расходящимися лучами.
  */
-function Star({ color }: { color: string }) {
+function Star({ color, code }: { color: string; code: string }) {
+  /*
+    Подсказка о цвете звезды (09.10.2026, решение хозяина проекта) — пункт 132: цвет говорит о
+    планетах (`StarColorOdds` на сервере), и сказать это стоит там, где на звезду смотрят. Атрибут `data-tip`
+    рисует игровая подсказка (`GlobalTooltip`), а не браузер; невидимый круг пошире искры
+    ловит наведение — сама искра в несколько точек.
+  */
+  // Цвет в словаре со строчной буквы («жёлтая») — подсказка начинается с заглавной.
+  const title = t('star.tip.title', { colour: t(`star.colour.${code}` as Key) });
+  const tip = `${title.charAt(0).toUpperCase()}${title.slice(1)}\n${t('star.tip.WHITE')}\n${t('star.tip.YELLOW')}\n${t('star.tip.RED')}`;
   return (
-    <g>
+    <g data-tip={tip}>
+      <circle cx={CENTER_X} cy={CENTER_Y} r={STAR_GLOW} fill="transparent" />
       <circle cx={CENTER_X} cy={CENTER_Y} r={STAR_GLOW} fill="url(#star-core)" opacity={0.55} />
       <path
         d={
@@ -228,14 +241,22 @@ function PlanetOnOrbit({
   return (
     <g
       className="cursor-pointer"
-      onClick={() => onSelect(planet.id)}
+      onClick={(event) => {
+        // Касание (пункт 60): наведения у пальца нет, и карточку планеты показывает само
+        // касание — она остаётся, пока не коснулись другой планеты.
+        if (justTouched()) {
+          onHover?.(planet.id, sideOf(event.clientX, event.currentTarget));
+        }
+        onSelect(planet.id);
+      }}
       onDoubleClick={() => onOpen(planet.id)}
-      onMouseEnter={(event) => onHover?.(planet.id, sideOf(event.clientX, event.currentTarget))}
-      onMouseLeave={() => onHover?.(null, ownSide)}
-      onFocus={() => onHover?.(planet.id, ownSide)}
-      onBlur={() => onHover?.(null, ownSide)}
+      onMouseEnter={hoverOnly((event: React.MouseEvent<SVGGElement>) =>
+        onHover?.(planet.id, sideOf(event.clientX, event.currentTarget)))}
+      onMouseLeave={hoverOnly(() => onHover?.(null, ownSide))}
+      onFocus={hoverOnly(() => onHover?.(planet.id, ownSide))}
+      onBlur={hoverOnly(() => onHover?.(null, ownSide))}
       role="button"
-      aria-label={`${planet.name} — ${planet.sizeLabel}, ${planet.climateLabel}`}
+      aria-label={`${planet.name} — ${planetSizeName(planet.size, planet.sizeLabel)}, ${climateName(planet.climate, planet.climateLabel)}`}
       tabIndex={0}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -300,6 +321,10 @@ function PlanetOnOrbit({
  * планете.
  */
 function OwnerFlag({ cx, cy, radius, color }: { cx: number; cy: number; radius: number; color: string }) {
+  // Знак знамени на вымпеле — пункт 168: хозяин читается и без цвета. На флажке он стоит
+  // ВСЕГДА (09.10.2026, решение хозяина проекта): вымпел без знака читался пустым, а пестроты
+  // на схеме системы, ради которой знаки на карте выключаемы (пункт 202), он не добавляет.
+  const glyph = bannerGlyph(color);
   // Размер — в единицах поля 840 × 480, которое окно системы ужимает вдвое: мельче
   // тридцати единиц флажок терялся среди уголков выбора и кольца родного мира.
   const baseX = cx - radius * 0.85;
@@ -316,6 +341,12 @@ function OwnerFlag({ cx, cy, radius, color }: { cx: number; cy: number; radius: 
         stroke="#05070f"
         strokeWidth={1.2}
       />
+      {glyph ? (
+        <text x={baseX + pennant * 0.36} y={topY + pennant * 0.36} fontSize={pennant * 0.42}
+              textAnchor="middle" dominantBaseline="central" fill="#05070f">
+          {glyph}
+        </text>
+      ) : null}
     </g>
   );
 }

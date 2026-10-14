@@ -50,9 +50,19 @@ export const SHIELDS = ['planetary-flux-shield', 'planetary-barrier-shield'] as 
 /** Сеть охотников — минное поле вокруг всей системы: видна минами на небе. */
 export const MINEFIELD = 'artemis-system-net';
 
+/**
+ * Столица империи — п. 10.1. Отдельной постройкой она на поверхности не стоит: это
+ * престол самой колонии, и рисуется он на посёлке ({@link ColonyCentreSprite}).
+ */
+export const CAPITOL = 'capitol';
+
+export const isCapitol = (colony: { buildings: { code: string }[] } | undefined): boolean =>
+  Boolean(colony?.buildings.some((building) => building.code === CAPITOL));
+
 export const isOrbital = (code: string) => (ORBITAL as readonly string[]).includes(code);
 export const isShield = (code: string) => (SHIELDS as readonly string[]).includes(code);
-export const onGround = (code: string) => !isOrbital(code) && !isShield(code) && code !== MINEFIELD;
+export const onGround = (code: string) =>
+  !isOrbital(code) && !isShield(code) && code !== MINEFIELD && code !== CAPITOL;
 
 // --- свет ---------------------------------------------------------------------------------
 
@@ -547,6 +557,25 @@ const RECIPES: Record<string, () => ReactNode[]> = {
     ...[-28, -14].map((y, i) => <line key={`gy${i}`} x1={-25} y1={y} x2={25} y2={y} stroke={M.cyan} strokeWidth={0.9} opacity={0.7} />),
     glow('core', 0, -20, 2.4, true),
   ],
+  // Досуг и чужие — п. 10.1.
+  'holo-simulator': () => [
+    box('hall', 0, 64, 22, 24, 'dark', 1),
+    dome('d', 0, 20, -22, M.metal, M.cyan),
+    glow('holo', 0, -34, 2.6, true),
+    spire('ant', -24, 40, 2.5, -22, M.cyan),
+  ],
+  'pleasure-dome': () => [
+    dome('d', 0, 46, 0, M.copper, M.cyan),
+    glow('l', -18, -14, 2.2),
+    glow('r', 16, -20, 2.2, true),
+    spire('top', 0, 30, 2.5, -46, M.red),
+  ],
+  'alien-management-center': () => [
+    box('a', -16, 40, 28, 24, 'metal', 1),
+    box('b', 22, 32, 18, 20, 'rust', 0, -10),
+    dish('dish', -16, -28, 9),
+    glow('g', 22, -12, 1.8, true),
+  ],
   'core-waste-dump': () => [
     <ellipse key="shaft" cx={0} cy={0} rx={40} ry={13} fill="#141110" />,
     <ellipse key="rim" cx={0} cy={0} rx={40} ry={13} fill="none" stroke="#8a847a" strokeWidth={3} />,
@@ -583,6 +612,7 @@ const FOOTPRINTS: Record<string, [number, number, number]> = {
   'deep-core-mine': [0, 0, 0],
   'core-waste-dump': [0, 0, 0],
   'missile-base': [94, 30, 12],
+  'pleasure-dome': [92, 30, 46],
 };
 
 const FOOTPRINT: [number, number, number] = [80, 26, 34];
@@ -640,7 +670,7 @@ export function BuildingSprite({ code }: { code: string }) {
  *
  * Свет тот же, что у всей сцены ({@link SUN}): те же грани, те же блики, та же тень.
  */
-export function ColonyCentreSprite({ level }: { level: 1 | 2 | 3 | 4 }) {
+export function ColonyCentreSprite({ level, capitol = false }: { level: 1 | 2 | 3 | 4; capitol?: boolean }) {
   const wide = 54 + level * 12;
   const houses = level + 1;
   return (
@@ -668,6 +698,21 @@ export function ColonyCentreSprite({ level }: { level: 1 | 2 | 3 | 4 }) {
       {glow('window', -14, -8, 2)}
       {level >= 3 ? cylinder('tank', -(30 + level * 4), 9, 22 + level * 2, M.metal) : null}
       {level >= 4 ? box('tower', 34, 18, 44, 16, 'metal', 4) : null}
+      {/*
+        Столица — п. 10.1: купол поселения золотится, над ним встаёт шпиль со знаменем.
+        Престол стоит на самом посёлке, а не рядом: это сердце империи, а не ещё одна
+        постройка, — и потому его нельзя ни продать, ни спутать с соседним зданием.
+      */}
+      {capitol ? (
+        <g key="capitol">
+          {dome('crown', 0, 12 + level, -16 - (20 + level * 2) * 0.62, M.copper)}
+          <line x1={0} y1={-16 - (20 + level * 2) * 0.62 - 10} x2={0} y2={-16 - (20 + level * 2) - 34}
+                stroke="#d9c38a" strokeWidth={2.2} />
+          <polygon points={`0,${-16 - (20 + level * 2) - 34} 22,${-16 - (20 + level * 2) - 28} 0,${-16 - (20 + level * 2) - 21}`}
+                   fill="#f2c94c" stroke="#8a6a1f" strokeWidth={0.8} />
+          {glow('star', 0, -16 - (20 + level * 2) - 36, 2.2)}
+        </g>
+      ) : null}
     </g>
   );
 }

@@ -37,10 +37,13 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
+import com.sddnw.server.domain.enums.ShipEffectType;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.random.RandomGenerator;
@@ -108,6 +111,16 @@ public class TacticalBattleService {
     private final OrbitalDefenceService orbitalDefence;
     /** Кто из людей ушёл из-за стола — его империю ведёт ИИ (backlog-promo, пункт 11). */
     private final PresenceService presence;
+    /** Абордаж считается тем же расчётом, что и наземный бой (п. 8, п. 12). */
+    private final GroundCombatService groundCombat;
+    private final LeaderRecordService leaderRecord;
+
+    /**
+     * Счётчик первых встреч с механиками — field-backlog, пункт 93. Полем, а не параметром
+     * конструктора: службу собирают руками юнит-тесты, а им замер ни к чему (там он пуст).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private EmpireActivityService activity;
 
     public TacticalBattleService(Messages messages,
                                  SpaceBattleRepository battleRepository,
@@ -121,8 +134,12 @@ public class TacticalBattleService {
                                  FleetRepository fleetRepository,
                                  LeaderBonusService leaderBonuses,
                                  OrbitalDefenceService orbitalDefence,
-                                 PresenceService presence) {
+                                 PresenceService presence,
+                                 GroundCombatService groundCombat,
+                                 LeaderRecordService leaderRecord) {
+        this.leaderRecord = leaderRecord;
         this.presence = presence;
+        this.groundCombat = groundCombat;
         this.messages = messages;
         this.orbitalDefence = orbitalDefence;
         this.fleetRepository = fleetRepository;
@@ -266,6 +283,28 @@ public class TacticalBattleService {
         return new BattleView(context.battle(), order(context.ships()), events);
     }
 
+    /**
+     * Ходы ИИ и чудищ, стоящих в очереди первыми, — п. 8 (13.10.2026).
+     * <p>
+     * Обычно корабли ИИ ходят следом за ходом человека ({@link #playOthers}). Но бой может
+     * НАЧАТЬСЯ с их хода — чудище быстрее фрегата, — и тогда нажимать человеку нечего, а
+     * сервер сам не ходит: бой стоял бы. Экран, открывшийся не на своём ходу, зовёт этот
+     * метод и проигрывает пришедшие события, как будто бой шёл у игрока на глазах. Если
+     * очередь у человека (своя или соседа), не делается ничего.
+     */
+    @Transactional
+    public BattleView playOpponents(UUID battleId, Map<UUID, PlayerEntity> players) {
+        SpaceBattleEntity battle = require(battleId);
+        if (battle.getState() != BattleState.IN_PROGRESS) {
+            return new BattleView(battle, order(ships(battleId)), List.of());
+        }
+        List<BattleEventDto> events = new ArrayList<>();
+        Context context = context(battle, order(ships(battleId)), players);
+        playOthers(context, events);
+        save(context);
+        return new BattleView(context.battle(), order(context.ships()), events);
+    }
+
     /** Состояние боя без событий: экран открылся и спрашивает поле. */
     @Transactional(readOnly = true)
     public BattleView view(UUID battleId) {
@@ -315,7 +354,9 @@ public class TacticalBattleService {
             case MOVE -> move(context, ship, request.x(), request.y(), events);
             case FIRE -> {
                 if (request.targetMissileId() != null) {
-                    fireAtMissile(context, ship, request.targetMissileId(), request.weaponRows(), events);
+                    fireAtMissile(context, ship, request.targetMissileId(),
+                            request.weaponRows() == null || request.weaponRows().isEmpty()
+                                    ? null : new HashSet<>(request.weaponRows()), events);
                 } else {
                     fire(context, ship, target(ships, request.targetShipId()), request.weaponRows(), events);
                 }
@@ -326,7 +367,24 @@ public class TacticalBattleService {
                         messages.get("battle.log.pass", name(context, ship))));
                 endShipTurn(context, events);
             }
-            case RETREAT -> retreat(context, player, events);
+            case BOARD -> {
+                board(context, ship, target(ships, request.targetShipId()), Boolean.FALSE, events);
+                endShipTurn(context, events);
+            }
+            case RAID -> {
+                board(context, ship, target(ships, request.targetShipId()), Boolean.TRUE, events);
+                endShipTurn(context, events);
+            }
+            case RETREAT -> {
+                if (Boolean.TRUE.equals(retreat(context, ship, events))) {
+                    // Нетронутый ход — корабль уходит сразу: указатель ещё на нём, и очередь
+                    // отходящих уводит его тем же правилом, что и дождавшегося своего хода.
+                    departRetreating(context, events);
+                    playOthers(context, events);
+                } else {
+                    endShipTurn(context, events);
+                }
+            }
             case SELF_DESTRUCT -> {
                 selfDestruct(context, ship, events);
                 endShipTurn(context, events);
@@ -339,7 +397,12 @@ public class TacticalBattleService {
 
     /** Ставит корабли флота в строй своей стороны. */
     /** Сколько кораблей какого проекта выходит в бой — общий вид состава для расстановки. */
-    public record ShipCount(UUID designId, Integer ships) {
+    public record ShipCount(UUID designId, Integer ships, Integer experience) {
+
+        /** Корабли без опыта — платформы, чудища и демонстрация. */
+        public ShipCount(UUID designId, Integer ships) {
+            this(designId, ships, 0);
+        }
     }
 
     /** Строй стороны из её флота: корабли лежат в нём числом по проектам. */
@@ -370,7 +433,7 @@ public class TacticalBattleService {
                     ShipStats value = stats.get(row.getDesignId());
                     return value == null ? 0 : value.structure() + value.armour() + value.attack();
                 }).reversed())
-                .map(row -> new ShipCount(row.getDesignId(), row.getShips()))
+                .map(row -> new ShipCount(row.getDesignId(), row.getShips(), row.getExperience()))
                 .toList();
 
         if (platforms.isEmpty()) {
@@ -420,6 +483,8 @@ public class TacticalBattleService {
                 ship.setArmour(value.armour());
                 ship.setShield(value.shield());
                 ship.setInitiative(rules.initiative(value, parts));
+                ship.setMarines(rules.marines(shipCatalog.hull(designs.get(row.designId()).getHullCode()), parts));
+                ship.setCrewBonus(CrewRules.bonus(row.experience()));
                 int[] cell = rules.startingCell(side, index, total);
                 ship.setX(cell[0]);
                 ship.setY(cell[1]);
@@ -475,6 +540,12 @@ public class TacticalBattleService {
         if (!target.alive()) {
             throw new ConflictException("battle.targetDestroyed");
         }
+        if (Boolean.TRUE.equals(frozen(context, target))) {
+            throw new ConflictException("battle.targetFrozen");
+        }
+        if (Boolean.TRUE.equals(phased(context, target))) {
+            throw new ConflictException("battle.targetHidden");
+        }
         Model model = context.model(ship);
         // Стволы берутся у САМОГО КОРАБЛЯ, а не у проекта: разбитая пушка не стреляет —
         // п. 8. Корабль, у которого выбили все стволы, не стреляет вовсе.
@@ -488,11 +559,34 @@ public class TacticalBattleService {
         List<BattleRules.Shot> salvo = weaponRows == null || weaponRows.isEmpty()
                 ? shots(context, ship)
                 : rules.shots(parts, rules.engineCombatSpeed(model.items()));
-        if (salvo.isEmpty()) {
+        // Шаттлы уходят вместе с залпом (п. 8, абордаж): корабль с одними шаттлами стреляет ими.
+        int shuttles = shuttlesFor(context, ship, target);
+        // После двойного залпа вид оружия круг молчит (гиперконденсаторы, скоростные стойки — п. 8).
+        salvo = salvo.stream().filter(shot -> !resting(context, ship, shot)).toList();
+        // Отсеки истребителей уходят с залпом тоже (п. 8): корабль-носитель стреляет звеньями.
+        // Звено, отбившее удары, возвращается на носитель перевооружаться (п. 8, MOO II: «before returning to
+        // the launching ship»): пока оно не дома, отсек молчит ({@link BattleRules#FIGHTER_REARM_ROUNDS}).
+        boolean home = Boolean.TRUE.equals(fightersHome(context, ship));
+        int bays = home && rules.special(parts(context, ship), ShipEffectType.FIGHTER_BAY) > 0 ? 1 : 0;
+        // Устройства, бьющие с залпом (пульсар, гиродестабилизатор, плазменная сеть — п. 8), ходят
+        // за ствол: корабль с одним пульсаром тоже «стреляет». Цель вне их досягаемости — отказ.
+        int reachOfDevices = deviceReach(context, ship);
+        int targetDistance = rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY());
+        if (salvo.isEmpty() && shuttles == 0 && bays == 0 && reachOfDevices > 0) {
+            if (targetDistance > reachOfDevices) {
+                throw new ConflictException("battle.outOfRange", reachOfDevices);
+            }
+            bays = 1;
+        }
+        if (salvo.isEmpty() && shuttles == 0 && bays == 0 && !parts.isEmpty()
+                && !shots(context, ship).isEmpty() && Boolean.TRUE.equals(allResting(context, ship))) {
+            throw new ConflictException("battle.weaponsResting");
+        }
+        if (salvo.isEmpty() && shuttles == 0 && bays == 0) {
             throw new ConflictException(weaponRows == null || weaponRows.isEmpty()
                     ? "battle.weaponsWrecked" : "battle.noWeaponChosen");
         }
-        if (!rules.inReach(salvo, ship.getX(), ship.getY(),
+        if (!salvo.isEmpty() && shuttles == 0 && bays == 0 && !rules.inReach(salvo, ship.getX(), ship.getY(),
                 target.getX(), target.getY())) {
             throw new ConflictException("battle.outOfRange", rules.reach(salvo));
         }
@@ -501,7 +595,8 @@ public class TacticalBattleService {
         // Офицеры флота считаются наравне с приборами корабля — п. 6: «Оружейник»
         // добавляет меткости стреляющему, «Рулевой» — уклонения цели.
         // Прицел тоже считается по уцелевшему: сожжённый компьютер больше не целится.
-        Integer attackRating = rules.attackPercent(parts) + model.officers().attack();
+        Integer attackRating = rules.attackPercent(parts) + model.officers().attack()
+                + scoutLabBonus(context, ship, target) + ship.getCrewBonus();
         Integer chance = chance(context, target, attackRating);
 
         // Залп разбирается по видам оружия: лучи, снаряды и ракеты уходят своими
@@ -509,27 +604,272 @@ public class TacticalBattleService {
         Volley volley = new Volley();
         Integer distance = rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY());
         Integer combatSpeed = rules.engineCombatSpeed(model.items());
+        List<ShipDesignRules.Item> live = parts(context, ship);
+        int round = context.battle().getRound();
         for (Map.Entry<WeaponKind, List<BattleRules.Shot>> group
                 : rules.shotsByKind(parts, combatSpeed).entrySet()) {
             // Дальность у каждого ствола своя — п. 8: тяжёлая установка достаёт туда,
             // куда ближняя оборона не дотягивается вдвое.
             List<BattleRules.Shot> reaching = group.getValue().stream()
                     .filter(shot -> Boolean.TRUE.equals(rules.shotReaches(shot, distance)))
+                    .filter(shot -> !resting(context, ship, shot))
                     .toList();
+            if (reaching.isEmpty()) {
+                continue;
+            }
+            // Двойной залп (п. 8): гиперконденсаторы удваивают лучи и снаряды, скоростные стойки —
+            // ракеты; следующий круг этот вид оружия молчит.
+            boolean beams = group.getKey() == WeaponKind.BEAM || group.getKey() == WeaponKind.PROJECTILE;
+            if (beams && rules.special(live, ShipEffectType.DOUBLE_BEAM_VOLLEY) > 0) {
+                reaching = doubled(reaching);
+                ship.setBeamsRestRound(round + 1);
+            } else if (group.getKey() == WeaponKind.MISSILE
+                    && rules.special(live, ShipEffectType.DOUBLE_MISSILE_VOLLEY) > 0) {
+                reaching = doubled(reaching);
+                ship.setMissilesRestRound(round + 1);
+            }
             if (group.getKey() == WeaponKind.MISSILE) {
                 launch(context, ship, target, reaching, attackRating, model.officers().damage(),
                         chance, volley, events);
                 continue;
             }
-            int dealt = strike(context, target, reaching, attackRating,
+            int dealt = strike(context, ship, target, reaching, attackRating,
                     model.officers().damage(), distance, volley);
             events.add(new BattleEventDto("FIRE", ship.getId(), target.getId(),
                     target.getX(), target.getY(), dealt, group.getKey(),
                     messages.get("battle.log.fire", name(context, ship), name(context, target),
-                            group.getKey(), dealt, chance), reaching.size()));
+                            messages.label(group.getKey()), dealt, chance), reaching.size()));
+        }
+        tractor(context, ship, target, distance, events);
+        if (shuttles > 0) {
+            launchShuttles(context, ship, target, shuttles, events);
+        }
+        if (bays > 0 && rules.special(parts(context, ship), ShipEffectType.FIGHTER_BAY) > 0) {
+            launchFighters(context, ship, target, events);
+            ship.setFightersBackRound(context.battle().getRound() + BattleRules.FIGHTER_REARM_ROUNDS);
         }
         ship.setFired(Boolean.TRUE);
+        // Выстрел раскрывает замаскированный корабль (п. 8).
+        ship.setLastFiredRound(context.battle().getRound());
         land(context, ship.getId(), target, volley, events);
+        stasis(context, ship, target, distance, events);
+        gyro(context, ship, target, distance, events);
+        plasmaWeb(context, ship, target, distance, events);
+        pulsar(context, ship, events);
+    }
+
+    /** Наибольшая досягаемость устройств корабля, бьющих с залпом (п. 8); ноль — их нет. */
+    private int deviceReach(Context context, BattleShipEntity ship) {
+        List<ShipDesignRules.Item> live = parts(context, ship);
+        return Math.max(rules.special(live, ShipEffectType.PULSAR),
+                Math.max(rules.special(live, ShipEffectType.GYRO), rules.special(live, ShipEffectType.PLASMA_WEB)));
+    }
+
+    /**
+     * Удар устройства мимо кривой попадания — п. 8: пульсар, гиродестабилизатор и плазменная сеть
+     * не промахиваются. {@code structural} — урон прямо в корпус, мимо щита и брони
+     * (гиродестабилизатор); иначе удар идёт через щит, как выстрел.
+     */
+    private int deviceHit(Context context, UUID shooterId, BattleShipEntity target, int damage,
+                          boolean structural, List<BattleEventDto> events) {
+        Volley volley = new Volley();
+        int through = damage;
+        if (structural) {
+            volley.piercing += damage;
+        } else {
+            BattleRules.ShieldHit hit = rules.shieldHit(damage, shieldClass(context, target)
+                    + hardShield(context, target), target.getShield());
+            target.setShield(hit.pool());
+            through = hit.through();
+            volley.damage += through;
+        }
+        land(context, shooterId, target, volley, events);
+        return through;
+    }
+
+    /** Гиродестабилизатор — п. 8: 1–4 урона корпусу на класс цели, дальность 15. */
+    private void gyro(Context context, BattleShipEntity ship, BattleShipEntity target, int distance,
+                      List<BattleEventDto> events) {
+        int reach = rules.special(parts(context, ship), ShipEffectType.GYRO);
+        if (reach <= 0 || distance > reach || !target.alive()) {
+            return;
+        }
+        int damage = rules.sizedDamage(context.random(), BattleRules.GYRO_DAMAGE_PER_CLASS,
+                rules.sizeClass(context.model(target).hull()));
+        int dealt = deviceHit(context, ship.getId(), target, damage, true, events);
+        events.add(event("FIRE", ship, target.getId(), dealt,
+                messages.get("battle.log.gyro", name(context, ship), name(context, target), dealt)));
+    }
+
+    /** Плазменная сеть — п. 8: ложится на цель в пределах 15 клеток и жжёт её каждый круг. */
+    private void plasmaWeb(Context context, BattleShipEntity ship, BattleShipEntity target, int distance,
+                           List<BattleEventDto> events) {
+        int reach = rules.special(parts(context, ship), ShipEffectType.PLASMA_WEB);
+        if (reach <= 0 || distance > reach || !target.alive()) {
+            return;
+        }
+        int strength = BattleRules.PLASMA_WEB_MIN
+                + context.random().nextInt(BattleRules.PLASMA_WEB_MAX - BattleRules.PLASMA_WEB_MIN + 1);
+        target.setPlasmaWeb(Math.max(target.getPlasmaWeb(), strength));
+        int dealt = deviceHit(context, ship.getId(), target, strength, false, events);
+        events.add(event("FIRE", ship, target.getId(), dealt,
+                messages.get("battle.log.plasmaWeb", name(context, ship), name(context, target), dealt)));
+    }
+
+    /**
+     * Пульсар — п. 8: бьёт все чужие корабли в радиусе (1–24 на класс корпуса, через щит) и
+     * сбивает чужие залпы и звенья в полёте там же.
+     */
+    private void pulsar(Context context, BattleShipEntity ship, List<BattleEventDto> events) {
+        int radius = rules.special(parts(context, ship), ShipEffectType.PULSAR);
+        if (radius <= 0) {
+            return;
+        }
+        int total = 0;
+        for (BattleShipEntity other : order(context.ships())) {
+            if (other.getSide() == ship.getSide() || !Boolean.TRUE.equals(targetable(context, other))
+                    || rules.distance(ship.getX(), ship.getY(), other.getX(), other.getY()) > radius) {
+                continue;
+            }
+            int damage = rules.sizedDamage(context.random(), BattleRules.PULSAR_DAMAGE_PER_CLASS,
+                    rules.sizeClass(context.model(other).hull()));
+            total += deviceHit(context, ship.getId(), other, damage, false, events);
+        }
+        SpaceBattleEntity battle = context.battle();
+        List<BattleMissile> flying = battle.getMissiles().stream()
+                .filter(missile -> missile.side() == ship.getSide()
+                        || rules.distance(ship.getX(), ship.getY(), missile.x(), missile.y()) > radius)
+                .toList();
+        int downed = battle.getMissiles().size() - flying.size();
+        battle.setMissiles(new ArrayList<>(flying));
+        events.add(event("FIRE", ship, ship.getId(), total,
+                messages.get("battle.log.pulsar", name(context, ship), total, downed)));
+    }
+
+    /**
+     * Стазисное поле — п. 8 (13.10.2026, перенос MOO II): бьёт вместе с залпом по той же цели в
+     * пределах своей дальности и замораживает её до конца следующего круга — ни хода, ни выстрела,
+     * и атаковать её нельзя.
+     */
+    private void stasis(Context context, BattleShipEntity ship, BattleShipEntity target, int distance,
+                        List<BattleEventDto> events) {
+        int reach = rules.special(parts(context, ship), ShipEffectType.STASIS);
+        if (reach <= 0 || distance > reach || !target.alive()) {
+            return;
+        }
+        target.setFrozenUntilRound(context.battle().getRound() + 1);
+        events.add(event("STASIS", ship, target.getId(), 0,
+                messages.get("battle.log.stasis", name(context, ship), name(context, target))));
+    }
+
+    /** Заморожен ли корабль стазисом сейчас (п. 8). */
+    private Boolean frozen(Context context, BattleShipEntity ship) {
+        Integer until = ship.getFrozenUntilRound();
+        return until != null && context.battle().getRound() <= until;
+    }
+
+    /**
+     * Замаскирован ли корабль сейчас — п. 8: маскировка стоит и цела, а корабль не стрелял в
+     * прошлом круге и в этом («must wait one turn without firing to recloak»).
+     */
+    private Boolean cloaked(Context context, BattleShipEntity ship) {
+        if (rules.special(parts(context, ship), ShipEffectType.CLOAK) <= 0) {
+            return Boolean.FALSE;
+        }
+        Integer fired = ship.getLastFiredRound();
+        return fired == null || context.battle().getRound() > fired + 1;
+    }
+
+    /** Невидим ли корабль под фазовым плащом: замаскирован и не вышли его первые круги (п. 8). */
+    private Boolean phased(Context context, BattleShipEntity ship) {
+        int rounds = rules.special(parts(context, ship), ShipEffectType.PHASING);
+        return rounds > 0 && context.battle().getRound() <= rounds && Boolean.TRUE.equals(cloaked(context, ship));
+    }
+
+    /** Можно ли атаковать корабль: жив, не заморожен и не скрыт фазовым плащом (п. 8). */
+    private Boolean targetable(Context context, BattleShipEntity ship) {
+        return ship.alive() && !Boolean.TRUE.equals(frozen(context, ship))
+                && !Boolean.TRUE.equals(phased(context, ship));
+    }
+
+    /** Прибавка маскировки к защите от лучей (п. 8): +80, пока корабль замаскирован. */
+    private Integer cloakDefence(Context context, BattleShipEntity ship) {
+        return Boolean.TRUE.equals(cloaked(context, ship))
+                ? rules.special(parts(context, ship), ShipEffectType.CLOAK) : 0;
+    }
+
+    /** Класс щита корабля сейчас: разбитый генератор не срезает ничего (п. 8). */
+    private Integer shieldClass(Context context, BattleShipEntity ship) {
+        if (Boolean.TRUE.equals(ship.systemDamaged(BattleRules.SHIELD_SYSTEM))) {
+            return 0;
+        }
+        Integer value = context.model(ship).stats().shieldClass();
+        return value == null ? 0 : value;
+    }
+
+    /** Сколько урона срезают прочные щиты сверх класса (п. 8): у генератора свой модуль. */
+    private Integer hardShield(Context context, BattleShipEntity ship) {
+        return rules.special(parts(context, ship), ShipEffectType.HARD_SHIELD);
+    }
+
+    /** Молчит ли этот выстрел в нынешнем круге после двойного залпа (п. 8). */
+    private boolean resting(Context context, BattleShipEntity ship, BattleRules.Shot shot) {
+        Integer round = context.battle().getRound();
+        if (shot.kind() == WeaponKind.MISSILE) {
+            return round.equals(ship.getMissilesRestRound());
+        }
+        return Boolean.TRUE.equals(rules.beamLike(shot)) && round.equals(ship.getBeamsRestRound());
+    }
+
+    /** Все стволы корабля молчат после двойного залпа — ходу нечем стрелять (п. 8). */
+    private Boolean allResting(Context context, BattleShipEntity ship) {
+        List<BattleRules.Shot> all = shots(context, ship);
+        return !all.isEmpty() && all.stream().allMatch(shot -> resting(context, ship, shot));
+    }
+
+    private static List<BattleRules.Shot> doubled(List<BattleRules.Shot> shots) {
+        List<BattleRules.Shot> twice = new ArrayList<>(shots);
+        twice.addAll(shots);
+        return twice;
+    }
+
+    /**
+     * Разведлаборатория против чудищ — п. 8 (13.10.2026, перенос MOO II): «+20 for all ship in
+     * fleet against space monsters and the Guardian for Scout Lab». Достаточно одной уцелевшей
+     * лаборатории на своей стороне поля.
+     */
+    private Integer scoutLabBonus(Context context, BattleShipEntity ship, BattleShipEntity target) {
+        if (!Boolean.TRUE.equals(context.model(target).hull().monster())) {
+            return 0;
+        }
+        boolean lab = context.ships().stream()
+                .filter(one -> one.alive() && one.getSide() == ship.getSide())
+                .anyMatch(one -> rules.special(parts(context, one), ShipEffectType.SCOUT_LAB) > 0);
+        return lab ? SCOUT_LAB_MONSTER_ATTACK : 0;
+    }
+
+    /** Прибавка разведлаборатории к меткости против чудищ — число оригинала. */
+    private static final int SCOUT_LAB_MONSTER_ATTACK = 20;
+
+    /**
+     * Тяговые лучи — п. 8: бьют вместе с залпом по той же цели и держат её до конца круга.
+     * Луч на класс корпуса обездвиживает, лучи разных кораблей складываются. Платформу и чудище
+     * не держат: платформа и так стоит, а чудище — не корабль.
+     */
+    private void tractor(Context context, BattleShipEntity ship, BattleShipEntity target, int distance,
+                         List<BattleEventDto> events) {
+        int beams = rules.tractorBeams(parts(context, ship));
+        Model their = context.model(target);
+        if (beams <= 0 || distance > BattleRules.TRACTOR_RANGE || !target.alive()
+                || Boolean.TRUE.equals(their.hull().platform()) || Boolean.TRUE.equals(their.hull().monster())) {
+            return;
+        }
+        target.setTractored(target.getTractored() + beams);
+        boolean held = target.getTractored() >= rules.sizeClass(their.hull());
+        events.add(event("TRACTOR", ship, target.getId(), beams,
+                messages.get(held ? "battle.log.tractorHeld" : "battle.log.tractor",
+                        name(context, ship), name(context, target), target.getTractored(),
+                        rules.sizeClass(their.hull()))));
     }
 
     /** Что залп сделал с целью, пока это не снято с её брони и корпуса. */
@@ -538,13 +878,37 @@ public class TacticalBattleService {
         private int piercing;
         private int intercepted;
         private boolean engineHit;
+        /** Пехота на борту цели, убитая нейтронным бластером — п. 8, абордаж. */
+        private int marinesKilled;
+        /** Во сколько раз чаще выбивается система — прицел «Ахилл» (п. 8). */
+        private int systemOdds = 1;
+    }
+
+    /**
+     * Бросок попадания стрелка с полосой (пункт 86): промах растит его счёт, попадание сбрасывает.
+     * Стрелка уже нет (ракета пережила его) — бросок обычный.
+     */
+    private Boolean streakHit(Context context, BattleShipEntity shooter, Integer chance) {
+        if (shooter == null) {
+            return rules.rollHit(context.random(), chance);
+        }
+        int misses = shooter.getMissStreak() == null ? 0 : shooter.getMissStreak();
+        Boolean hit = StreakRules.roll(context.random(), chance, misses);
+        shooter.setMissStreak(Boolean.TRUE.equals(hit) ? 0 : misses + 1);
+        return hit;
+    }
+
+    /** Корабль поля по идентификатору; пусто — его уже нет на поле. */
+    private BattleShipEntity shipOf(Context context, java.util.UUID shipId) {
+        return shipId == null ? null : context.ships().stream()
+                .filter(one -> shipId.equals(one.getId())).findFirst().orElse(null);
     }
 
     /** Шанс попасть по цели — для строки журнала: решает его кривая попадания. */
     private Integer chance(Context context, BattleShipEntity target, Integer attackRating) {
         Model targetModel = context.model(target);
         Integer defenceRating = rules.defenceBonus(targetModel.hull(), targetModel.stats())
-                + targetModel.officers().defence();
+                + targetModel.officers().defence() + cloakDefence(context, target) + target.getCrewBonus();
         return rules.hitChancePercent(targetModel.hull(), attackRating, defenceRating);
     }
 
@@ -557,14 +921,35 @@ public class TacticalBattleService {
      *
      * @return сколько урона дошло до цели — для события залпа
      */
-    private int strike(Context context, BattleShipEntity target, List<BattleRules.Shot> shots,
+    private int strike(Context context, BattleShipEntity shooter, BattleShipEntity target, List<BattleRules.Shot> shots,
                        Integer attackRating, Integer damagePercent, Integer distance, Volley volley) {
         Model targetModel = context.model(target);
         Integer defenceRating = rules.defenceBonus(targetModel.hull(), targetModel.stats())
-                + targetModel.officers().defence();
+                + targetModel.officers().defence() + cloakDefence(context, target) + target.getCrewBonus();
+        boolean cloakedTarget = Boolean.TRUE.equals(cloaked(context, target));
         // Ближняя оборона цели сбивает чужие ракеты — п. 8: её стволы считаются один раз
         // на залп, а бросок идёт на каждую ракету. Разбитые стволы не сбивают ничего.
         Integer defenceGuns = rules.pointDefenceGuns(parts(context, target));
+        // Модули стрелка (13.10.2026, перенос MOO II): фокусировщик энергии, прицел дальнего
+        // боя и «Ахилл». Берутся у уцелевших систем — выбитый модуль не работает. У ракеты,
+        // пережившей своего стрелка, модулей нет: прицелы корабля ведут только лучи.
+        List<ShipDesignRules.Item> shooterParts = shooter == null || !shooter.alive()
+                ? List.of() : parts(context, shooter);
+        int beamPercent = rules.special(shooterParts, ShipEffectType.BEAM_DAMAGE_PERCENT);
+        int rangeDivisor = Math.max(1, rules.special(shooterParts, ShipEffectType.LONG_RANGE_TARGETING));
+        int achilles = rules.special(shooterParts, ShipEffectType.ARMOUR_BYPASS);
+        // Тяжёлая броня останавливает «Ахилла»: «can be bypassed... (Heavy Armor blocks)».
+        boolean heavyArmour = rules.special(parts(context, target), ShipEffectType.ARMOUR_PERCENT) > 0;
+        if (achilles > 0) {
+            volley.systemOdds = Math.max(volley.systemOdds, achilles);
+        }
+        // Устройства цели (перенос MOO II, п. 8): смещение уводит любой выстрел, поле молний
+        // жжёт ракеты, торпеды и истребители, прочные щиты срезают удар и не пропускают
+        // щитопробивающее оружие.
+        List<ShipDesignRules.Item> targetParts = parts(context, target);
+        int displacement = rules.special(targetParts, ShipEffectType.DISPLACEMENT);
+        int lightning = rules.special(targetParts, ShipEffectType.LIGHTNING_PERCENT);
+        int hard = hardShield(context, target);
         int dealt = 0;
         for (BattleRules.Shot shot : shots) {
             Integer interception = rules.interceptChancePercent(defenceGuns, shot);
@@ -573,24 +958,52 @@ public class TacticalBattleService {
                 volley.intercepted++;
                 continue;
             }
+            if (lightning > 0 && shot.kind() == WeaponKind.MISSILE
+                    && Boolean.TRUE.equals(rules.rollHit(context.random(), lightning))) {
+                volley.intercepted++;
+                continue;
+            }
+            if (displacement > 0 && Boolean.TRUE.equals(rules.rollHit(context.random(), displacement))) {
+                continue;
+            }
             Integer shotChance = rules.shotHitChancePercent(targetModel.hull(),
                     attackRating, defenceRating, shot, targetModel.stats().missileEvasion());
-            if (!Boolean.TRUE.equals(rules.rollHit(context.random(), shotChance))) {
+            // Замаскированный корабль: «+50% chance for missiles and torpedoes to miss» (п. 8).
+            if (cloakedTarget && shot.kind() == WeaponKind.MISSILE) {
+                shotChance = shotChance / 2;
+            }
+            // Полоса промахов сглажена (пункт 86): у стрелка свой счёт, средний шанс — показанный.
+            if (!Boolean.TRUE.equals(streakHit(context, shooter, shotChance))) {
                 continue;
             }
             // Луч слабеет в пути (п. 8), а «артиллерист» усиливает каждый выстрел до
             // щита, а не после: в MOO II он добавляет урона оружию, а щит гасит то,
             // что до него долетело.
-            Integer reached = rules.damageAtRange(shot, distance);
+            Integer reached = rules.focused(shot,
+                    rules.damageAtRange(shot, distance / rangeDivisor), beamPercent);
             Integer damaged = reached * (100 + damagePercent) / 100;
-            Integer through = Boolean.TRUE.equals(shot.piercesShield())
-                    ? damaged
-                    : rules.damageThroughShield(damaged, target.getShield());
-            // Обволакивающий удар (ENV) приходится на все стороны корабля разом, и
-            // щит гасит его на каждой по отдельности — п. 8.
-            through = through * rules.envelopingFactor(shot);
+            // Обволакивающий удар (ENV) приходится на все стороны корабля разом, и щит гасит
+            // его на каждой по отдельности — п. 8. Щит оригинала (13.10.2026): класс срезает с
+            // каждого удара, запас поглощает остаток и падает, когда кончится.
+            int sides = rules.envelopingFactor(shot);
+            int through = 0;
+            for (int side = 0; side < sides; side++) {
+                if (Boolean.TRUE.equals(shot.piercesShield()) && hard == 0) {
+                    through += damaged;
+                    continue;
+                }
+                BattleRules.ShieldHit hit = rules.shieldHit(damaged, shieldClass(context, target) + hard,
+                        target.getShield());
+                target.setShield(hit.pool());
+                through += hit.through();
+            }
             dealt += through;
-            if (Boolean.TRUE.equals(shot.piercesArmour())) {
+            // Нейтронный бластер выжигает пехоту — п. 8: пехотинец за каждые N очков сквозь щит.
+            if (through > 0 && shot.marineKill() != null && shot.marineKill() > 0) {
+                volley.marinesKilled += through / shot.marineKill();
+            }
+            boolean bypass = achilles > 0 && !heavyArmour && Boolean.TRUE.equals(rules.beamLike(shot));
+            if (Boolean.TRUE.equals(shot.piercesArmour()) || bypass) {
                 volley.piercing += through;
             } else {
                 volley.damage += through;
@@ -639,11 +1052,11 @@ public class TacticalBattleService {
             }
             if (arrives) {
                 events.addAll(downs);
-                int dealt = strike(context, target, path.left(), attackRating, damagePercent, 0, volley);
+                int dealt = strike(context, ship, target, path.left(), attackRating, damagePercent, 0, volley);
                 events.add(new BattleEventDto("FIRE", ship.getId(), target.getId(),
                         target.getX(), target.getY(), dealt, WeaponKind.MISSILE,
                         messages.get("battle.log.fire", shooter, name(context, target),
-                                WeaponKind.MISSILE, dealt, chance), path.left().size()));
+                                messages.label(WeaponKind.MISSILE), dealt, chance), path.left().size()));
                 continue;
             }
             battle.setMissileCounter(battle.getMissileCounter() + 1);
@@ -674,12 +1087,13 @@ public class TacticalBattleService {
             return;
         }
         List<BattleMissile> still = new ArrayList<>();
-        for (BattleMissile missile : battle.getMissiles()) {
+        for (BattleMissile launched : battle.getMissiles()) {
+            BattleMissile missile = retargeted(context, launched);
             BattleShipEntity target = shipById(context, missile.targetShipId());
             BattleShipEntity shooterShip = shipById(context, missile.shooterShipId());
             String shooter = shooterShip == null ? context.unknownOwner() : name(context, shooterShip);
             int count = missile.shots().size();
-            if (target == null || !target.alive()) {
+            if (target == null || !Boolean.TRUE.equals(targetable(context, target))) {
                 events.add(new BattleEventDto("MISSILE_LOST", missile.shooterShipId(), null,
                         missile.x(), missile.y(), null, WeaponKind.MISSILE,
                         messages.get("battle.log.missileNoTarget", shooter, count),
@@ -698,15 +1112,21 @@ public class TacticalBattleService {
                 continue;
             }
             int left = path.left().size();
+            if (cell[0] == target.getX() && cell[1] == target.getY() && Boolean.TRUE.equals(missile.shuttles())) {
+                events.addAll(downs);
+                shuttlesArrive(context, missile.shooterShipId(), missile.side(), target,
+                        missile.marines() * left / count, missile.x(), missile.y(), events);
+                continue;
+            }
             if (cell[0] == target.getX() && cell[1] == target.getY()) {
                 events.addAll(downs);
                 Volley volley = new Volley();
-                int dealt = strike(context, target, path.left(), missile.attackRating(),
-                        missile.damagePercent(), 0, volley);
+                int dealt = strike(context, shipOf(context, missile.shooterShipId()), target, path.left(),
+                        missile.attackRating(), missile.damagePercent(), 0, volley);
                 events.add(new BattleEventDto("FIRE", missile.shooterShipId(), target.getId(),
                         target.getX(), target.getY(), dealt, WeaponKind.MISSILE,
                         messages.get("battle.log.fire", shooter, name(context, target),
-                                WeaponKind.MISSILE, dealt,
+                                messages.label(WeaponKind.MISSILE), dealt,
                                 chance(context, target, missile.attackRating())),
                         left, missile.x(), missile.y()));
                 land(context, missile.shooterShipId(), target, volley, events);
@@ -732,16 +1152,52 @@ public class TacticalBattleService {
     }
 
     /**
+     * Наведение Dauntless — п. 8 (13.10.2026, перенос MOO II): ракета, чья цель погибла или
+     * ушла с поля, «redirect themselves at the nearest enemy ship or base instead of
+     * self-destructing». Достижение империи-хозяина стороны; шаттлы не перенацеливаются —
+     * абордаж идёт к названному кораблю.
+     */
+    private BattleMissile retargeted(Context context, BattleMissile missile) {
+        BattleShipEntity target = shipById(context, missile.targetShipId());
+        if (target != null && Boolean.TRUE.equals(targetable(context, target))
+                || Boolean.TRUE.equals(missile.shuttles())) {
+            return missile;
+        }
+        UUID ownerId = missile.side() == BattleSide.ATTACKER
+                ? context.battle().getAttackerPlayerId() : context.battle().getDefenderPlayerId();
+        PlayerEntity owner = context.player(ownerId);
+        if (owner == null || !shipDesignService.technologies(owner).contains(DAUNTLESS_GUIDANCE)) {
+            return missile;
+        }
+        return context.ships().stream()
+                .filter(one -> Boolean.TRUE.equals(targetable(context, one)) && one.getSide() != missile.side())
+                .min(Comparator.comparingInt((BattleShipEntity one) ->
+                                rules.distance(missile.x(), missile.y(), one.getX(), one.getY()))
+                        .thenComparing(BattleShipEntity::getOrdinal))
+                .map(next -> new BattleMissile(missile.id(), missile.side(), missile.shooterShipId(),
+                        next.getId(), missile.x(), missile.y(), missile.speed(), missile.fuel(),
+                        missile.attackRating(), missile.damagePercent(), missile.shots(), missile.marines()))
+                .orElse(missile);
+    }
+
+    /** Код достижения, перенацеливающего ракеты, — Computers, уровень 2. */
+    private static final String DAUNTLESS_GUIDANCE = "dauntless-guidance-system";
+
+    /**
      * Огонь по ракете в полёте — backlog-promo, пункт 30, правило MOO II: ракета — предмет
      * на поле, и корабль вправе навести на неё свои стволы вместо корабля противника.
      * <p>
      * Стреляют выбранные строки оружия, как и по кораблю, но только лучи и снаряды: ракетой
      * ракету не сбить. Каждый выстрел, дотянувшийся до клетки залпа, сбивает одну ракету с
-     * шансом {@link BattleRules#missileShotChancePercent}. Залп кончает ход — так же, как
-     * выстрел по кораблю: ход корабля стоит одного залпа, по чему бы он ни был.
+     * шансом {@link BattleRules#missileShotChancePercent}. Противоракеты, если они стоят на
+     * корабле, бьют ПЕРВЫМИ и по каждой ракете залпа ({@link BattleRules#antiMissileChancePercent});
+     * строкой оружия они не числятся и выбором строк не гасятся. Залп кончает ход — так же,
+     * как выстрел по кораблю: ход корабля стоит одного залпа, по чему бы он ни был.
+     *
+     * @param rows выбранные строки оружия; {@code null} — всё оружие
      */
     private void fireAtMissile(Context context, BattleShipEntity ship, Integer missileId,
-                               List<Integer> weaponRows, List<BattleEventDto> events) {
+                               Set<Integer> rows, List<BattleEventDto> events) {
         if (Boolean.TRUE.equals(ship.getFired())) {
             throw new ConflictException("battle.alreadyFired");
         }
@@ -754,26 +1210,40 @@ public class TacticalBattleService {
             throw new ConflictException("battle.friendlyFire");
         }
         Model model = context.model(ship);
-        List<ShipDesignRules.Item> parts = weaponRows == null || weaponRows.isEmpty()
-                ? parts(context, ship)
-                : rules.partsLeft(model.items(), ship.getDamagedSystems(), new HashSet<>(weaponRows));
+        List<ShipDesignRules.Item> all = parts(context, ship);
+        List<ShipDesignRules.Item> parts = rows == null
+                ? all
+                : rules.partsLeft(model.items(), ship.getDamagedSystems(), rows);
         List<BattleRules.Shot> guns = rules.shots(parts, rules.engineCombatSpeed(model.items())).stream()
                 .filter(shot -> shot.kind() != WeaponKind.MISSILE)
                 .toList();
-        if (guns.isEmpty()) {
+        Integer antiMissile = rules.antiMissilePercent(all);
+        if (guns.isEmpty() && antiMissile == 0) {
             throw new ConflictException("battle.noGunsForMissile");
         }
         int distance = rules.distance(ship.getX(), ship.getY(), missile.x(), missile.y());
         List<BattleRules.Shot> reaching = guns.stream()
                 .filter(shot -> Boolean.TRUE.equals(rules.shotReaches(shot, distance)))
                 .toList();
-        if (reaching.isEmpty()) {
-            throw new ConflictException("battle.outOfRange", rules.reach(guns));
+        Integer rocketChance = rules.antiMissileChancePercent(antiMissile, distance);
+        if (reaching.isEmpty() && rocketChance == 0) {
+            int reach = Math.max(guns.isEmpty() ? 0 : rules.reach(guns),
+                    (antiMissile - 1) / BattleRules.ANTI_MISSILE_STEP_PERCENT);
+            throw new ConflictException("battle.outOfRange", reach);
         }
 
         Integer attackRating = rules.attackPercent(parts) + model.officers().attack();
         List<BattleRules.Shot> left = new ArrayList<>(missile.shots());
         int downed = 0;
+        if (rocketChance > 0) {
+            for (Iterator<BattleRules.Shot> rocket = left.iterator(); rocket.hasNext(); ) {
+                rocket.next();
+                if (Boolean.TRUE.equals(rules.rollHit(context.random(), rocketChance))) {
+                    rocket.remove();
+                    downed++;
+                }
+            }
+        }
         for (BattleRules.Shot gun : reaching) {
             if (left.isEmpty()) {
                 break;
@@ -781,12 +1251,13 @@ public class TacticalBattleService {
             BattleRules.Shot rocket = left.get(0);
             Integer chance = rules.missileShotChancePercent(attackRating + gun.attackPercent(),
                     missile.speed(), rocket.missileArmourPercent());
-            if (Boolean.TRUE.equals(rules.rollHit(context.random(), chance))) {
+            if (Boolean.TRUE.equals(streakHit(context, ship, chance))) {
                 left.remove(0);
                 downed++;
             }
         }
         ship.setFired(Boolean.TRUE);
+        ship.setLastFiredRound(context.battle().getRound());
 
         List<BattleMissile> missiles = new ArrayList<>();
         for (BattleMissile one : battle.getMissiles()) {
@@ -795,14 +1266,453 @@ public class TacticalBattleService {
             } else if (!left.isEmpty()) {
                 missiles.add(new BattleMissile(one.id(), one.side(), one.shooterShipId(),
                         one.targetShipId(), one.x(), one.y(), one.speed(), one.fuel(),
-                        one.attackRating(), one.damagePercent(), List.copyOf(left)));
+                        one.attackRating(), one.damagePercent(), List.copyOf(left),
+                        one.shuttles() ? one.marines() * left.size() / one.shots().size() : null));
             }
         }
         battle.setMissiles(missiles);
+        // Противоракеты рисуются ракетой: на поле их отличает от лучей именно это.
+        WeaponKind kind = rocketChance > 0 ? WeaponKind.MISSILE : reaching.get(0).kind();
         events.add(new BattleEventDto("INTERCEPT", ship.getId(), missile.shooterShipId(),
-                missile.x(), missile.y(), downed, reaching.get(0).kind(),
-                messages.get("battle.log.shotAtMissile", name(context, ship), downed,
-                        missile.shots().size())));
+                missile.x(), missile.y(), downed, kind,
+                messages.get(rocketChance > 0 ? "battle.log.antiMissile" : "battle.log.shotAtMissile",
+                        name(context, ship), downed, missile.shots().size())));
+    }
+
+    /**
+     * Сколько ракет (в сотых долях) должен ждаться от перехвата, чтобы ИИ потратил на него ход, —
+     * половина ракеты. Реконструкция: см. {@link #interceptForAi}.
+     */
+    private static final int AI_INTERCEPT_MIN_CENTIS = 50;
+
+    /**
+     * Можно ли взять этот корабль на абордаж (или устроить на нём рейд) этим — п. 8, правило
+     * оригинала: «the ship to be boarded must have their shields down and have been
+     * immobilized, and the ship commencing the boarding action must be nearby».
+     * <ul>
+     *   <li><b>вплотную</b> — у цели опущен щит и она обездвижена (разбит двигатель или
+     *       держат тяговые лучи);</li>
+     *   <li><b>телепортом</b> — с его дальности, у цели опущен щит, обездвиживать не нужно
+     *       («beams Marines into enemy ships and Star Bases whose shields are down»);</li>
+     *   <li><b>телепаты</b> — ни щит, ни ход цели им не помеха.</li>
+     * </ul>
+     * Базы и платформы берут так же — «beams Marines into enemy ships and Star Bases»: взятая
+     * база воюет за захватчика до конца боя, а после него для хозяина потеряна (здание колонии
+     * с захватчиком не улетает, и он его не удерживает — реконструкция). Чудищ не берут никак.
+     * {@code null} — можно, иначе ключ отказа.
+     */
+    private String boardingRefusal(Context context, BattleShipEntity ship, BattleShipEntity target,
+                                   Boolean freely, Boolean raid) {
+        if (Boolean.TRUE.equals(ship.getFired())) {
+            return "battle.alreadyFired";
+        }
+        if (!target.alive() || target.getSide() == ship.getSide()) {
+            return "battle.board.notEnemy";
+        }
+        Model own = context.model(ship);
+        Model their = context.model(target);
+        if (platform(own) || Boolean.TRUE.equals(own.hull().monster()) || ship.getMarines() <= 0) {
+            return "battle.board.noMarines";
+        }
+        if (Boolean.TRUE.equals(their.hull().monster())) {
+            return "battle.board.notShip";
+        }
+        int distance = rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY());
+        int range = rules.boardingRange(parts(context, ship));
+        if (distance > range) {
+            return range > BattleRules.BOARDING_RANGE ? "battle.board.outOfTransporter" : "battle.board.notAdjacent";
+        }
+        // Прочные щиты не пускают чужой телепорт даже опущенными (п. 8, перенос MOO II).
+        if (distance > BattleRules.BOARDING_RANGE && hardShield(context, target) > 0) {
+            return "battle.board.hardShields";
+        }
+        if (!Boolean.TRUE.equals(freely)) {
+            if (target.getShield() > 0) {
+                return "battle.board.shieldsUp";
+            }
+            // Телепорт обходится без обездвиживания; вплотную цель обязана стоять. Платформа
+            // не ходит по устройству, и рейд на неё условия хода не спрашивает.
+            if (distance > BattleRules.BOARDING_RANGE || platform(their)) {
+                return null;
+            }
+            if (!Boolean.TRUE.equals(immobile(context, target))
+                    && rules.transporterRange(parts(context, ship)) == 0) {
+                return "battle.board.moving";
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Абордаж и рейд — п. 8, кнопка BOARD оригинала («to either raid or attempt to capture an
+     * enemy ship»). Вся пехота корабля бьётся с командой цели расчётом наземного боя
+     * ({@code GroundCombatService.boarding}).
+     * <ul>
+     *   <li><b>захват</b>: взяли — корабль переходит к захватчику прямо в бою (хозяин,
+     *       сторона, команда — уцелевшие абордажники), со следующего круга он ходит и стреляет
+     *       за него; не взяли — абордажники погибли все;</li>
+     *   <li><b>рейд</b>: взяли верх — каждый уцелевший разбивает по системе («raiding damages
+     *       ship systems and weapons») и возвращается на свой корабль; не взяли — погибли.</li>
+     * </ul>
+     * Ход кончается в обоих случаях.
+     */
+    private void board(Context context, BattleShipEntity ship, BattleShipEntity target, Boolean raid,
+                       List<BattleEventDto> events) {
+        PlayerEntity owner = context.player(ship.getOwnerPlayerId());
+        PlayerEntity defender = context.player(target.getOwnerPlayerId());
+        if (owner == null || defender == null) {
+            throw new ConflictException("battle.board.notShip");
+        }
+        String refusal = boardingRefusal(context, ship, target, groundCombat.boardsFreely(owner), raid);
+        if (refusal != null) {
+            throw new ConflictException(refusal);
+        }
+        int marines = ship.getMarines();
+        ship.setMarines(0);
+        ship.setFired(Boolean.TRUE);
+        resolveBoarding(context, ship.getId(), ship, owner, marines, target, defender, raid, events);
+    }
+
+    /**
+     * Исход абордажа — общий у пехоты с корабля и у долетевших шаттлов. {@code boarder} —
+     * корабль, на который рейд возвращает уцелевших; у шаттлов его может уже не быть.
+     */
+    private void resolveBoarding(Context context, UUID boarderId, BattleShipEntity boarder, PlayerEntity owner,
+                                 int marines, BattleShipEntity target, PlayerEntity defender, Boolean raid,
+                                 List<BattleEventDto> events) {
+        GroundCombatService.Outcome outcome = groundCombat.boarding(marines, owner, target.getMarines(), defender,
+                rules.special(parts(context, target), ShipEffectType.MARINE_DEFENSE_PERCENT));
+        String who = boarder == null ? context.name(owner.getId()) : name(context, boarder);
+        String prize = name(context, target);
+        BattleShipEntity anchor = boarder == null ? target : boarder;
+        if (!Boolean.TRUE.equals(outcome.captured())) {
+            target.setMarines(outcome.survivors());
+            events.add(new BattleEventDto(Boolean.TRUE.equals(raid) ? "RAID" : "BOARD", boarderId, target.getId(),
+                    target.getX(), target.getY(), 0, null,
+                    messages.get("battle.log.boardRepelled", who, prize, outcome.survivors())));
+            return;
+        }
+        if (Boolean.TRUE.equals(raid)) {
+            // Каждый уцелевший громит по системе — пока есть что громить.
+            int wrecked = 0;
+            for (int i = 0; i < outcome.survivors(); i++) {
+                String system = rules.pickSystem(context.random(),
+                        rules.liveSystems(context.model(target).items(), target.getDamagedSystems()));
+                if (system == null) {
+                    break;
+                }
+                target.damageSystem(system);
+                wrecked++;
+            }
+            target.setMarines(0);
+            if (boarder != null && boarder.alive()) {
+                boarder.setMarines(boarder.getMarines() + outcome.survivors());
+            }
+            events.add(new BattleEventDto("RAID", boarderId, target.getId(),
+                    target.getX(), target.getY(), wrecked, null,
+                    messages.get("battle.log.raided", who, prize, wrecked, outcome.survivors())));
+            return;
+        }
+        if (activity != null) {
+            activity.record(context.battle().getGameId(), owner.getId(), EmpireActivityService.BOARDING);
+        }
+        target.setOwnerPlayerId(owner.getId());
+        target.setSide(anchor == target ? opposite(target.getSide()) : anchor.getSide());
+        target.setCaptured(Boolean.TRUE);
+        target.setMarines(outcome.survivors());
+        target.setTractored(0);
+        // Взятый корабль в этом круге уже не ходит: команда только что сменилась.
+        target.setFired(Boolean.TRUE);
+        target.setMoved(Math.max(target.getMoved(), speed(context, target)));
+        events.add(new BattleEventDto("BOARD", boarderId, target.getId(),
+                target.getX(), target.getY(), 1, null,
+                messages.get("battle.log.boarded", who, prize, outcome.survivors())));
+    }
+
+    /**
+     * Сколько шаттлов корабль пустит залпом по этой цели — п. 8: отсеков × шаттлов, но не
+     * больше, чем пехоты на борту по два на шаттл, и только по тому, кого берут абордажем или
+     * рейдом, и если шаттлы долетят на своём топливе. Ноль — шаттлов нет или пускать некуда.
+     */
+    private int shuttlesFor(Context context, BattleShipEntity ship, BattleShipEntity target) {
+        List<ShipDesignRules.Item> parts = parts(context, ship);
+        int bays = rules.shuttles(parts);
+        Model their = context.model(target);
+        if (bays <= 0 || ship.getMarines() < BattleRules.SHUTTLE_MARINES
+                || target.getSide() == ship.getSide() || !target.alive()
+                || Boolean.TRUE.equals(their.hull().monster())) {
+            return 0;
+        }
+        int reach = rules.shuttleSpeed(parts) * BattleRules.MISSILE_FUEL_TURNS;
+        if (rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY()) > reach) {
+            return 0;
+        }
+        return Math.min(bays, ship.getMarines() / BattleRules.SHUTTLE_MARINES);
+    }
+
+    /**
+     * Штурмовые шаттлы уходят к цели залпа — п. 8: «shuttles carry troops that automatically
+     * board enemy ships or Starbases when in range, trying to either raid or capture them».
+     * Летят они как ракеты — залпом в полёте ({@link BattleMissile#shuttles}) со своей
+     * скоростью ({@link BattleRules#shuttleSpeed}), и ближняя оборона сбивает их так же;
+     * пехота уходит с борта сразу. Ближе своей скорости — долетают тут же.
+     */
+    /**
+     * Звенья истребителей уходят к цели — п. 8 (13.10.2026, перенос MOO II): по звену с каждого
+     * отсека. Звено летит, как ракетный залп, и его сбивает ближняя оборона на пути; долетевшее
+     * бьёт сразу, а не долетевшее в этот круг остаётся на поле залпом в полёте.
+     */
+    private void launchFighters(Context context, BattleShipEntity ship, BattleShipEntity target,
+                                List<BattleEventDto> events) {
+        PlayerEntity owner = context.player(ship.getOwnerPlayerId());
+        if (owner == null) {
+            return;
+        }
+        Set<String> known = shipDesignService.technologies(owner);
+        int beam = fighterBeam(known);
+        int bomb = fighterBomb(known);
+        List<ShipDesignRules.Item> live = parts(context, ship);
+        Integer attackRating = BattleRules.FIGHTER_ATTACK + rules.attackPercent(live)
+                + context.model(ship).officers().attack();
+        for (ShipDesignRules.Item item : live) {
+            int kind = item.component().amount(ShipEffectType.FIGHTER_BAY);
+            for (int bay = 0; kind > 0 && bay < item.count(); bay++) {
+                int speed = rules.fighterSpeed(live, kind);
+                List<BattleRules.Shot> craft = rules.fighterShots(kind, beam, bomb, speed, fighterArmour(known));
+                if (craft.isEmpty()) {
+                    continue;
+                }
+                int[] cell = rules.flightStep(ship.getX(), ship.getY(), target.getX(), target.getY(), speed);
+                List<BattleEventDto> downs = new ArrayList<>();
+                PathResult path = interceptOnPath(context, ship.getSide(), ship.getId(), target.getId(),
+                        ship.getX(), ship.getY(), cell[0], cell[1], craft, downs);
+                events.add(new BattleEventDto("LAUNCH", ship.getId(), target.getId(), cell[0], cell[1], null,
+                        WeaponKind.MISSILE, messages.get("battle.log.fightersLaunched", name(context, ship),
+                                name(context, target)), craft.size()));
+                events.addAll(downs);
+                if (path.left().isEmpty()) {
+                    continue;
+                }
+                if (cell[0] == target.getX() && cell[1] == target.getY()) {
+                    Volley volley = new Volley();
+                    int dealt = strike(context, ship, target, path.left(), attackRating, 0, 0, volley);
+                    events.add(new BattleEventDto("FIRE", ship.getId(), target.getId(),
+                            target.getX(), target.getY(), dealt, WeaponKind.MISSILE,
+                            messages.get("battle.log.fightersHit", name(context, ship), name(context, target), dealt),
+                            path.left().size()));
+                    land(context, ship.getId(), target, volley, events);
+                    continue;
+                }
+                SpaceBattleEntity battle = context.battle();
+                List<BattleMissile> flying = new ArrayList<>(battle.getMissiles());
+                battle.setMissileCounter(battle.getMissileCounter() + 1);
+                flying.add(new BattleMissile(battle.getMissileCounter(), ship.getSide(), ship.getId(), target.getId(),
+                        cell[0], cell[1], speed, BattleRules.FIGHTER_FUEL_TURNS - 1, attackRating, 0, path.left()));
+                battle.setMissiles(flying);
+            }
+        }
+    }
+
+    /**
+     * Луч истребителя — п. 8: лучший изученный ствол, который берёт модификацию ближней обороны,
+     * «normal damage +1 (Mass Drivers being the exception)». Ноль — такого ствола нет.
+     */
+    private int fighterBeam(Set<String> known) {
+        com.sddnw.server.domain.WeaponModification pointDefence = shipCatalog.modification("point-defense");
+        return shipCatalog.components(ShipComponentSlot.WEAPON).stream()
+                .filter(weapon -> weapon.weaponKind() == WeaponKind.BEAM || weapon.weaponKind() == WeaponKind.PROJECTILE)
+                .filter(weapon -> weapon.requiredTechCode() == null || known.contains(weapon.requiredTechCode()))
+                .filter(weapon -> pointDefence == null || Boolean.TRUE.equals(weapon.carries(pointDefence)))
+                .mapToInt(weapon -> weapon.amount(ShipEffectType.WEAPON_DAMAGE)
+                        + ("mass-driver".equals(weapon.code()) ? 0 : 1))
+                .max()
+                .orElse(0);
+    }
+
+    /**
+     * Множитель лучшей брони империи для прочности истребителей — п. 8 (MOO II: «structure scales with your
+     * best armor»): броня лестницы, делённая на титановую (4), — титан 1, тритан 2, корриевая 3 …
+     */
+    private int fighterArmour(Set<String> known) {
+        return Math.max(1, shipCatalog.components(ShipComponentSlot.ARMOR).stream()
+                .filter(armour -> armour.requiredTechCode() != null && known.contains(armour.requiredTechCode()))
+                .mapToInt(armour -> armour.amount(ShipEffectType.ARMOUR) / 4)
+                .max()
+                .orElse(1));
+    }
+
+    /** Бомба истребителя — лучшая изученная, без биологических (п. 8). Ноль — бомб нет. */
+    private int fighterBomb(Set<String> known) {
+        return shipCatalog.components(ShipComponentSlot.WEAPON).stream()
+                .filter(weapon -> weapon.weaponKind() == WeaponKind.BOMB)
+                .filter(weapon -> weapon.amount(ShipEffectType.BIO_KILL_PERCENT) <= 0)
+                .filter(weapon -> weapon.requiredTechCode() == null || known.contains(weapon.requiredTechCode()))
+                .mapToInt(weapon -> weapon.amount(ShipEffectType.WEAPON_DAMAGE))
+                .max()
+                .orElse(0);
+    }
+
+    private void launchShuttles(Context context, BattleShipEntity ship, BattleShipEntity target, int shuttles,
+                                List<BattleEventDto> events) {
+        int speed = rules.shuttleSpeed(parts(context, ship));
+        int marines = shuttles * BattleRules.SHUTTLE_MARINES;
+        ship.setMarines(ship.getMarines() - marines);
+        List<BattleRules.Shot> craft = rules.shuttleShots(shuttles, speed);
+        int[] cell = rules.flightStep(ship.getX(), ship.getY(), target.getX(), target.getY(), speed);
+        List<BattleEventDto> downs = new ArrayList<>();
+        PathResult path = interceptOnPath(context, ship.getSide(), ship.getId(), target.getId(),
+                ship.getX(), ship.getY(), cell[0], cell[1], craft, downs);
+        String shooter = name(context, ship);
+        events.add(new BattleEventDto("LAUNCH", ship.getId(), target.getId(), cell[0], cell[1], null,
+                WeaponKind.MISSILE, messages.get("battle.log.shuttlesLaunched", shooter, name(context, target),
+                        shuttles, marines), shuttles));
+        events.addAll(downs);
+        if (path.left().isEmpty()) {
+            return;
+        }
+        int arriving = marines * path.left().size() / shuttles;
+        if (cell[0] == target.getX() && cell[1] == target.getY()) {
+            shuttlesArrive(context, ship.getId(), ship.getSide(), target, arriving, ship.getX(), ship.getY(), events);
+            return;
+        }
+        SpaceBattleEntity battle = context.battle();
+        List<BattleMissile> flying = new ArrayList<>(battle.getMissiles());
+        battle.setMissileCounter(battle.getMissileCounter() + 1);
+        flying.add(new BattleMissile(battle.getMissileCounter(), ship.getSide(), ship.getId(), target.getId(),
+                cell[0], cell[1], speed, BattleRules.MISSILE_FUEL_TURNS - 1, 0, 0, path.left(), arriving));
+        battle.setMissiles(flying);
+    }
+
+    /**
+     * Шаттлы долетели — п. 8: пехота идёт на абордаж сама, без условий абордажа с корабля
+     * (шаттл пристыковывается и к кораблю на ходу, и под щитом — ради этого его и строят).
+     * Корабль берут, базу громят рейдом.
+     */
+    private void shuttlesArrive(Context context, UUID shooterId, BattleSide side, BattleShipEntity target,
+                                int marines, int fromX, int fromY, List<BattleEventDto> events) {
+        if (marines <= 0 || !target.alive() || target.getSide() == side) {
+            return;
+        }
+        // Хозяин шаттлов — сторона пуска: корабль, что их пустил, мог уже и погибнуть.
+        PlayerEntity owner = context.player(ownerOf(context, side));
+        PlayerEntity defender = context.player(target.getOwnerPlayerId());
+        if (owner == null || defender == null || owner.getId().equals(defender.getId())) {
+            return;
+        }
+        events.add(new BattleEventDto("FIRE", shooterId, target.getId(), target.getX(), target.getY(),
+                0, WeaponKind.MISSILE, messages.get("battle.log.shuttlesDocked", name(context, target), marines),
+                1, fromX, fromY));
+        resolveBoarding(context, shooterId, null, owner, marines, target, defender, Boolean.FALSE, events);
+    }
+
+    /**
+     * ИИ берёт корабль на абордаж — п. 8: если чужой корабль в досягаемости хода (подойти
+     * вплотную или телепортом) и исход предрешён в его пользу — а он предрешён: абордаж
+     * считается силами, без жребия. Захваченный корабль дороже подбитого: он переходит в строй,
+     * а не просто выбывает. Базу, которую не увести, громит рейдом — с телепортом.
+     *
+     * @return брал ли корабль кого-нибудь на абордаж
+     */
+    private Boolean boardForAi(Context context, BattleShipEntity ship, List<BattleEventDto> events) {
+        if (Boolean.TRUE.equals(ship.getFired()) || ship.getMarines() <= 0 || platform(context.model(ship))) {
+            return Boolean.FALSE;
+        }
+        PlayerEntity owner = context.player(ship.getOwnerPlayerId());
+        if (owner == null) {
+            return Boolean.FALSE;
+        }
+        int range = rules.boardingRange(parts(context, ship));
+        int reach = speed(context, ship) - ship.getMoved() + range;
+        Boolean freely = groundCombat.boardsFreely(owner);
+        for (BattleShipEntity target : order(context.ships())) {
+            if (!target.alive() || target.getSide() == ship.getSide()
+                    || rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY()) > reach) {
+                continue;
+            }
+            Model their = context.model(target);
+            if (Boolean.TRUE.equals(their.hull().monster())) {
+                continue;
+            }
+            boolean raid = false;
+            PlayerEntity defender = context.player(target.getOwnerPlayerId());
+            if (defender == null || !Boolean.TRUE.equals(groundCombat.boarding(
+                    ship.getMarines(), owner, target.getMarines(), defender,
+                    rules.special(parts(context, target), ShipEffectType.MARINE_DEFENSE_PERCENT)).captured())) {
+                continue;
+            }
+            if (rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY()) > range) {
+                approach(context, ship, target, range, events);
+            }
+            if (boardingRefusal(context, ship, target, freely, raid) == null) {
+                board(context, ship, target, raid, events);
+                return Boolean.TRUE;
+            }
+        }
+        return Boolean.FALSE;
+    }
+
+    /**
+     * ИИ сбивает ракеты в полёте — backlog-promo, пункт 30. Бьёт он ими только тем, что для
+     * этого создано: стволами с ближней обороной ({@link BattleRules#pointDefenceRows}) и
+     * противоракетами. Обычный луч по ракете тоже стреляет — так может человек, — но для ИИ
+     * это залп, отнятый у корабля противника, и окупается он, только когда ствол для перехвата
+     * и строился.
+     * <p>
+     * Залп берётся тот, где ждётся больше сбитых ракет ({@link BattleRules#expectedDownsCentis}),
+     * и только если ждётся хотя бы половина ракеты ({@link #AI_INTERCEPT_MIN_CENTIS}):
+     * <b>реконструкция</b> — в MOO II стволы ближней обороны и противоракеты бьют по ракетам
+     * сами, без решения игрока, а у нас перехват стоит хода, и бросать ход ради почти нулевого
+     * шанса незачем. Оборона идёт ПРЕЖДЕ нападения: долетевший залп по своему кораблю — это
+     * урон наверняка, а свой выстрел — лишь возможный.
+     *
+     * @return стрелял ли корабль по ракетам
+     */
+    private Boolean interceptForAi(Context context, BattleShipEntity ship, List<BattleEventDto> events) {
+        if (Boolean.TRUE.equals(ship.getFired())) {
+            return Boolean.FALSE;
+        }
+        Model model = context.model(ship);
+        Set<Integer> rows = rules.pointDefenceRows(model.items());
+        List<ShipDesignRules.Item> all = parts(context, ship);
+        Integer antiMissile = rules.antiMissilePercent(all);
+        if (rows.isEmpty() && antiMissile == 0) {
+            return Boolean.FALSE;
+        }
+        List<ShipDesignRules.Item> parts = rows.isEmpty()
+                ? List.of()
+                : rules.partsLeft(model.items(), ship.getDamagedSystems(), rows);
+        List<BattleRules.Shot> guns = rules.shots(parts, rules.engineCombatSpeed(model.items())).stream()
+                .filter(shot -> shot.kind() != WeaponKind.MISSILE)
+                .toList();
+        Integer attackRating = rules.attackPercent(all) + model.officers().attack();
+
+        BattleMissile best = null;
+        int bestCentis = 0;
+        for (BattleMissile missile : context.battle().getMissiles()) {
+            if (missile.side() == ship.getSide() || missile.shots().isEmpty()) {
+                continue;
+            }
+            int distance = rules.distance(ship.getX(), ship.getY(), missile.x(), missile.y());
+            List<Integer> chances = new ArrayList<>();
+            for (BattleRules.Shot gun : guns) {
+                if (Boolean.TRUE.equals(rules.shotReaches(gun, distance))) {
+                    chances.add(rules.missileShotChancePercent(attackRating + gun.attackPercent(),
+                            missile.speed(), missile.shots().get(0).missileArmourPercent()));
+                }
+            }
+            int centis = rules.expectedDownsCentis(rules.antiMissileChancePercent(antiMissile, distance),
+                    chances, missile.shots().size());
+            if (centis > bestCentis) {
+                best = missile;
+                bestCentis = centis;
+            }
+        }
+        if (best == null || bestCentis < AI_INTERCEPT_MIN_CENTIS) {
+            return Boolean.FALSE;
+        }
+        // Без ближней обороны стреляют одни противоракеты: строка, которой нет, гасит всё оружие.
+        fireAtMissile(context, ship, best.id(), rows.isEmpty() ? Set.of(-1) : rows, events);
+        return Boolean.TRUE;
     }
 
     /** Что осталось от залпа после пути и где сбита последняя ракета. */
@@ -897,6 +1807,14 @@ public class TacticalBattleService {
         if (!target.alive()) {
             return;
         }
+        if (volley.marinesKilled > 0 && target.getMarines() > 0) {
+            int killed = Math.min(target.getMarines(), volley.marinesKilled);
+            target.setMarines(target.getMarines() - killed);
+            events.add(new BattleEventDto("MARINES", shooterId, target.getId(),
+                    target.getX(), target.getY(), killed, WeaponKind.BEAM,
+                    messages.get("battle.log.marinesKilled", name(context, target), killed,
+                            target.getMarines())));
+        }
         if (volley.engineHit && !Boolean.TRUE.equals(target.systemDamaged(BattleRules.ENGINE_SYSTEM))) {
             target.damageSystem(BattleRules.ENGINE_SYSTEM);
             events.add(new BattleEventDto("ENGINE", shooterId, target.getId(),
@@ -904,18 +1822,25 @@ public class TacticalBattleService {
                     messages.get("battle.log.engineHit", name(context, target))));
         }
 
+        // Энергопоглотитель гасит часть урона, дошедшего до брони и корпуса (п. 8): «decreases
+        // by 25% the damage your ships take».
+        int absorb = Math.min(100, rules.special(parts(context, target), ShipEffectType.DAMAGE_ABSORB_PERCENT));
+        if (absorb > 0) {
+            volley.damage = volley.damage * (100 - absorb) / 100;
+            volley.piercing = volley.piercing * (100 - absorb) / 100;
+        }
         int armour = Math.max(0, target.getArmour() - volley.damage);
         int throughArmour = Math.max(0, volley.damage - target.getArmour()) + volley.piercing;
         target.setArmour(armour);
         target.setStructure(Math.max(0, target.getStructure() - throughArmour));
 
         if (target.getStructure() <= 0) {
-            destroy(context, target, events);
+            destroy(context, target, events, "SHOT", shooterId);
             return;
         }
         // Всё, что прошло сквозь щит и броню, рвёт корабль ИЗНУТРИ — п. 8.
         if (throughArmour > 0) {
-            wreckSystem(context, target, events);
+            wreckSystem(context, target, events, volley.systemOdds);
         }
     }
 
@@ -932,8 +1857,8 @@ public class TacticalBattleService {
      * соседей — и своих тоже.
      */
     private void wreckSystem(Context context, BattleShipEntity target,
-                             List<BattleEventDto> events) {
-        if (!Boolean.TRUE.equals(rules.rollSystemHit(context.random()))) {
+                             List<BattleEventDto> events, Integer odds) {
+        if (!Boolean.TRUE.equals(rules.rollSystemHit(context.random(), odds))) {
             return;
         }
         List<String> live = rules.liveSystems(context.model(target).items(),
@@ -978,7 +1903,7 @@ public class TacticalBattleService {
         events.add(new BattleEventDto("BLAST", ship.getId(), null,
                 ship.getX(), ship.getY(), damage, null,
                 messages.get(key, name(context, ship), damage)));
-        destroy(context, ship, events);
+        destroy(context, ship, events, "battle.log.selfDestruct".equals(key) ? "SELF_DESTRUCT" : "BLAST", null);
 
         for (BattleShipEntity near : context.ships()) {
             if (near.getId().equals(ship.getId()) || !near.alive()) {
@@ -987,7 +1912,9 @@ public class TacticalBattleService {
             if (rules.distance(ship.getX(), ship.getY(), near.getX(), near.getY()) > radius) {
                 continue;
             }
-            Integer through = rules.damageThroughShield(damage, near.getShield());
+            BattleRules.ShieldHit hit = rules.shieldHit(damage, shieldClass(context, near), near.getShield());
+            near.setShield(hit.pool());
+            Integer through = hit.through();
             Integer armourLeft = Math.max(0, near.getArmour() - through);
             Integer structureLeft = Math.max(0,
                     near.getStructure() - Math.max(0, through - near.getArmour()));
@@ -997,7 +1924,7 @@ public class TacticalBattleService {
                     near.getX(), near.getY(), through, null,
                     messages.get("battle.log.blastHit", name(context, near), through)));
             if (near.getStructure() <= 0) {
-                destroy(context, near, events);
+                destroy(context, near, events, "BLAST_HIT", ship.getId());
             }
         }
     }
@@ -1014,15 +1941,35 @@ public class TacticalBattleService {
         explode(context, ship, events, "battle.log.selfDestruct");
     }
 
-    /** Корабль уничтожен: с поля уходит, а в записи боя остаётся ради подсчёта потерь. */
-    private void destroy(Context context, BattleShipEntity ship, List<BattleEventDto> events) {
+    /**
+     * Корабль уничтожен: с поля уходит, а в записи боя остаётся ради подсчёта потерь.
+     * <p>
+     * Гибель называет причину — field-backlog, пункт 204, и правило «потеря называет причину»
+     * (backlog-promo, пункт 6): «уничтожен» без того, ОТ ЧЕГО, читалось концом боя без объяснения,
+     * особенно у чудища, чьи когти и взрывы двигателей игрок не отличал. Причина — кодом в
+     * событии (для сцены итога) и словами в журнале.
+     *
+     * @param by корабль, чей удар или взрыв стал последним; пусто — свой взрыв, самоподрыв, отход
+     */
+    private void destroy(Context context, BattleShipEntity ship, List<BattleEventDto> events,
+                         String cause, UUID by) {
         if (!ship.alive()) {
             return;
         }
         ship.setDestroyed(Boolean.TRUE);
-        events.add(new BattleEventDto("DESTROYED", ship.getId(), null,
-                ship.getX(), ship.getY(), null, null,
-                messages.get("battle.log.destroyed", name(context, ship))));
+        BattleShipEntity killer = by == null ? null : context.ships().stream()
+                .filter(candidate -> candidate.getId().equals(by)).findFirst().orElse(null);
+        String text = switch (cause) {
+            case "SHOT" -> killer == null ? messages.get("battle.log.destroyed", name(context, ship))
+                    : messages.get("battle.log.destroyedBy", name(context, ship), name(context, killer));
+            case "BLAST_HIT" -> killer == null ? messages.get("battle.log.destroyed", name(context, ship))
+                    : messages.get("battle.log.destroyedByBlast", name(context, ship), name(context, killer));
+            case "SELF_DESTRUCT" -> messages.get("battle.log.destroyedSelf", name(context, ship));
+            case "STRANDED" -> messages.get("battle.log.destroyedStranded", name(context, ship));
+            default -> messages.get("battle.log.destroyedBlast", name(context, ship));
+        };
+        events.add(new BattleEventDto("DESTROYED", ship.getId(), by,
+                ship.getX(), ship.getY(), null, null, text, null, null, null, cause));
     }
 
     /**
@@ -1075,22 +2022,63 @@ public class TacticalBattleService {
      * остаётся на месте и гибнет вместе с полем. Это и есть цена неподвижности: пока
      * двигатель цел, из безнадёжного боя можно выйти, а подбитому бежать уже нечем.
      */
-    private void retreat(Context context, PlayerEntity player, List<BattleEventDto> events) {
-        context.battle().setRetreatedPlayerId(player.getId());
-        events.add(new BattleEventDto("RETREAT", null, null, null, null, null, null,
-                messages.get("battle.log.retreat", player.getName())));
-        for (BattleShipEntity left : context.ships()) {
-            if (!left.alive() || !left.getOwnerPlayerId().equals(player.getId())) {
-                continue;
-            }
-            if (Boolean.TRUE.equals(left.systemDamaged(BattleRules.ENGINE_SYSTEM))) {
-                events.add(new BattleEventDto("STRANDED", left.getId(), null,
-                        left.getX(), left.getY(), null, null,
-                        messages.get("battle.log.stranded", name(context, left))));
-                destroy(context, left, events);
-            }
+    private Boolean retreat(Context context, BattleShipEntity ship, List<BattleEventDto> events) {
+        if (platform(context.model(ship))) {
+            throw new ConflictException("battle.retreat.platform");
         }
-        finish(context, events);
+        if (Boolean.TRUE.equals(ship.systemDamaged(BattleRules.ENGINE_SYSTEM)) || speed(context, ship) == 0) {
+            throw new ConflictException("battle.retreat.immobile", name(context, ship));
+        }
+        BattleShipEntity dissipater = retreatBlocker(context, ship);
+        if (dissipater != null) {
+            throw new ConflictException("battle.retreat.dissipated", name(context, dissipater));
+        }
+        ship.setRetreating(Boolean.TRUE);
+        events.add(event("RETREAT", ship, null, null,
+                messages.get("battle.log.retreatOrder", name(context, ship))));
+        /*
+          Уйти сразу можно, только пока ход НЕ ТРОНУТ (09.10.2026, решение хозяина проекта): корабль
+          не сдвинулся и не стрелял. Иначе разгон к прыжку — следующий ход корабля, и до него он
+          на поле и под огнём. Разворота корпуса как отдельного действия в бою нет: корабль
+          поворачивается сам, когда ходит, — поэтому «не вращался» и есть «не ходил».
+        */
+        return ship.getMoved() == 0 && !Boolean.TRUE.equals(ship.getFired());
+    }
+
+    /**
+     * Чужой корабль с варп-рассеивателем, который держит этот на поле, — п. 8 (13.10.2026,
+     * перенос MOO II): «prevents enemy ships from retreating during combat». Пусто — уйти можно.
+     */
+    private BattleShipEntity retreatBlocker(Context context, BattleShipEntity ship) {
+        return context.ships().stream()
+                .filter(one -> one.alive() && one.getSide() != ship.getSide())
+                .filter(one -> rules.special(parts(context, one), ShipEffectType.RETREAT_BLOCK) > 0)
+                .findFirst()
+                .orElse(null);
+    }
+
+    /**
+     * Корабль с приказом отходить дождался своего хода — уходит в гиперпространство (п. 8).
+     * Обездвиженный за это время (разбит двигатель, держат тяговые лучи) уйти не может и
+     * остаётся на поле, а приказ снимается: стоять «уходящим» ему незачем.
+     */
+    private void warpOut(Context context, BattleShipEntity ship, List<BattleEventDto> events) {
+        ship.setRetreating(null);
+        if (Boolean.TRUE.equals(ship.systemDamaged(BattleRules.ENGINE_SYSTEM)) || speed(context, ship) == 0) {
+            events.add(event("PASS", ship, null, null,
+                    messages.get("battle.log.stranded", name(context, ship))));
+            return;
+        }
+        // Рассеиватель, появившийся на поле после приказа, держит так же (п. 8).
+        BattleShipEntity dissipater = retreatBlocker(context, ship);
+        if (dissipater != null) {
+            events.add(event("PASS", ship, null, null,
+                    messages.get("battle.log.dissipated", name(context, ship), name(context, dissipater))));
+            return;
+        }
+        ship.setRetreated(Boolean.TRUE);
+        events.add(event("WARP_OUT", ship, null, null,
+                messages.get("battle.log.warpOut", name(context, ship))));
     }
 
     /**
@@ -1102,7 +2090,11 @@ public class TacticalBattleService {
      */
     private void endShipTurn(Context context, List<BattleEventDto> events) {
         advance(context, events);
+        playOthers(context, events);
+    }
 
+    /** Корабли ИИ ходят тут же, пока очередь не дойдёт до человека или бой не кончится. */
+    private void playOthers(Context context, List<BattleEventDto> events) {
         int guard = 0;
         while (context.battle().getState() == BattleState.IN_PROGRESS
                 && guard++ < MAX_SHIPS_PER_SIDE * 4) {
@@ -1125,24 +2117,63 @@ public class TacticalBattleService {
      * и били на треть силы, а ракетные не двигались вовсе — бой стоял, и эскадры
      * перестреливались с краёв поля. В MOO II корабли сходятся.
      */
+    /** Звено носителя на борту и готово к взлёту — п. 8 ({@link BattleRules#FIGHTER_REARM_ROUNDS}). */
+    private Boolean fightersHome(Context context, BattleShipEntity ship) {
+        Integer back = ship.getFightersBackRound();
+        return back == null || context.battle().getRound() >= back;
+    }
+
     private void playAi(Context context, BattleShipEntity ship, List<BattleEventDto> events) {
-        BattleShipEntity target = nearestEnemy(context.ships(), ship);
+        BattleShipEntity target = nearestEnemy(context, ship);
         if (target == null) {
             return;
         }
 
         List<BattleRules.Shot> shots = shots(context, ship);
-        if (shots.isEmpty()) {
+        boolean carrier = rules.special(parts(context, ship), ShipEffectType.FIGHTER_BAY) > 0;
+        int devices = deviceReach(context, ship);
+        if (shots.isEmpty() && !carrier && devices > 0) {
+            // Одни устройства (пульсар, гиродестабилизатор, сеть — п. 8): подойти на их досягаемость.
+            if (rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY()) > devices) {
+                approach(context, ship, target, devices, events);
+            }
+            if (!Boolean.TRUE.equals(ship.getFired())
+                    && rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY()) <= devices) {
+                fire(context, ship, target, null, events);
+            }
+            return;
+        }
+        if (shots.isEmpty() && !carrier) {
             // Стволов не осталось вовсе: безоружный корабль ходит, но не стреляет.
             return;
         }
-        Integer preferred = rules.preferredDistance(shots);
+        if (shots.isEmpty()) {
+            // Носитель одних истребителей (п. 8): звенья летят сами, подходить ему незачем. Звено не дома —
+            // стрелять нечем, и ход пропускается: иначе отказ «стволы выбиты» вставал бы на этом корабле и
+            // запирал ход ИИ (найдено 14.10.2026 — у носителя выбили ракеты, звено было в полёте).
+            if (!Boolean.TRUE.equals(ship.getFired()) && Boolean.TRUE.equals(fightersHome(context, ship))) {
+                fire(context, ship, target, null, events);
+            }
+            return;
+        }
+        // Ракетчик стоит на пределе против того, кому нечем сбивать ракеты (пункт 30).
+        Model aim = context.model(target);
+        Boolean intercepts = !rules.pointDefenceRows(aim.items()).isEmpty()
+                || rules.antiMissilePercent(parts(context, target)) > 0;
+        Integer preferred = rules.preferredDistance(shots, intercepts);
         if (rules.distance(ship.getX(), ship.getY(), target.getX(), target.getY()) > preferred) {
             approach(context, ship, target, preferred, events);
         }
+        if (Boolean.TRUE.equals(boardForAi(context, ship, events))) {
+            return;
+        }
+        if (Boolean.TRUE.equals(interceptForAi(context, ship, events))) {
+            return;
+        }
         if (Boolean.TRUE.equals(rules.inReach(shots, ship.getX(), ship.getY(),
                 target.getX(), target.getY()))
-                && !Boolean.TRUE.equals(ship.getFired())) {
+                && !Boolean.TRUE.equals(ship.getFired())
+                && !Boolean.TRUE.equals(allResting(context, ship))) {
             fire(context, ship, target, null, events);
         }
     }
@@ -1188,14 +2219,53 @@ public class TacticalBattleService {
      * следующий: щиты восстанавливаются, движение и залп открываются заново.
      */
     private void advance(Context context, List<BattleEventDto> events) {
+        step(context, events);
+        departRetreating(context, events);
+    }
+
+    /** Отходящие, до которых дошла очередь, уходят один за другим (п. 8). */
+    private void departRetreating(Context context, List<BattleEventDto> events) {
+        /*
+          Очередь дошла до корабля с приказом отходить — он уходит, и ход тут же переходит
+          дальше (п. 8): решать ему больше нечего. Указатель сдвигается ДО ухода — пока корабль
+          ещё в очереди, иначе его место в ней потерялось бы и круг кончился раньше срока.
+        */
+        int guard = 0;
+        while (context.battle().getState() == BattleState.IN_PROGRESS
+                && guard++ < MAX_SHIPS_PER_SIDE * 2 + 2) {
+            BattleShipEntity current = context.current();
+            if (current == null || !Boolean.TRUE.equals(current.getRetreating()) || !current.alive()) {
+                return;
+            }
+            step(context, events);
+            warpOut(context, current, events);
+            if (Boolean.TRUE.equals(finished(context, events))) {
+                return;
+            }
+            if (context.current() == null || context.current() == current) {
+                // Ушедший открывал новый круг: ход — первому из оставшихся, круг тот же.
+                context.battle().setCurrentShipId(order(context.ships()).stream()
+                        .filter(BattleShipEntity::alive)
+                        .findFirst()
+                        .map(BattleShipEntity::getId)
+                        .orElse(null));
+            }
+        }
+    }
+
+    /** Ход — следующему кораблю очереди; кончился круг — новый круг. */
+    private void step(Context context, List<BattleEventDto> events) {
         if (finished(context, events)) {
             return;
         }
 
+        // Замороженный стазисом хода не получает (п. 8); нынешний корабль в очереди остаётся
+        // всегда — от него считается следующий.
+        UUID currentId = context.battle().getCurrentShipId();
         List<BattleShipEntity> queue = order(context.ships()).stream()
                 .filter(BattleShipEntity::alive)
+                .filter(one -> one.getId().equals(currentId) || !Boolean.TRUE.equals(frozen(context, one)))
                 .toList();
-        UUID currentId = context.battle().getCurrentShipId();
         int index = -1;
         for (int position = 0; position < queue.size(); position++) {
             if (queue.get(position).getId().equals(currentId)) {
@@ -1204,8 +2274,28 @@ public class TacticalBattleService {
             }
         }
 
-        if (index >= 0 && index + 1 < queue.size()) {
+        // Лишний ход ускорителя времени (п. 8, перенос MOO II) идёт В КОНЦЕ круга: корабль, который
+        // сейчас его берёт, свой обычный ход уже сделал, и следующего по очереди за ним нет.
+        Integer round = context.battle().getRound();
+        BattleShipEntity now = context.current();
+        boolean bonus = now != null && round.equals(now.getWarpRound());
+        if (!bonus && index >= 0 && index + 1 < queue.size()) {
             context.battle().setCurrentShipId(queue.get(index + 1).getId());
+            return;
+        }
+        BattleShipEntity warped = queue.stream()
+                .filter(one -> !round.equals(one.getWarpRound()))
+                .filter(one -> !Boolean.TRUE.equals(frozen(context, one)) && !Boolean.TRUE.equals(one.getRetreating()))
+                .filter(one -> rules.special(parts(context, one), ShipEffectType.TIME_WARP) > 0)
+                .findFirst()
+                .orElse(null);
+        if (warped != null) {
+            warped.setWarpRound(round);
+            warped.setMoved(0);
+            warped.setFired(Boolean.FALSE);
+            context.battle().setCurrentShipId(warped.getId());
+            events.add(event("TIME_WARP", warped, warped.getId(), 0,
+                    messages.get("battle.log.timeWarp", name(context, warped))));
             return;
         }
 
@@ -1221,12 +2311,30 @@ public class TacticalBattleService {
         for (BattleShipEntity ship : context.ships()) {
             ship.setMoved(0);
             ship.setFired(Boolean.FALSE);
-            // Щит восстанавливается между кругами — как в MOO II. Разбитому щиту
-            // восстанавливаться нечем: выбитая система держится до конца боя (п. 8).
+            // Тяговые лучи держат до конца круга — п. 8: в новом круге их наводят заново.
+            ship.setTractored(0);
+            // Щит восстанавливается между кругами на 30 % запаса (MOO II), со щитовым
+            // конденсатором втрое быстрее. Разбитому щиту восстанавливаться нечем: выбитая
+            // система держится до конца боя (п. 8).
             ship.setShield(Boolean.TRUE.equals(ship.systemDamaged(BattleRules.SHIELD_SYSTEM))
                     ? 0
-                    : context.model(ship).stats().shield());
+                    : rules.recharged(ship.getShield(), context.model(ship).stats().shield(),
+                            rules.special(parts(context, ship), ShipEffectType.SHIELD_RECHARGE_MULTIPLIER)));
             repairCybernetic(context, ship, events);
+        }
+        // Плазменная сеть жжёт в начале круга — после щитов — и тает на 5 (п. 8).
+        for (BattleShipEntity ship : order(context.ships())) {
+            int web = ship.getPlasmaWeb();
+            if (web <= 0 || !ship.alive()) {
+                continue;
+            }
+            int dealt = deviceHit(context, null, ship, web, false, events);
+            ship.setPlasmaWeb(Math.max(0, web - BattleRules.PLASMA_WEB_DECAY));
+            events.add(new BattleEventDto("FIRE", null, ship.getId(), ship.getX(), ship.getY(), dealt, null,
+                    messages.get("battle.log.plasmaBurn", name(context, ship), dealt)));
+        }
+        if (finished(context, events)) {
+            return;
         }
         // Ракеты в полёте делают круг пути (backlog-promo, пункт 30) — после щитов: щит
         // встречает долетевший залп восстановленным, как и залп нового круга. Долетевшие
@@ -1238,7 +2346,9 @@ public class TacticalBattleService {
         }
         context.battle().setCurrentShipId(order(context.ships()).stream()
                 .filter(BattleShipEntity::alive)
+                .filter(one -> !Boolean.TRUE.equals(frozen(context, one)))
                 .findFirst()
+                .or(() -> order(context.ships()).stream().filter(BattleShipEntity::alive).findFirst())
                 .map(BattleShipEntity::getId)
                 .orElse(null));
     }
@@ -1257,13 +2367,19 @@ public class TacticalBattleService {
             return;
         }
         PlayerEntity owner = context.players().get(ship.getOwnerPlayerId());
-        if (owner == null || !Boolean.TRUE.equals(raceService.effects(owner).cybernetic())) {
+        boolean cybernetic = owner != null && Boolean.TRUE.equals(raceService.effects(owner).cybernetic());
+        // Ремонтный модуль (п. 8, 13.10.2026, перенос MOO II) чинит своё сверх кибернетики:
+        // «repairs up to 20% of a ship's armor or structure per combat turn». Разбитый модуль
+        // не чинит ничего — он уже не в составе.
+        int percent = (cybernetic ? BattleRules.CYBERNETIC_REPAIR_PERCENT : 0)
+                + rules.special(parts(context, ship), ShipEffectType.REPAIR_PERCENT);
+        if (percent <= 0) {
             return;
         }
 
         ShipStats stats = context.model(ship).stats();
-        Integer armour = rules.repaired(ship.getArmour(), stats.armour());
-        Integer structure = rules.repaired(ship.getStructure(), stats.structure());
+        Integer armour = rules.repaired(ship.getArmour(), stats.armour(), percent);
+        Integer structure = rules.repaired(ship.getStructure(), stats.structure(), percent);
         if (armour.equals(ship.getArmour()) && structure.equals(ship.getStructure())) {
             return;
         }
@@ -1307,13 +2423,39 @@ public class TacticalBattleService {
 
         Map<UUID, Integer> lost = new HashMap<>();
         for (BattleShipEntity ship : context.ships()) {
-            if (Boolean.TRUE.equals(ship.getDestroyed())) {
+            if (Boolean.TRUE.equals(ship.getCaptured())) {
+                // Взятый корабль — потеря прежнего хозяина, что бы с ним ни стало потом.
+                lost.merge(ownerOf(context, opposite(ship.getSide())), 1, Integer::sum);
+            } else if (Boolean.TRUE.equals(ship.getDestroyed())) {
                 lost.merge(ship.getOwnerPlayerId(), 1, Integer::sum);
             }
         }
 
+        // Сторона, у которой на поле не осталось никого, а кто-то ушёл отходом, — отступила:
+        // это её поражение, но не разгром (п. 8). Уход ловится по кораблям, а не по приказу.
+        for (BattleSide side : BattleSide.values()) {
+            boolean left = context.ships().stream()
+                    .anyMatch(ship -> ship.getSide() == side && Boolean.TRUE.equals(ship.getRetreated()));
+            boolean stays = context.ships().stream()
+                    .anyMatch(ship -> ship.getSide() == side && ship.alive());
+            if (left && !stays) {
+                battle.setRetreatedPlayerId(ownerOf(context, side));
+            }
+        }
+
+        recordLeaders(context);
         applyLosses(context, BattleSide.ATTACKER);
         applyLosses(context, BattleSide.DEFENDER);
+        // Опыт за бой уцелевшим обеих сторон (п. 8, CrewRules); у чудищ и демонстрации флота нет.
+        for (UUID owner : java.util.Arrays.asList(context.battle().getAttackerPlayerId(),
+                context.battle().getDefenderPlayerId())) {
+            FleetEntity survived = owner == null ? null : fleetService.fleetAt(owner, context.battle().getStarSystemId());
+            if (survived != null) {
+                fleetService.gainExperience(survived.getId(), CrewRules.BATTLE_XP);
+            }
+        }
+        takePrizes(context);
+        fallBack(context);
 
         battle.setOutcome(outcome(context, lost).packed());
         events.add(new BattleEventDto("FINISHED", null, null, null, null, null, null,
@@ -1335,7 +2477,12 @@ public class TacticalBattleService {
                 : context.battle().getDefenderPlayerId();
         Map<UUID, Integer> lostByDesign = new HashMap<>();
         for (BattleShipEntity ship : context.ships()) {
-            if (ship.getSide() == side && Boolean.TRUE.equals(ship.getDestroyed())) {
+            // Взятый на абордаж корабль уходит из флота прежнего хозяина (он стоит теперь на
+            // другой стороне), а погибший потом за захватчика его флоту не принадлежал вовсе.
+            boolean taken = Boolean.TRUE.equals(ship.getCaptured()) && ship.getSide() != side;
+            boolean killed = !Boolean.TRUE.equals(ship.getCaptured())
+                    && ship.getSide() == side && Boolean.TRUE.equals(ship.getDestroyed());
+            if (taken || killed) {
                 lostByDesign.merge(ship.getDesignId(), 1, Integer::sum);
             }
         }
@@ -1368,6 +2515,111 @@ public class TacticalBattleService {
 
         FleetEntity fleet = fleetService.fleetAt(ownerId, context.battle().getStarSystemId());
         fleetService.applyBattleLosses(fleet, lostByDesign);
+    }
+
+    /**
+     * Послужной список (пункт 140): лидерам флотов обеих сторон — исход, тем же правилом, что
+     * у строки итога (ушедший проиграл, иначе побеждает сторона, у которой остались корабли).
+     * Флот берётся ДО списания потерь: погибший целиком флот после него исчезает.
+     */
+    private void recordLeaders(Context context) {
+        SpaceBattleEntity battle = context.battle();
+        if (battle.getEncounterId() == null) {
+            return;
+        }
+        Boolean attackerWon;
+        if (battle.getRetreatedPlayerId() != null) {
+            attackerWon = !battle.getRetreatedPlayerId().equals(battle.getAttackerPlayerId());
+        } else {
+            boolean attackersAlive = context.ships().stream()
+                    .anyMatch(ship -> ship.getSide() == BattleSide.ATTACKER && ship.alive());
+            boolean defendersAlive = context.ships().stream()
+                    .anyMatch(ship -> ship.getSide() == BattleSide.DEFENDER && ship.alive());
+            attackerWon = attackersAlive == defendersAlive ? null : attackersAlive;
+        }
+        if (attackerWon == null) {
+            return;
+        }
+        for (BattleSide side : BattleSide.values()) {
+            UUID owner = ownerOf(context, side);
+            FleetEntity fleet = owner == null ? null : fleetService.fleetAt(owner, battle.getStarSystemId());
+            if (fleet != null) {
+                Boolean won = side == BattleSide.ATTACKER ? attackerWon : !attackerWon;
+                leaderRecord.battle(owner, fleet.getId(), won);
+                // Подвиги флота (пункт 141): счёт в строке самого флота.
+                fleet.recordBattle(won);
+                fleetRepository.save(fleet);
+            }
+        }
+    }
+
+    /**
+     * Флот, не оставивший на поле ни одного корабля и уведший кого-то отходом, летит к
+     * ближайшей своей колонии — п. 8 (06.10.2026, решение хозяина проекта): ушедшие в
+     * гиперпространство не возвращаются стоять под чужими пушками. Платформы не в счёт — они
+     * не флот. Бой с чудищем — тоже: встречи у него нет, а флот есть. У демонстрации флотов
+     * нет вовсе, и улетать там некому.
+     */
+    private void fallBack(Context context) {
+        SpaceBattleEntity battle = context.battle();
+        for (BattleSide side : BattleSide.values()) {
+            boolean left = context.ships().stream()
+                    .anyMatch(ship -> ship.getSide() == side && Boolean.TRUE.equals(ship.getRetreated())
+                            && !Boolean.TRUE.equals(ship.getCaptured()));
+            boolean stays = context.ships().stream()
+                    .anyMatch(ship -> ship.getSide() == side && ship.alive() && !platform(context.model(ship)));
+            PlayerEntity owner = context.player(ownerOf(context, side));
+            if (left && !stays && owner != null) {
+                fleetService.fallBack(owner, battle.getStarSystemId());
+            }
+        }
+    }
+
+    private static BattleSide opposite(BattleSide side) {
+        return side == BattleSide.ATTACKER ? BattleSide.DEFENDER : BattleSide.ATTACKER;
+    }
+
+    private static UUID ownerOf(Context context, BattleSide side) {
+        return side == BattleSide.ATTACKER
+                ? context.battle().getAttackerPlayerId()
+                : context.battle().getDefenderPlayerId();
+    }
+
+    /**
+     * Трофеи абордажа — п. 8: уцелевший взятый корабль встаёт во флот захватчика в системе
+     * боя. Проект у него чужой, поэтому захватчик получает его КОПИЮ — вытесненной строкой,
+     * которая не занимает ячеек дизайна (как в MOO II: трофей летает, но строить такой нельзя).
+     * Бой без встречи (демонстрация) флотов не имеет, и трофеев в нём нет.
+     */
+    private void takePrizes(Context context) {
+        SpaceBattleEntity battle = context.battle();
+        if (battle.getEncounterId() == null) {
+            return;
+        }
+        Map<UUID, Map<UUID, Integer>> prizes = new LinkedHashMap<>();
+        for (BattleShipEntity ship : order(context.ships())) {
+            // Взятая база в трофеи не идёт: здание колонии не улетает (её хозяин её потерял).
+            if (Boolean.TRUE.equals(ship.getCaptured()) && !Boolean.TRUE.equals(ship.getDestroyed())
+                    && !platform(context.model(ship))) {
+                prizes.computeIfAbsent(ship.getOwnerPlayerId(), key -> new LinkedHashMap<>())
+                        .merge(ship.getDesignId(), 1, Integer::sum);
+            }
+        }
+        prizes.forEach((captorId, byDesign) -> {
+            PlayerEntity captor = context.player(captorId);
+            if (captor == null) {
+                return;
+            }
+            byDesign.forEach((designId, count) -> {
+                UUID trophy = shipDesignService.trophyDesign(captor, designId, battle.getTurn()).getId();
+                for (int i = 0; i < count; i++) {
+                    fleetService.addShip(battle.getGameId(), captorId, battle.getStarSystemId(),
+                            battle.getTurn(), trophy);
+                }
+            });
+            log.info("Империя {} забрала абордажем {} кораблей в системе {}", captor.getName(),
+                    byDesign.values().stream().mapToInt(Integer::intValue).sum(), battle.getStarSystemId());
+        });
     }
 
     /** Готовая строка исхода для итогов хода обеих сторон. */
@@ -1423,9 +2675,11 @@ public class TacticalBattleService {
         return sorted;
     }
 
-    private BattleShipEntity nearestEnemy(List<BattleShipEntity> ships, BattleShipEntity ship) {
-        return ships.stream()
-                .filter(candidate -> candidate.getSide() != ship.getSide() && candidate.alive())
+    private BattleShipEntity nearestEnemy(Context context, BattleShipEntity ship) {
+        // Замороженного стазисом и скрытого фазовым плащом атаковать нельзя (п. 8).
+        return context.ships().stream()
+                .filter(candidate -> candidate.getSide() != ship.getSide()
+                        && Boolean.TRUE.equals(targetable(context, candidate)))
                 .min(Comparator.comparing(candidate ->
                         rules.distance(ship.getX(), ship.getY(), candidate.getX(), candidate.getY())))
                 .orElse(null);
@@ -1463,9 +2717,31 @@ public class TacticalBattleService {
         if (Boolean.TRUE.equals(ship.systemDamaged(BattleRules.ENGINE_SYSTEM))) {
             return 0;
         }
+        // Платформа обороны не ходит вовсе (п. 8, п. 11). Проекты платформ собирались тем же
+        // составом, что и корабли, — с двигателем, — и звёздная база получала боевую скорость:
+        // ИИ мог повести её на сближение, а полоса боя писала ей «двигатель» и «ход 12».
+        // Новые проекты двигателя не получают (ShipDesignService.defaultItems), а старые, с
+        // двигателем в составе, останавливает это правило.
+        if (platform(context.model(ship))) {
+            return 0;
+        }
         PlayerEntity owner = context.players().get(ship.getOwnerPlayerId());
         Integer racial = owner == null ? 0 : raceService.effects(owner).shipCombatSpeed();
-        return Math.max(1, rules.cellsPerTurn(context.model(ship).stats()) + racial);
+        // Подпространственный телепорт (п. 8): прыжок до 20 клеток сверх обычного хода.
+        int own = Math.max(1, rules.cellsPerTurn(context.model(ship).stats()) + racial)
+                + rules.special(parts(context, ship), ShipEffectType.TELEPORT);
+        // Тяговые лучи держат корабль до конца круга — п. 8: луч на класс корпуса обездвиживает.
+        return rules.tractoredSpeed(own, ship.getTractored(), context.model(ship).hull());
+    }
+
+    /**
+     * Обездвижен ли корабль — п. 8, условие абордажа: разбит двигатель или его держат
+     * тяговые лучи. Платформа сюда не относится: она стоит на месте по устройству, а не
+     * подбитая, и абордажем её не берут — только рейдом.
+     */
+    private Boolean immobile(Context context, BattleShipEntity ship) {
+        return Boolean.TRUE.equals(ship.systemDamaged(BattleRules.ENGINE_SYSTEM))
+                || (!platform(context.model(ship)) && speed(context, ship) == 0);
     }
 
     /**
@@ -1545,7 +2821,8 @@ public class TacticalBattleService {
         return new Context(battle, ships, players, models,
                 new Random(battle.getSeed() + battle.getRound()),
                 messages.get("battle.ship.unknownOwner"),
-                messages.get(MONSTER_SIDE_KEY));
+                messages.get(MONSTER_SIDE_KEY),
+                messages::empire);
     }
 
     /** Проект корабля со всем, что нужно бою: корпус, характеристики, стволы, офицеры. */
@@ -1592,7 +2869,9 @@ public class TacticalBattleService {
                           Map<UUID, PlayerEntity> players, Map<UUID, Model> models,
                           RandomGenerator random, String unknownOwner,
                           /** Подпись стороны чудищ на языке запроса — п. 11.1. */
-                          String monsterSide) {
+                          String monsterSide,
+                          /** Имя империи на языке запроса: у ИИ хранится английским. */
+                          java.util.function.UnaryOperator<String> shownName) {
 
         Model model(BattleShipEntity ship) {
             Model model = models.get(ship.getDesignId());
@@ -1618,7 +2897,7 @@ public class TacticalBattleService {
             if (player == null) {
                 return unknownOwner;
             }
-            return player.getPlayerType() == PlayerType.MONSTER ? monsterSide : player.getName();
+            return player.getPlayerType() == PlayerType.MONSTER ? monsterSide : shownName.apply(player.getName());
         }
 
         /**
@@ -1676,10 +2955,16 @@ public class TacticalBattleService {
     }
 
     /** Скорость корабля для сцены: разбитый двигатель держит его на месте — п. 8. */
-    private Integer speedOf(BattleShipEntity ship, ShipStats stats) {
-        return Boolean.TRUE.equals(ship.systemDamaged(BattleRules.ENGINE_SYSTEM))
+    private Integer speedOf(BattleShipEntity ship, Model model, ShipStats stats) {
+        return Boolean.TRUE.equals(ship.systemDamaged(BattleRules.ENGINE_SYSTEM)) || platform(model)
                 ? 0
-                : rules.cellsPerTurn(stats);
+                : rules.tractoredSpeed(rules.cellsPerTurn(stats)
+                        + rules.special(model.items(), ShipEffectType.TELEPORT), ship.getTractored(), model.hull());
+    }
+
+    /** Платформа обороны — сооружение, а не корабль: с места она не сходит (п. 8, п. 11). */
+    private static boolean platform(Model model) {
+        return model != null && Boolean.TRUE.equals(model.hull().platform());
     }
 
 
@@ -1729,7 +3014,7 @@ public class TacticalBattleService {
                                     ? messages.get("battle.ship.unknownOwner")
                                     : owner.getPlayerType() == PlayerType.MONSTER
                                             ? messages.get(MONSTER_SIDE_KEY)
-                                            : owner.getName(),
+                                            : messages.empire(owner.getName()),
                             ship.getSide(),
                             // Имя проекта хранится в базе и потому английское — но тело
                             // чудища зовётся по справочнику, а тот переводится (п. 11.1).
@@ -1749,10 +3034,12 @@ public class TacticalBattleService {
                             ship.getArmour(),
                             stats == null ? ship.getArmour() : stats.armour(),
                             ship.getShield(),
+                            stats == null ? 0 : stats.shield(),
+                            stats == null ? 0 : stats.shieldClass(),
                             stats == null ? 0 : stats.attack(),
                             ship.getInitiative(),
-                            stats == null ? 1 : speedOf(ship, stats),
-                            Math.max(0, (stats == null ? 1 : speedOf(ship, stats))
+                            stats == null ? 1 : speedOf(ship, model, stats),
+                            Math.max(0, (stats == null ? 1 : speedOf(ship, model, stats))
                                     - ship.getMoved()),
                             model == null ? BattleRules.WEAPON_RANGE : rules.reach(shots(shown, ship)),
                             ship.getFired(),
@@ -1767,10 +3054,28 @@ public class TacticalBattleService {
                             ship.systemDamaged(BattleRules.ENGINE_SYSTEM),
                             ship.systemDamaged(BattleRules.SHIELD_SYSTEM),
                             ship.systemDamaged(BattleRules.COMPUTER_SYSTEM),
-                            single(model, ShipComponentSlot.ENGINE),
+                            // У платформы двигателя нет — у старых проектов он ещё стоит в
+                            // составе, но в бою не значит ничего (см. speed).
+                            platform(model) ? null : single(model, ShipComponentSlot.ENGINE),
                             single(model, ShipComponentSlot.ARMOR),
                             single(model, ShipComponentSlot.SHIELD),
-                            single(model, ShipComponentSlot.COMPUTER));
+                            single(model, ShipComponentSlot.COMPUTER),
+                            model == null ? 0 : rules.antiMissilePercent(parts(shown, ship)),
+                            ship.getMarines(),
+                            ship.getCaptured(),
+                            model == null ? BattleRules.BOARDING_RANGE : rules.boardingRange(parts(shown, ship)),
+                            model != null && !platform(model)
+                                    && (Boolean.TRUE.equals(ship.systemDamaged(BattleRules.ENGINE_SYSTEM))
+                                        || speedOf(ship, model, stats) == 0),
+                            ship.getRetreating(),
+                            ship.getRetreated(),
+                            model != null && !platform(model) && !Boolean.TRUE.equals(model.hull().monster())
+                                    && !Boolean.TRUE.equals(model.design().getAuto())
+                                    && !Boolean.TRUE.equals(model.design().getTrophy())
+                                    // Гражданские корабли (ячейка 0) и платформы (ниже нуля) собирает игра.
+                                    && model.design().getSlot() != null && model.design().getSlot() > 0,
+                            model != null && Boolean.TRUE.equals(frozen(shown, ship)),
+                            model != null && Boolean.TRUE.equals(cloaked(shown, ship)));
                 })
                 .toList();
 
@@ -1806,7 +3111,7 @@ public class TacticalBattleService {
                         .map(missile -> new BattleMissileDto(missile.id(), missile.side(),
                                 missile.shooterShipId(), missile.targetShipId(),
                                 missile.x(), missile.y(), missile.shots().size(),
-                                missile.speed(), missile.fuel()))
+                                missile.speed(), missile.fuel(), missile.marines()))
                         .toList());
     }
 
@@ -1839,6 +3144,6 @@ public class TacticalBattleService {
         }
         return player.getPlayerType() == PlayerType.MONSTER
                 ? messages.get("battle.side.monster")
-                : player.getName();
+                : messages.empire(player.getName());
     }
 }

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
+import { HowMade } from '../balance/HowMade';
+import { readAccount } from '../../state/session';
 
 import { gameApi } from '../../api/client';
-import type { EmpireInfo } from '../../api/types';
+import type { EmpireInfo, PastSelf } from '../../api/types';
 import { useGameStore } from '../../state/gameStore';
 import { useModalEscape } from '../useModalEscape';
 import { Figure } from '../Figure';
@@ -12,10 +14,15 @@ import { HistoryChart } from './HistoryChart';
 import { METRICS, metricByCode } from './infoMetrics';
 import { TechnologyReview } from './TechnologyReview';
 import { TurnSummary } from './TurnSummary';
+import { VictoryProgressReport } from './VictoryProgressReport';
+import { ChronicleReport } from './ChronicleReport';
+import { RulesBook } from './RulesBook';
 import { t, useT, type Key } from '../../i18n';
+import { ActionError } from '../feedback/ActionError';
+import { PastSelfLine } from '../PastSelfLine';
 
 /** Отчёты консоли — те же пять, что и селекторы окна Info MOO II. */
-type Report = 'history' | 'tech' | 'races' | 'summary' | 'reference';
+type Report = 'history' | 'victory' | 'chronicle' | 'tech' | 'races' | 'summary' | 'rules' | 'reference';
 
 /** Игра начинается с 3000 галактического года, каждый ход — год; так же в правой панели. */
 const GALACTIC_YEAR_ZERO = 3000;
@@ -29,9 +36,16 @@ const GALACTIC_YEAR_ZERO = 3000;
  */
 const REPORTS: { code: Report; label: Key; hint: Key }[] = [
   { code: 'history', label: 'info.report.history', hint: 'info.report.history.hint' },
+  // Пути к победе — field-backlog, пункт 51: своего окна в оригинале нет, а расстояние до
+  // победы игрок обязан видеть всю партию.
+  { code: 'victory', label: 'info.report.victory', hint: 'info.report.victory.hint' },
+  // Хроника партии — field-backlog, пункт 138: к 200-му ходу узнать, как всё было, иначе неоткуда.
+  { code: 'chronicle', label: 'info.report.chronicle', hint: 'info.report.chronicle.hint' },
   { code: 'tech', label: 'info.report.tech', hint: 'info.report.tech.hint' },
   { code: 'races', label: 'info.report.races', hint: 'info.report.races.hint' },
   { code: 'summary', label: 'info.report.summary', hint: 'info.report.summary.hint' },
+  // «Как устроено» — field-backlog, пункты 75 и 200: порядок хода и правила с числами игры.
+  { code: 'rules', label: 'info.report.rules', hint: 'info.report.rules.hint' },
   { code: 'reference', label: 'info.report.reference', hint: 'info.report.reference.hint' },
 ];
 
@@ -66,6 +80,16 @@ export function InfoScreen({ onClose }: { onClose: () => void }) {
   const research = useGameStore((state) => state.research);
 
   const [report, setReport] = useState<Report>('history');
+  // Сравнение с собой прошлым (пункт 115): спрашивается раз при открытии окна.
+  const [pastSelf, setPastSelf] = useState<PastSelf | null>(null);
+  const pastGame = useGameStore((state) => state.game);
+  const pastCredentials = useGameStore((state) => state.credentials);
+  useEffect(() => {
+    if (pastGame && pastCredentials) {
+      gameApi.pastSelf(pastGame.id, pastCredentials.accessToken)
+        .then((found) => setPastSelf(found ?? null)).catch(() => undefined);
+    }
+  }, [pastGame?.id, pastCredentials?.accessToken]);
   const [metricCode, setMetricCode] = useState(METRICS[0].code);
   const [info, setInfo] = useState<EmpireInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -128,13 +152,17 @@ export function InfoScreen({ onClose }: { onClose: () => void }) {
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex flex-none items-baseline justify-between border-b border-space-700 px-4 py-2">
           <h2 className="text-20 uppercase tracking-[0.3em] text-ink-bright">{t(chosen.label)}</h2>
-          {error ? <span className="text-11 text-danger">{error}</span> : null}
+          {error ? <ActionError as="span" className="text-11" message={error} /> : null}
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {report === 'history' ? (
             info ? (
-              <HistoryChart empires={info.empires} metric={metric} />
+              <>
+                <HistoryChart empires={info.empires} metric={metric} />
+                {/* Вы против себя прошлого — пункт 115: та же мощь, лучшая своя партия той же настройки. */}
+                <PastSelfLine pastSelf={pastSelf} className="mt-2" />
+              </>
             ) : (
               <p className="text-xs text-ink-faint">{t('info.historyLoading')}</p>
             )
@@ -154,8 +182,16 @@ export function InfoScreen({ onClose }: { onClose: () => void }) {
 
           {report === 'summary' ? <TurnSummary /> : null}
 
+          {report === 'victory' ? <VictoryProgressReport /> : null}
+
+          {report === 'chronicle' ? <ChronicleReport /> : null}
+
+          {report === 'rules' ? <RulesBook /> : null}
+
           {report === 'reference' ? (
             <div className="space-y-6">
+              {/* «Как сделано» — пункт 47: рядом со справочником, тем, кому открыт прибор. */}
+              {readAccount()?.account.insider ? <HowMade /> : null}
               <GalaxyReference />
               <section>
                 <div className="panel-title mb-2">{t('info.allTech')}</div>
@@ -194,7 +230,13 @@ export function InfoScreen({ onClose }: { onClose: () => void }) {
             </div>
           ) : (
             <p className="text-11 leading-tight text-ink-faint">
-              {report === 'races'
+              {report === 'victory'
+                ? t('info.note.victory')
+                : report === 'chronicle'
+                ? t('info.note.chronicle')
+                : report === 'rules'
+                ? t('info.note.rules')
+                : report === 'races'
                 ? t('info.note.races')
                 : report === 'summary'
                   ? t('info.note.summary')

@@ -1,5 +1,10 @@
 package com.sddnw.server.service;
 
+import com.sddnw.server.domain.enums.AiSkill;
+import com.sddnw.server.domain.enums.WeaponKind;
+import com.sddnw.server.domain.enums.ShipComponentSlot;
+import com.sddnw.server.domain.ShipComponent;
+import com.sddnw.server.dto.FleetShipOrder;
 import com.sddnw.server.domain.Building;
 import com.sddnw.server.domain.BuildingEffects;
 import com.sddnw.server.domain.ColonyProject;
@@ -27,6 +32,7 @@ import com.sddnw.server.domain.enums.EncounterState;
 import com.sddnw.server.domain.enums.LeaderKind;
 import com.sddnw.server.domain.enums.LeaderState;
 import com.sddnw.server.domain.enums.PlayerType;
+import com.sddnw.server.domain.enums.ShipMission;
 import com.sddnw.server.domain.enums.ShipRole;
 import com.sddnw.server.domain.enums.SpyMission;
 import com.sddnw.server.dto.AssignSpyRequest;
@@ -41,6 +47,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -96,6 +103,11 @@ public class AiEmpireService {
             "biospheres",
             "robo-miners",
             "supercomputer",
+            // Досуг поднимает мораль, то есть ВСЮ выработку жителей разом (п. 10.1), а у
+            // объединения не даёт ничего — его в списке пропустит окупаемость: там, где
+            // колония считает мораль, у такого строя она нулевая.
+            "holo-simulator",
+            "alien-management-center",
             "soil-enrichment",
             "cloning-center",
             "stock-exchange",
@@ -106,6 +118,7 @@ public class AiEmpireService {
             "autolab",
             "armor-barracks",
             "weather-controller",
+            "pleasure-dome",
             // Оборона колонии в мирное время идёт последней: она ничего не производит.
             // Звёздная база при этом нужна не только обороне — без неё колония не
             // поднимает корпуса крупнее эсминца (п. 8), и потому стоит первой.
@@ -293,7 +306,7 @@ public class AiEmpireService {
      * станут одинаковыми. Коды здесь — ТЕХНОЛОГИЙ, а не зданий (они совпадают по написанию не
      * случайно, но и не по правилу).
      */
-    private static final List<String> ECONOMY_TECHNOLOGIES =
+    static final List<String> ECONOMY_TECHNOLOGIES =
             List.of("automated-factory", "research-laboratory", "supercomputer", "robo-miners");
 
     /**
@@ -442,6 +455,10 @@ public class AiEmpireService {
     private static final Integer LEADER_TREASURY_RESERVE = 100;
 
     private final ColonyService colonyService;
+    private final ShipCatalog shipCatalog;
+    private final TechSightService techSight;
+    private final SalvageService salvageService;
+    private final IntelService intelService;
     private final FleetService fleetService;
     private final ExpeditionService expeditionService;
     private final ShipDesignService shipDesignService;
@@ -467,6 +484,14 @@ public class AiEmpireService {
     /** Кто из людей ушёл из-за стола — его империю ведёт ИИ (backlog-promo, пункт 11). */
     private final PresenceService presence;
 
+    /**
+     * Книга дебютов сложного уровня — field-backlog, пункт 9. Полем, а не параметром конструктора:
+     * проверки собирают службу без контекста Spring, и книга им не нужна — без неё сложный играет
+     * как обычный.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AiOpeningBook openingBook;
+
     public AiEmpireService(ColonyService colonyService,
                            FleetService fleetService,
                            ExpeditionService expeditionService,
@@ -487,7 +512,15 @@ public class AiEmpireService {
                            GroundCombatService groundCombatService,
                            BuildingCatalog buildingCatalog,
                            PopulationTransferService transferService,
-                           PresenceService presence) {
+                           PresenceService presence,
+                           IntelService intelService,
+                           SalvageService salvageService,
+                           TechSightService techSight,
+                           ShipCatalog shipCatalog) {
+        this.shipCatalog = shipCatalog;
+        this.techSight = techSight;
+        this.salvageService = salvageService;
+        this.intelService = intelService;
         this.presence = presence;
         this.transferService = transferService;
         this.groundCombatService = groundCombatService;
@@ -536,7 +569,39 @@ public class AiEmpireService {
             leaders(context, galaxy, empire, officers.getOrDefault(empire.getId(), List.of()));
             missions(context, galaxy, empire);
             projects(context, galaxy, empire);
+            salvage(context, galaxy, empire);
             orders(context, galaxy, empire);
+        }
+    }
+
+    /**
+     * Разбор трофеев — п. 8: «captured ships can be scrapped for tech». Взятый абордажем
+     * корабль, в составе которого есть неизвестная империи технология, идёт на слом и
+     * приносит её — тем же путём, каким это делает игрок ({@link SalvageService}). Прежде ИИ
+     * трофеи брал, но не разбирал никогда: разбор жил только кнопкой экрана флота.
+     * <p>
+     * Один корабль за ход и только тот, что принесёт новое: трофей без новинок — обычный
+     * боевой корабль, и ломать его незачем.
+     */
+    private void salvage(TurnContext context, Galaxy galaxy, PlayerEntity empire) {
+        Set<String> known = context.colonyContext().technologiesByOwner().getOrDefault(empire.getId(), Set.of());
+        // Только живые стоящие флоты (standing): карта хода собрана ДО встреч, которые фаза
+        // решает сама, и флот, погибший в таком бою, остаётся в ней с нулём кораблей, а его
+        // строки состава — с прежними (удаляются они запросом мимо объектов). Слом трофея с
+        // погибшего флота отказывал «флот не найден» и ронял ход (малая галактика, ход 267).
+        for (FleetEntity fleet : galaxy.standing(empire.getId())) {
+            for (FleetShipEntity row : galaxy.composition().getOrDefault(fleet.getId(), List.of())) {
+                ShipDesignEntity design = galaxy.designs().get(row.getDesignId());
+                if (design == null || row.getShips() <= 0 || salvageService.fresh(design, known).isEmpty()) {
+                    continue;
+                }
+                salvageService.scrap(context.game(), empire, fleet.getId(),
+                        List.of(new FleetShipOrder(design.getId(), 1)));
+                // Строка состава в карте хода — та же сущность, что правит слом: Hibernate
+                // отдаёт один объект на строку, и уменьшать её здесь второй раз нельзя.
+                log.info("ИИ {} разобрал трофей «{}» на технологии", empire.getName(), design.getName());
+                return;
+            }
         }
     }
 
@@ -578,7 +643,76 @@ public class AiEmpireService {
                            * (backlog-promo, пункт 8): чужой флот видно только там, где
                            * смотрящий стоит сам.
                            */
-                          Map<UUID, Set<UUID>> colonySystems) {
+                          Map<UUID, Set<UUID>> colonySystems,
+                          /**
+                           * Туман войны о чужих колониях — п. 15 ({@link IntelService}): где у
+                           * каждой империи глаза, что она помнит, кто её союзники и чем
+                           * правду спросить. Человек видит чужую колонию ровно так же — одной
+                           * линзой, — и ИИ не знает о ней ничего сверх этого.
+                           */
+                          Map<UUID, Set<UUID>> eyes,
+                          Map<UUID, Map<UUID, IntelService.Known>> memory,
+                          Map<UUID, Set<UUID>> allies,
+                          java.util.function.Function<PlanetEntity, java.util.Collection<Building>> built,
+                          IntelService intel,
+                          /** Память империй о сторожах систем — п. 11.1, п. 15. */
+                          Map<UUID, Map<UUID, IntelService.SeenMonster>> monsters,
+                          /** Увиденные технологии соперников: смотрящий → соперник → коды (п. 15). */
+                          Map<UUID, Map<UUID, Set<String>>> observed) {
+
+        /** Сторож системы глазами империи: правда под глазами, иначе память, иначе — никого. */
+        IntelService.SeenMonster monster(UUID ownerId, StarSystemEntity system) {
+            return intel.monsterView(system, eyes.getOrDefault(ownerId, Set.of()),
+                    monsters.getOrDefault(ownerId, Map.of()));
+        }
+
+        /**
+         * Страж Wardenhold глазами империи — backlog-promo, пункт 3. Что звезду сторожит Страж,
+         * знают все с первого хода (это объявленная цель партии), поэтому без наблюдений он
+         * считается живым и в полную силу; иное империя узнаёт, только увидев сама.
+         */
+        IntelService.SeenMonster wardenGuard(UUID ownerId, StarSystemEntity warden) {
+            Map<UUID, IntelService.SeenMonster> memory = monsters.getOrDefault(ownerId, Map.of());
+            if (eyes.getOrDefault(ownerId, Set.of()).contains(warden.getId()) || memory.containsKey(warden.getId())) {
+                return monster(ownerId, warden);
+            }
+            return new IntelService.SeenMonster(com.sddnw.server.domain.enums.SpaceMonster.GUARDIAN,
+                    com.sddnw.server.domain.enums.SpaceMonster.GUARDIAN.getStrength(), null);
+        }
+
+        /** Что империя видит о планете: правду под глазами, память без них, иначе ничего. */
+        IntelService.Known seen(UUID ownerId, PlanetEntity planet) {
+            return intel.view(ownerId, allies.getOrDefault(ownerId, Set.of()), planet,
+                    planet.getStarSystem().getId(), eyes.getOrDefault(ownerId, Set.of()),
+                    memory.getOrDefault(ownerId, Map.of()), built);
+        }
+
+        /**
+         * Чужие колонии, о которых империя знает, — в разведанных системах, глазами (п. 15).
+         * Порядок — по названию звезды и орбите: обход по идентификаторам расходился бы
+         * между двумя прогонами одной партии.
+         */
+        List<Sighting> sightings(UUID ownerId) {
+            List<Sighting> found = new ArrayList<>();
+            systemById.values().stream()
+                    .filter(system -> Boolean.TRUE.equals(knows(ownerId, system.getId())))
+                    .sorted(Comparator.comparing(StarSystemEntity::getName))
+                    .forEach(system -> system.getPlanets().stream()
+                            .sorted(Comparator.comparing(PlanetEntity::getOrbit))
+                            .forEach(planet -> {
+                                IntelService.Known known = seen(ownerId, planet);
+                                if (known != null && !ownerId.equals(known.ownerId())) {
+                                    found.add(new Sighting(planet, system, known));
+                                }
+                            }));
+            return found;
+        }
+
+        /** Пустит ли колония десант — по ВИДИМОЙ обороне (п. 12, п. 15). */
+        Boolean landable(UUID ownerId, PlanetEntity planet) {
+            IntelService.Known known = seen(ownerId, planet);
+            return known != null && !Boolean.TRUE.equals(intel.blocksLanding(known));
+        }
 
         /** Знает ли империя эту систему: по разведанному, а не по всей карте. */
         Boolean knows(UUID ownerId, UUID systemId) {
@@ -611,10 +745,13 @@ public class AiEmpireService {
             if (mine != null && Boolean.TRUE.equals(mine.omniscient())) {
                 return Boolean.TRUE;
             }
-            if (fleet.getStarSystemId() == null) {
+            if (fleet.getStarSystemId() == null || Boolean.TRUE.equals(fleet.isInFlight())) {
                 return Boolean.FALSE;
             }
-            // Свой флот рядом видит всё: в одной системе прятаться не от кого.
+            // Глаза — те же, что у игрока (п. 15, IntelService): своя колония, застава, флот и
+            // радиус сканеров от них. Скрытный флот (п. 7) виден только тому, кто стоит в той
+            // же системе флотом: скрытность и есть умение стоять незамеченным у чужих колоний
+            // и под чужими сканерами.
             boolean fleetThere = fleets.stream()
                     .filter(one -> one.getOwnerPlayerId().equals(observerId))
                     .filter(one -> !Boolean.TRUE.equals(one.isInFlight()))
@@ -622,12 +759,12 @@ public class AiEmpireService {
             if (fleetThere) {
                 return Boolean.TRUE;
             }
-            // Колония видит обычный флот у себя, но не скрытный: скрытность и есть умение
-            // стоять у чужой колонии незамеченным.
             RaceEffects theirs = races.get(fleet.getOwnerPlayerId());
             boolean stealthy = theirs != null && Boolean.TRUE.equals(theirs.stealthyShips());
-            return !stealthy && colonySystems.getOrDefault(observerId, Set.of())
-                    .contains(fleet.getStarSystemId());
+            if (stealthy) {
+                return Boolean.FALSE;
+            }
+            return eyes.getOrDefault(observerId, Set.of()).contains(fleet.getStarSystemId());
         }
 
         /**
@@ -640,11 +777,8 @@ public class AiEmpireService {
             if (mine != null && Boolean.TRUE.equals(mine.omniscient())) {
                 return Boolean.TRUE;
             }
-            return colonySystems.getOrDefault(observerId, Set.of()).contains(systemId)
-                    || fleets.stream()
-                            .filter(one -> one.getOwnerPlayerId().equals(observerId))
-                            .filter(one -> !Boolean.TRUE.equals(one.isInFlight()))
-                            .anyMatch(one -> systemId.equals(one.getStarSystemId()));
+            // Те же глаза, что у игрока: со сканерами — и соседние системы (п. 15).
+            return eyes.getOrDefault(observerId, Set.of()).contains(systemId);
         }
 
         List<FleetEntity> standing(UUID ownerId) {
@@ -742,6 +876,10 @@ public class AiEmpireService {
         }
     }
 
+    /** Чужая колония глазами империи: планета, её система и то, что о ней известно. */
+    private record Sighting(PlanetEntity planet, StarSystemEntity system, IntelService.Known known) {
+    }
+
     private Galaxy load(TurnContext context, List<PlayerEntity> empires) {
         UUID gameId = context.game().getId();
         // Порядок флотов и их строк задаётся явно: база отдаёт строки как ей удобно, а
@@ -802,7 +940,7 @@ public class AiEmpireService {
                 fleets,
                 composition,
                 designsById,
-                fleetService.designSpeeds(gameId, races),
+                fleetService.designSpeeds(designsById.values(), races),
                 stance,
                 empireInfoService.mightByPlayer(context),
                 context.systems().stream()
@@ -822,7 +960,26 @@ public class AiEmpireService {
                 context.colonies().stream()
                         .filter(colony -> colony.getOwnerPlayerId() != null)
                         .collect(Collectors.groupingBy(PlanetEntity::getOwnerPlayerId,
-                                Collectors.mapping(context::systemOf, Collectors.toSet()))));
+                                Collectors.mapping(context::systemOf, Collectors.toSet()))),
+                // Туман войны — п. 15: глаза всех империй и память партии — одной выборкой.
+                intelService.eyesByAll(context.systems(), empires, fleets, scannerRanges(context, empires)),
+                intelService.memoryOfGame(gameId),
+                intelService.alliesOfAll(empires.stream().map(PlayerEntity::getId).toList()),
+                context.colonyContext()::buildings,
+                intelService,
+                intelService.monstersOfGame(gameId),
+                techSight.observedInGame(gameId));
+    }
+
+    /** Дальность сканеров империй — по изученному из контекста хода, без выборок. */
+    private Map<UUID, Integer> scannerRanges(TurnContext context, List<PlayerEntity> empires) {
+        Map<UUID, Integer> ranges = new HashMap<>();
+        for (PlayerEntity empire : empires) {
+            ranges.put(empire.getId(), com.sddnw.server.domain.enums.ScannerTech.bestRange(
+                    context.colonyContext().technologiesByOwner().getOrDefault(empire.getId(), Set.of()),
+                    context.game().getGalaxyFeature()));
+        }
+        return ranges;
     }
 
     /**
@@ -851,13 +1008,53 @@ public class AiEmpireService {
                     break;
                 }
                 UUID opponentId = encounter.opponentOf(deciderId);
-                encounterService.decide(decider, context.turn(), encounter.getId(),
-                        attacks(decider, opponentId, galaxy)
+                EncounterDecision decision = Boolean.TRUE.equals(encounter.getBombard())
+                        ? (Boolean.TRUE.equals(encounterService.bombardable(encounter, decider))
+                                ? bombs(context, galaxy, decider, opponentId, encounter.getStarSystemId())
+                                : notBombardable(decider))
+                        : attacks(decider, opponentId, galaxy)
                                 ? EncounterDecision.ATTACK
-                                : EncounterDecision.IGNORE,
-                        Boolean.TRUE);
+                                : EncounterDecision.IGNORE;
+                encounterService.decide(decider, context.turn(), encounter.getId(), decision, Boolean.TRUE);
             }
         }
+    }
+
+    /**
+     * Бомбить ли беззащитную колонию — пункт 25. Только на войне, и только ту, которую не
+     * берут десантом: колония, на которую хватает бойцов в системе, дороже живой — её
+     * захватят. Остальное — «выжженная земля» оригинала: колония, которую не взять, стоит
+     * врагу производства, науки и денег, а нам не стоит ничего.
+     */
+    private EncounterDecision bombs(TurnContext context, Galaxy galaxy, PlayerEntity decider, UUID opponentId,
+                                    UUID systemId) {
+        if (Boolean.TRUE.equals(galaxy.attackForbidden(decider.getId(), opponentId))) {
+            log.debug("ИИ {}: бомбить не стал — договор", decider.getName());
+            return EncounterDecision.IGNORE;
+        }
+        if (galaxy.stanceOf(decider.getId(), opponentId) != DiplomacyStance.WAR) {
+            log.debug("ИИ {}: бомбить не стал — нет войны", decider.getName());
+            return EncounterDecision.IGNORE;
+        }
+        int troops = galaxy.fleets().stream()
+                .filter(fleet -> fleet.getOwnerPlayerId().equals(decider.getId()))
+                .filter(fleet -> systemId.equals(fleet.getStarSystemId()) && !Boolean.TRUE.equals(fleet.isInFlight()))
+                .mapToInt(galaxy::troops)
+                .sum();
+        boolean takeable = context.colonies().stream()
+                .filter(colony -> opponentId.equals(colony.getOwnerPlayerId()))
+                .filter(colony -> systemId.equals(context.systemOf(colony)))
+                .anyMatch(colony -> troops >= troopsFor(context, galaxy, decider, colony));
+        if (takeable) {
+            log.debug("ИИ {}: бомбить не стал — колонию берёт десант", decider.getName());
+        }
+        return takeable ? EncounterDecision.IGNORE : EncounterDecision.BOMBARD;
+    }
+
+    /** Встреча «бомбить» устарела за ход: бомб, колонии или беззащитности уже нет. */
+    private EncounterDecision notBombardable(PlayerEntity decider) {
+        log.debug("ИИ {}: бомбить не стал — встреча устарела", decider.getName());
+        return EncounterDecision.IGNORE;
     }
 
     /**
@@ -897,11 +1094,15 @@ public class AiEmpireService {
             if (system == null) {
                 continue;
             }
-            if (galaxy.count(fleet, ShipRole.COLONY) > 0) {
+            // Под сторожем не селятся (п. 11.1). Летела империя сюда, не зная о нём (туман
+            // войны, п. 15), — а стоя в системе, видит его своими глазами. Без этой проверки
+            // отказ «система под сторожем» прилетал изнутри хода и ронял его целиком.
+            boolean guarded = galaxy.monster(empire.getId(), system) != null;
+            if (!guarded && galaxy.count(fleet, ShipRole.COLONY) > 0) {
                 bestFreePlanet(system, raceService.effects(empire))
                         .ifPresent(planet -> settle(context, empire, fleet, planet));
             }
-            if (galaxy.count(fleet, ShipRole.OUTPOST) > 0) {
+            if (!guarded && galaxy.count(fleet, ShipRole.OUTPOST) > 0) {
                 outpostSpot(system).ifPresent(planet -> plant(context, empire, fleet, planet));
             }
             if (galaxy.count(fleet, ShipRole.TRANSPORT) > 0) {
@@ -1228,6 +1429,46 @@ public class AiEmpireService {
         return colony.getPopulation() * 2 <= capacity;
     }
 
+    /**
+     * Какого андроида строить колонии ИИ — п. 4.1 (перенос MOO II, {@code ColonyProject.ANDROID_*}).
+     * <i>Реконструкция</i> правила выбора: колонии не хватает еды — фермер (он даёт еду и там, где
+     * климат её не даёт); недра бедные и рабочий даёт меньше андроида — рабочий; иначе учёный.
+     * Сверх потолка по размеру планеты андроид места не занимает и берётся всегда; занимающих место — не больше
+     * трети вместимости: место нужно и жителям, иначе колония перестанет расти людьми, а каждый андроид съедает
+     * единицу производства.
+     */
+    private String android(TurnContext context, PlanetEntity colony, Map<String, ColonyProjectDto> available) {
+        ColonyService.ColonyContext colonies = context.colonyContext();
+        Integer capacity = colonyService.maxPopulation(colony, colonies.effects(colony), colonies.race(colony));
+        // Вместимость уже уменьшена на андроидов, занявших места, — третья доля считается от полной.
+        Integer free = ColonyProject.androidsBeyondCap(colony.getPlanetSize());
+        Integer taking = ColonyProject.androidsTakingRoom(colony.androids(), colony.getPlanetSize());
+        if (colony.androids() >= free && (taking + 1) * 3 > capacity + taking) {
+            return null;
+        }
+        String wanted;
+        if (colonyService.foodLack(colony, colonies) > 0) {
+            wanted = ColonyProject.ANDROID_FARMER;
+        } else if (colony.getMinerals().getProductionPerWorker() + colonies.effects(colony).productionPerWorker()
+                < ColonyProject.ANDROID_OUTPUT) {
+            wanted = ColonyProject.ANDROID_WORKER;
+        } else {
+            wanted = ColonyProject.ANDROID_SCIENTIST;
+        }
+        if (available.containsKey(wanted)) {
+            return wanted;
+        }
+        // Изучены не все три вида (наука ИИ просит рабочих первыми) — берётся любой изученный: андроид даёт три
+        // единицы своего дела в любом случае.
+        for (String kind : List.of(ColonyProject.ANDROID_WORKER, ColonyProject.ANDROID_SCIENTIST,
+                ColonyProject.ANDROID_FARMER)) {
+            if (available.containsKey(kind)) {
+                return kind;
+            }
+        }
+        return null;
+    }
+
     /** Отправляет рейс, если он возможен и есть чем везти, — п. 4.1.1. */
     private void transfers(TurnContext context, PlayerEntity empire) {
         Optional<Move> wanted = wantedTransfer(context, empire);
@@ -1497,6 +1738,15 @@ public class AiEmpireService {
     /** Высадка десанта с транспортов флота — п. 12. */
     private void land(TurnContext context, Galaxy galaxy, PlayerEntity empire,
                       FleetEntity fleet, PlanetEntity planet) {
+        // Последнее слово — свежим взглядом, тем же, каким смотрит сам отказ
+        // (GroundCombatService.land берёт постройки своей выборкой). Контекст хода однажды
+        // разошёлся с ним: средняя галактика, ход 204, звёздная база Bellatrix II, достроенная
+        // этим же ходом, — и отказ «оборона цела» уронил ход целиком. Высадка редка (единицы за
+        // партию), и одна выборка на неё ход не утяжеляет.
+        if (!Boolean.TRUE.equals(groundCombatService.landable(planet, colonyService.context(planet)))) {
+            log.debug("ИИ {}: высадка на {} отложена — оборона цела", empire.getName(), planet.getName());
+            return;
+        }
         GroundCombatService.Outcome outcome = expeditionService.invade(
                 empire, fleet.getId(), planet.getId(), context.turn(), context.game().getId());
         context.report().add(empire.getId(), "INVASION",
@@ -1536,7 +1786,7 @@ public class AiEmpireService {
                 // местом, которое отказывает.
                 .filter(planet -> Boolean.TRUE.equals(
                         groundCombatService.landable(planet, context.colonyContext())))
-                .filter(planet -> worthLanding(context, empire, planet, troops))
+                .filter(planet -> worthLanding(context, galaxy, empire, planet, troops))
                 .max(Comparator.comparing(PlanetEntity::getPopulation));
     }
 
@@ -1551,24 +1801,79 @@ public class AiEmpireService {
      * Всё нужное лежит в контексте хода: изученное обеими сторонами, расы и постройки
      * колонии. Своих выборок фаза не делает — см. «Грабли» в правилах проекта.
      */
-    private Boolean worthLanding(TurnContext context, PlayerEntity empire,
+    private Boolean worthLanding(TurnContext context, Galaxy galaxy, PlayerEntity empire,
                                  PlanetEntity target, Integer troops) {
+        return troops >= troopsFor(context, galaxy, empire, target);
+    }
+
+    /**
+     * Сколько бойцов нужно, чтобы взять колонию с перевесом {@link #INVASION_ADVANTAGE_PERCENT},
+     * — п. 12. Считается ТЕМ ЖЕ расчётом, что и сам бой ({@link GroundCombatService#strength}):
+     * раса, изученные винтовки и броня, казармы колонии, домашняя прибавка подземных и
+     * офицер системы-обороны (п. 6). Прежде так считалась только высадка, а цель, стройка
+     * транспортов и полёт к цели — по головам («население × 1,5»): колония с казармами
+     * намечалась, транспорты летели, а садиться было не по силам — и так по кругу
+     * (проверка наземного боя, 03.10.2026). Сила линейна по числу бойцов, поэтому
+     * нужное число — деление, а не подбор.
+     */
+    private Integer troopsFor(TurnContext context, Galaxy galaxy, PlayerEntity empire, PlanetEntity target) {
+        /*
+          ОЦЕНКА ПО ВИДИМОМУ — п. 15 (решение хозяина проекта, 03.10.2026): ИИ знает о чужой
+          колонии ровно то, что увидел бы на её месте человек. Население — глазами или
+          памятью ({@link IntelService}); казармы видны, их надбавка входит; раса защитника —
+          только знакомого соседа (её стороны человек читает на экране «Расы»). Изученного
+          защитником и его офицера обороны со стороны не видно никак — поэтому ИИ полагает
+          чужую технику РАВНОЙ своей, а офицера нет. Прежде он считал по настоящим
+          технологиям, казармам и офицеру цели, то есть знал больше любого игрока.
+        */
         ColonyService.ColonyContext colony = context.colonyContext();
+        IntelService.Known known = galaxy.seen(empire.getId(), target);
+        if (known == null || known.population() <= 0) {
+            return Integer.MAX_VALUE;
+        }
         RaceEffects mine = colony.raceEffectsByOwner()
                 .getOrDefault(empire.getId(), RaceEffects.NONE);
-        RaceEffects theirs = colony.raceEffectsByOwner()
-                .getOrDefault(target.getOwnerPlayerId(), RaceEffects.NONE);
+        RaceEffects theirs = galaxy.knownRivals(empire.getId()).contains(known.ownerId())
+                ? galaxy.races().getOrDefault(known.ownerId(), RaceEffects.NONE)
+                : RaceEffects.NONE;
+        Set<String> ownTech = colony.technologiesByOwner().getOrDefault(empire.getId(), Set.of());
+        int barracks = known.defences().stream()
+                .map(code -> colony.catalog().get(code))
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(building -> building.amount(BuildingEffectType.GROUND_DEFENCE_PERCENT))
+                .sum();
+        Integer perTrooper = groundCombatService.strength(1, mine, 0, Boolean.FALSE,
+                GroundCombatTech.attackPercent(ownTech));
+        Integer defence = groundCombatService.strength(known.population(), theirs, 0, Boolean.TRUE,
+                defenderTechPercent(context, galaxy, empire, known.ownerId(), ownTech) + barracks);
+        if (perTrooper <= 0) {
+            return Integer.MAX_VALUE;
+        }
+        long needed = ((long) defence * INVASION_ADVANTAGE_PERCENT + perTrooper * 100L - 1) / (perTrooper * 100L);
+        return (int) Math.max(1, Math.min(Integer.MAX_VALUE, needed));
+    }
 
-        Integer attack = groundCombatService.strength(troops, mine, 0, Boolean.FALSE,
-                GroundCombatTech.attackPercent(colony.technologiesByOwner()
-                        .getOrDefault(empire.getId(), Set.of())));
-        Integer defence = groundCombatService.strength(target.getPopulation(), theirs, 0, Boolean.TRUE,
-                GroundCombatTech.defencePercent(colony.technologiesByOwner()
-                        .getOrDefault(target.getOwnerPlayerId(), Set.of()))
-                        + colony.effects(target).amounts()
-                                .getOrDefault(BuildingEffectType.GROUND_DEFENCE_PERCENT, 0));
-
-        return attack * 100 >= defence * INVASION_ADVANTAGE_PERCENT;
+    /**
+     * Наземная техника защитника, как её может знать ИИ (п. 15, решение хозяина проекта,
+     * 03.10.2026): по УВИДЕННЫМ технологиям врага (винтовки, броня, снаряжение, разглядённые
+     * в бою или сканерами) — или ПРЕДПОЛОЖЕНИЕМ по уровню его науки, когда тот виден: число
+     * изученного знакомым соседом игрок читает на графике «Инфо». Предположение — доля своей
+     * техники в той же пропорции, в какой его наука к своей, но не больше своей. Берётся
+     * большее из двух: увиденное нельзя «забыть», а предположение не должно занижать то, что
+     * уже видели. Незнакомый сосед — только увиденное.
+     */
+    private int defenderTechPercent(TurnContext context, Galaxy galaxy, PlayerEntity empire, UUID owner,
+                                    Set<String> ownTech) {
+        Set<String> observed = galaxy.observed().getOrDefault(empire.getId(), Map.of())
+                .getOrDefault(owner, Set.of());
+        int seen = GroundCombatTech.defencePercent(observed);
+        if (!galaxy.knownRivals(empire.getId()).contains(owner)) {
+            return seen;
+        }
+        int theirs = context.colonyContext().technologiesByOwner().getOrDefault(owner, Set.of()).size();
+        int mine = Math.max(1, ownTech.size());
+        int guess = GroundCombatTech.defencePercent(ownTech) * Math.min(theirs, mine) / mine;
+        return Math.max(seen, guess);
     }
 
     /**
@@ -1634,7 +1939,7 @@ public class AiEmpireService {
                     .available(colony, context.colonyContext()).stream()
                     .collect(Collectors.toMap(ColonyProjectDto::code, project -> project,
                             (first, second) -> first));
-            String choice = forging ? warship(available) : null;
+            String choice = forging ? warship(context, galaxy, empire, available) : null;
             if (choice == null) {
                 choice = choose(context, galaxy, empire, colony, available, atWar,
                         border.contains(context.systemOf(colony)),
@@ -1657,7 +1962,7 @@ public class AiEmpireService {
             log.debug("ИИ {}: колония {} строит {}", empire.getName(), colony.getName(), choice);
         }
 
-        buyProject(context, empire, colonies);
+        buyProjects(context, empire, colonies);
     }
 
     /**
@@ -1685,9 +1990,9 @@ public class AiEmpireService {
      * Правила самой покупки здесь не повторяются: цену и списание считает
      * {@link ColonyService#buyFromTurn} — тот же путь, каким выкупает игрок.
      */
-    private void buyProject(TurnContext context, PlayerEntity empire, List<PlanetEntity> colonies) {
+    private PlanetEntity buyProject(TurnContext context, PlayerEntity empire, List<PlanetEntity> colonies) {
         if (empire.getCredits() <= 0) {
-            return;
+            return null;
         }
         // ХОЗЯЙСТВО ВЫКУПАЕТСЯ ПЕРВЫМ И НА ВСЮ КАЗНУ — п. 10 (журнал, п. 3.74).
         PlanetEntity best = cheapest(context, colonies, empire.getCredits(), Kind.ECONOMY);
@@ -1703,6 +2008,25 @@ public class AiEmpireService {
         }
         if (best != null) {
             colonyService.buyFromTurn(empire, best, context.colonyContext());
+        }
+        return best;
+    }
+
+    /**
+     * Выкуп по уровню — field-backlog, пункт 9: новичок и лёгкий денег на выкуп не тратят вовсе
+     * (казна лежит — так играет тот, кто не знает о выкупе), обычный выкупает одно за ход, сложный —
+     * до трёх, каждый раз заново по тому же правилу ({@link #buyProject}) и уже с оставшейся казной.
+     * Выкупленная колония второй раз не берётся: её стройка оплачена.
+     */
+    private void buyProjects(TurnContext context, PlayerEntity empire, List<PlanetEntity> colonies) {
+        List<PlanetEntity> left = new ArrayList<>(colonies);
+        for (int i = 0; i < AiSkill.of(empire.getAiSkill()).getPurchasesPerTurn(); i++) {
+            Integer before = empire.getCredits();
+            PlanetEntity bought = buyProject(context, empire, left);
+            if (bought == null || empire.getCredits().equals(before)) {
+                return;
+            }
+            left.remove(bought);
         }
     }
 
@@ -1734,7 +2058,7 @@ public class AiEmpireService {
      * {@link #FULL_TREASURY_COST}: на всю казну берут дешёвое и быстро окупаемое, а
      * глубинная шахта за 250 единиц пусть ждёт общего правила половины.
      */
-    private Boolean suits(PlanetEntity colony, Kind kind) {
+    private Boolean suits(TurnContext context, PlanetEntity colony, Kind kind) {
         if (kind == Kind.ANY) {
             return Boolean.TRUE;
         }
@@ -1746,7 +2070,8 @@ public class AiEmpireService {
         if (building == null || building.cost() > FULL_TREASURY_COST) {
             return Boolean.FALSE;
         }
-        Integer turns = paybackTurns(building, colony.getJobs());
+        Integer turns = paybackTurns(building, colony.getJobs(),
+                colonyService.reliefGain(colony, context.colonyContext(), building));
         return turns != null && turns <= PAYBACK_TURNS;
     }
 
@@ -1758,7 +2083,7 @@ public class AiEmpireService {
         PlanetEntity best = null;
         Integer bestPrice = null;
         for (PlanetEntity colony : colonies) {
-            if (!Boolean.TRUE.equals(suits(colony, kind))) {
+            if (!Boolean.TRUE.equals(suits(context, colony, kind))) {
                 continue;
             }
             Integer price = colonyService.buyPrice(colony, context.colonyContext());
@@ -1808,6 +2133,14 @@ public class AiEmpireService {
             }
         }
 
+        // СТОЛИЦА — п. 10.1: без неё мораль ВСЕХ колоний падает на пятую-половину, и новые
+        // лидеры не приходят. Отстраивает её крупнейшая колония: у неё и производство больше,
+        // и столица там простоит дольше. Список стройки предлагает её только империи без
+        // столицы и только пока другая колония её не заложила.
+        if (available.containsKey(CapitolRules.CODE) && colony == largestColony(context, empire)) {
+            return CapitolRules.CODE;
+        }
+
         // ГРУЗОВИК — п. 4.1.1 (журнал, п. 3.100), и стоит он здесь, рядом с едой, потому
         // что это та же еда, только чужая: без грузового флота излишек кормовых миров
         // некуда девать, и каждая колония вынуждена кормиться сама. Мимо тормоза по
@@ -1823,11 +2156,14 @@ public class AiEmpireService {
         // времени. Корабли через него не проходят: их содержание — командные очки, а не
         // кредиты, и меряется оно другим правилом (CommandRules).
         Map<String, Building> catalog = buildingCatalog.byCode();
+        // Уровень сложности — field-backlog, пункт 9: как хорошо эта империя выбирает стройку.
+        AiSkill skill = AiSkill.of(empire.getAiSkill());
         Map<String, ColonyProjectDto> affordable = available.entrySet().stream()
                 .filter(entry -> {
                     Building building = catalog.get(entry.getKey());
                     return building == null
-                            || Boolean.TRUE.equals(affordable(context, empire, building));
+                            || (Boolean.TRUE.equals(affordable(context, empire, building))
+                                    && !MoraleRules.useless(building, context.colonyContext().race(colony)));
                 })
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
                         (first, second) -> first, LinkedHashMap::new));
@@ -1836,6 +2172,16 @@ public class AiEmpireService {
         // строится, пока цель есть, а не после того, как кончится всё остальное (п. 12).
         // Раньше транспорт стоял ниже зданий, колониальных кораблей и застав, и империя
         // добиралась до него только когда строить было больше нечего.
+        // Андроиды сверх потолка по размеру планеты (ColonyProject.androidsBeyondCap) места жителя не занимают —
+        // чистая прибавка разовой ценой (не больше пяти на колонию), и стоят они даже выше военной стройки: к позднему
+        // ходу ИИ воюет почти всегда, и ниже неё андроидов за 500 ходов не строил никто — все колонии изучивших
+        // андроидов строили корабли (замер tools/ai_unused.py, 14.10.2026).
+        if (colony.androids() < ColonyProject.androidsBeyondCap(colony.getPlanetSize())) {
+            String free = android(context, colony, available);
+            if (free != null) {
+                return free;
+            }
+        }
         if (Boolean.TRUE.equals(atWar)) {
             String assault = assault(context, galaxy, empire, available);
             if (assault != null) {
@@ -1854,14 +2200,43 @@ public class AiEmpireService {
         // Измерено попыткой обойтись одним правилом: заводов стало 11 вместо 32,
         // лабораторий 8 вместо 30, а голых колоний — 82 % вместо 61 %. Правило хорошо
         // говорит, что ДОБАВИТЬ к основанию, и плохо — что основанием является.
+        // КАЗАРМЫ ПРЕЖДЕ ЗАВОДА у диктатуры и феодализма — п. 10.1. Их колония без казарм
+        // теряет пятую часть ВСЕЙ выработки (мораль −20 %), и казармы за шестьдесят единиц
+        // возвращают её первыми: оригинал прямо говорит, что такие колонии «don't get going
+        // properly until they have a Barracks».
+        if (context.colonyContext().race(colony).moraleWithoutBarracks() < 0
+                && !Boolean.TRUE.equals(BuildingEffects.sum(context.colonyContext().buildings(colony)).barracks())
+                && available.containsKey(MARINE_BARRACKS)) {
+            return MARINE_BARRACKS;
+        }
+        // ДЕБЮТ СВОЕЙ РАСЫ — сложный уровень (пункт 9): родной мир первые ходы строит то, что
+        // строили сильнейшие империи этой расы в замерах ({@link AiOpeningBook}).
+        String book = fromBook(context, empire, colony, available, skill);
+        if (book != null) {
+            return book;
+        }
         String foundation = first(FOUNDATION, available);
         if (foundation != null) {
             return foundation;
         }
-        String obvious = worthwhile(colony, available, FAST_PAYBACK_TURNS);
+        // Окупаемость на месте — только у тех, кто умеет считать (пункт 9): лёгкие уровни строят
+        // по списку развития, не спрашивая, что ЭТОЙ колонии выгоднее.
+        String obvious = skill.getBuild() == AiSkill.BuildChoice.PAYBACK
+                ? worthwhile(context, colony, available, FAST_PAYBACK_TURNS) : null;
         if (obvious != null) {
             return obvious;
         }
+
+        // Космическая академия — п. 8 (14.10.2026): выработки у неё нет, окупаемость её не берёт никогда, и замер
+        // tools/ai_unused.py показал ноль академий при изученной технологии у всех семи империй. Строится ОДНА на
+        // империю, на главной верфи (колония с наибольшим производством), когда империя воюет или правитель
+        // воинствен: построенные там корабли выходят обученными, а стоящие в системе учатся. Стоит ВЫШЕ кораблей и
+        // обороны: ниже главная верфь до неё не доходила (второй замер — снова ноль), а стоит она 100 и одна на империю.
+        if (available.containsKey(SPACE_ACADEMY) && Boolean.TRUE.equals(armsRace(empire.getAiPersonality(), atWar))
+                && Boolean.TRUE.equals(academyYard(context, empire, colony))) {
+            return SPACE_ACADEMY;
+        }
+
         // ТРЕВОГА: над колонией стоит враг или чужой десант — п. 8, п. 12 (журнал, п. 3.94).
         // Единственная оборонительная ветка выше расселения, и список тут полный, военный:
         // выбирать между колониальным кораблём и станцией, когда транспорты уже на орбите,
@@ -1913,7 +2288,7 @@ public class AiEmpireService {
         // и оставил бы колонию беззащитной на десятки ходов. Остальной гарнизон — потом,
         // когда строить больше нечего.
         if (galaxy.owned(empire.getId(), ShipRole.WARSHIP) == 0) {
-            String first = warship(available);
+            String first = warship(context, galaxy, empire, available);
             if (first != null) {
                 return first;
             }
@@ -1955,12 +2330,13 @@ public class AiEmpireService {
         // Хозяйство, которое окупается не так быстро, но всё же окупается, — п. 10.
         // Расселение уже получило своё выше, и дальше колония вкладывается в себя, а не
         // ждёт, пока кончатся свободные планеты во всей галактике.
-        String worthwhile = worthwhile(colony, available, PAYBACK_TURNS);
+        String worthwhile = skill.getBuild() == AiSkill.BuildChoice.PAYBACK
+                ? worthwhile(context, colony, available, PAYBACK_TURNS) : null;
         if (worthwhile != null) {
             return worthwhile;
         }
 
-        String building = first(DEVELOPMENT, available);
+        String building = first(development(context, colony, skill), available);
         if (building != null) {
             return building;
         }
@@ -1983,6 +2359,23 @@ public class AiEmpireService {
         // Отсюда место: сперва основание, расселение и ВСЁ, что окупается, — а дома
         // достаются тому, у кого дел получше не осталось вовсе. Это ровно бедная планета, и
         // её работа в империи как раз такая: растить людей для хороших миров.
+        // Переделка планеты (п. 4.1.2.1, 13.10.2026, перенос MOO II) — выше домов: она тоже
+        // растит колонию, но навсегда — больше места и еды с фермера. Гея прежде
+        // терраформирования: у земной планеты терраформировать нечего. Искусственная планета —
+        // новая планета системы под колониальную базу, тем же путём, что свободная.
+        for (String reshape : List.of(ColonyProject.GAIA, ColonyProject.TERRAFORM, ColonyProject.ARTIFICIAL_PLANET)) {
+            if (available.containsKey(reshape)) {
+                return reshape;
+            }
+        }
+
+        // Андроиды (п. 4.1, перенос MOO II) — выше домов: место в колонии они занимают сразу, а не
+        // ростом.
+        String android = android(context, colony, available);
+        if (android != null) {
+            return android;
+        }
+
         if (available.containsKey(ColonyProject.HOUSING)
                 && Boolean.TRUE.equals(roomToGrow(context, colony))) {
             return ColonyProject.HOUSING;
@@ -2000,8 +2393,8 @@ public class AiEmpireService {
         // товары при пустом небе, — это не мирная империя, а беззащитная.
         // Поход на Wardenhold (backlog-promo, пункт 3) копит флот по военной норме: Стража
         // гарнизоном мирного времени не взять, а чужое удержание надо чем-то сбивать.
-        String garrison = garrison(galaxy, empire, available,
-                Boolean.TRUE.equals(atWar) || Boolean.TRUE.equals(wardenCampaign(context, empire)));
+        String garrison = garrison(context, galaxy, empire, available,
+                Boolean.TRUE.equals(atWar) || Boolean.TRUE.equals(wardenCampaign(context, galaxy, empire)));
         return garrison == null ? ColonyProject.TRADE_GOODS : garrison;
     }
 
@@ -2015,7 +2408,7 @@ public class AiEmpireService {
      * очки империи (колония даёт два, фрегат занимает одно — {@link CommandRules}), поэтому
      * казну флот не проедает.
      */
-    private String garrison(Galaxy galaxy, PlayerEntity empire,
+    private String garrison(TurnContext context, Galaxy galaxy, PlayerEntity empire,
                             Map<String, ColonyProjectDto> available, Boolean atWar) {
         Integer warships = galaxy.owned(empire.getId(), ShipRole.WARSHIP);
         Integer colonies = galaxy.coloniesOf(empire.getId());
@@ -2025,7 +2418,7 @@ public class AiEmpireService {
         if (warships >= colonies * quota) {
             return null;
         }
-        return warship(available);
+        return warship(context, galaxy, empire, available);
     }
 
     /**
@@ -2057,10 +2450,10 @@ public class AiEmpireService {
         }
         if (Boolean.TRUE.equals(guarded(context, galaxy, empire, target))
                 && galaxy.owned(empire.getId(), ShipRole.WARSHIP) < WARSHIPS_BEFORE_TRANSPORTS) {
-            return warship(available);
+            return warship(context, galaxy, empire, available);
         }
 
-        Integer needed = target.getPopulation() * INVASION_ADVANTAGE_PERCENT / 100 + 1;
+        Integer needed = troopsFor(context, galaxy, empire, target);
         return transports * ColonyProject.TRANSPORT_TROOPS < needed
                 ? ColonyProject.TRANSPORT
                 : null;
@@ -2095,25 +2488,56 @@ public class AiEmpireService {
     private PlanetEntity invasionChance(TurnContext context, Galaxy galaxy, PlayerEntity empire,
                                         Integer mostTroops) {
         Set<UUID> reachable = reachable(context, empire);
-        return context.colonies().stream()
-                .filter(colony -> colony.getOwnerPlayerId() != null)
-                .filter(colony -> !empire.getId().equals(colony.getOwnerPlayerId()))
-                .filter(colony -> colony.getPopulation() > 0)
-                .filter(colony -> reachable.contains(context.systemOf(colony)))
-                // Идти войной на колонию, которой не видел, нельзя.
-                .filter(colony -> Boolean.TRUE.equals(
-                        galaxy.knows(empire.getId(), context.systemOf(colony))))
-                .filter(colony -> galaxy.stanceOf(empire.getId(), colony.getOwnerPlayerId())
+        // Только колонии, которые империя ВИДИТ или помнит (п. 15, туман войны): хозяин и
+        // население — глазами, без них — какими их застали в последний раз.
+        return galaxy.sightings(empire.getId()).stream()
+                .filter(seen -> seen.known().population() > 0)
+                .filter(seen -> reachable.contains(seen.system().getId()))
+                .filter(seen -> galaxy.stanceOf(empire.getId(), seen.known().ownerId())
                         == DiplomacyStance.WAR)
-                .filter(colony -> !Boolean.TRUE.equals(
-                        galaxy.attackForbidden(empire.getId(), colony.getOwnerPlayerId())))
-                .filter(colony -> colony.getPopulation() * INVASION_ADVANTAGE_PERCENT / 100
-                        < mostTroops)
+                .filter(seen -> !Boolean.TRUE.equals(
+                        galaxy.attackForbidden(empire.getId(), seen.known().ownerId())))
+                .filter(seen -> mostTroops == Integer.MAX_VALUE
+                        || troopsFor(context, galaxy, empire, seen.planet()) <= mostTroops)
                 // Колония, которой враг держит Wardenhold, — первая цель (backlog-promo,
                 // пункт 3): её захват обрывает его счёт к победе. Дальше — слабейшая.
-                .min(Comparator.comparing((PlanetEntity colony) ->
-                                Boolean.TRUE.equals(heldWardenAgainst(context, empire, colony)) ? 0 : 1)
-                        .thenComparing(PlanetEntity::getPopulation))
+                .min(Comparator.comparing((Sighting seen) ->
+                                Boolean.TRUE.equals(heldWardenAgainst(context, empire, seen.planet())) ? 0 : 1)
+                        .thenComparing(seen -> seen.known().population()))
+                .map(Sighting::planet)
+                .orElse(null);
+    }
+
+    /** Бомбардировщиков рядом с десантом не больше одного на столько боевых кораблей — реконструкция. */
+    private static final int BOMBER_SHARE = 4;
+
+    /**
+     * Куда лететь бомбардировщикам, пока десант берёт свою цель, — пункт 25 (04.10.2026).
+     * <p>
+     * Колония врага в ДРУГОЙ системе, чем цель десанта ({@code except}): там, куда идёт
+     * десант, жечь незачем — её захватят. И только та, у которой оборона не видна
+     * ({@link Galaxy#landable}): встреча «бомбить» бывает лишь у беззащитной колонии, а с
+     * платформами бомбардировщик, у которого пушек нет, проиграл бы бой за орбиту. Среди
+     * таких первой идёт та, которую десантом не взять вовсе, затем самая населённая —
+     * бомбёжка ей стоит дороже всего.
+     */
+    private PlanetEntity bombTarget(TurnContext context, Galaxy galaxy, PlayerEntity empire, UUID except) {
+        Set<UUID> reachable = reachable(context, empire);
+        int mostTroops = TRANSPORTS_AT_ONCE * ColonyProject.TRANSPORT_TROOPS;
+        return galaxy.sightings(empire.getId()).stream()
+                .filter(seen -> seen.known().population() > 0)
+                .filter(seen -> reachable.contains(seen.system().getId()))
+                .filter(seen -> !seen.system().getId().equals(except))
+                .filter(seen -> galaxy.stanceOf(empire.getId(), seen.known().ownerId())
+                        == DiplomacyStance.WAR)
+                .filter(seen -> !Boolean.TRUE.equals(
+                        galaxy.attackForbidden(empire.getId(), seen.known().ownerId())))
+                .filter(seen -> Boolean.TRUE.equals(galaxy.landable(empire.getId(), seen.planet())))
+                .min(Comparator.comparing((Sighting seen) ->
+                                troopsFor(context, galaxy, empire, seen.planet()) > mostTroops ? 0 : 1)
+                        .thenComparing(seen -> -seen.known().population())
+                        .thenComparing(seen -> seen.planet().getName()))
+                .map(Sighting::planet)
                 .orElse(null);
     }
 
@@ -2159,6 +2583,91 @@ public class AiEmpireService {
      * @param known изученные империей технологии
      * @param atWar идёт ли у неё хоть одна война
      */
+    /** Средство абордажа, которое ИИ изучает на войне нарочно, — штурмовые шаттлы (п. 8). */
+    static final String BOARDING_TECH = "assault-shuttles";
+
+    /**
+     * Лестница оружия ИИ на войне — п. 8 (14.10.2026). <i>Реконструкция</i> по удару на 10 клеток места
+     * (`ship-components.json`): ядерная ракета 8 → нейтронный бластер 12 (1350 ОИ) → фазеры 20 (6000) →
+     * плазменная пушка (9500, обволакивает) → Копьё новы (35000). Промежуточное (меркулит 9, ионная
+     * пушка 5, гравитон 10) прибавляет меньше, чем стоит, и ступенью не считается.
+     */
+    static final List<String> WEAPON_LADDER =
+            List.of("neutron-blaster", "phasors", "plasma-cannon", "stellar-converter");
+
+    /** Андроиды-рабочие — Biology (перенос MOO II, п. 4.1): место жителя, +3 производства. */
+    static final String ANDROID_TECH = "android-workers";
+
+    /**
+     * С какой доли колоний империи, упёршихся в потолок или живущих на неласковом климате, ИИ ищет андроидов и
+     * терраформирование — п. 4.1 (14.10.2026). <i>Реконструкция</i> по замеру партии ИИ (большая галактика, семь
+     * империй): к сотому ходу у потолка 12 колоний из 16, к трёхсотому — 42 из 95, на неласковом климате 74 из 95;
+     * при этом технологии андроидов к 300-му ходу изучали 0–2 империи, терраформирование — 0–1. Половина — шаг
+     * «вдвое или пополам» от правила «хоть одна».
+     */
+    static final int COLONY_NEED_PERCENT = 50;
+
+    /**
+     * Технологии, которых просит хозяйство колоний, — п. 4.1: андроиды-рабочие, когда половина колоний упёрлась
+     * в потолок населения (расти им больше некуда, а андроид — рабочий без места жителя в очереди роста),
+     * терраформирование — когда половина колоний живёт не на земном климате и не на Гее. Идут в нужды науки
+     * ПОСЛЕ основных (`ResearchPhase`): правило стройки у ИИ для них есть давно (`android`, переделка планет), а
+     * технологии без нужды он не изучал.
+     */
+    public List<String> colonyTechnologies(TurnContext context, PlayerEntity empire, Set<String> known) {
+        List<PlanetEntity> colonies = context.coloniesOf(empire.getId()).stream()
+                .filter(colony -> colony.getPopulation() > 0)
+                .toList();
+        if (colonies.isEmpty()) {
+            return List.of();
+        }
+        long crowded = colonies.stream()
+                .filter(colony -> colony.getPopulation() >= colonyService.maxPopulation(colony,
+                        context.colonyContext().effects(colony), context.colonyContext().race(colony)))
+                .count();
+        long harsh = colonies.stream()
+                .filter(colony -> colony.getClimate() != com.sddnw.server.domain.enums.PlanetClimate.TERRAN
+                        && colony.getClimate() != com.sddnw.server.domain.enums.PlanetClimate.GAIA)
+                .count();
+        List<String> wanted = new ArrayList<>(2);
+        if (!known.contains(ANDROID_TECH) && crowded * 100 >= (long) colonies.size() * COLONY_NEED_PERCENT) {
+            wanted.add(ANDROID_TECH);
+        }
+        if (!known.contains(TerraformRules.TERRAFORMING_TECH)
+                && harsh * 100 >= (long) colonies.size() * COLONY_NEED_PERCENT) {
+            wanted.add(TerraformRules.TERRAFORMING_TECH);
+        }
+        return wanted;
+    }
+
+    /** Космическая академия — здание с действием {@code SPACE_ACADEMY} (п. 8). */
+    static final String SPACE_ACADEMY = "space-academy";
+
+    /**
+     * Главная ли это верфь империи без академии — п. 8: колония с наибольшим производством (ничья — названием
+     * планеты, партия обязана повторяться), и ни одна колония империи академии ещё не имеет.
+     */
+    private Boolean academyYard(TurnContext context, PlayerEntity empire, PlanetEntity colony) {
+        List<PlanetEntity> mine = context.coloniesOf(empire.getId());
+        boolean built = mine.stream().anyMatch(one -> SPACE_ACADEMY.equals(one.getProjectCode())
+                || context.colonyContext().buildings(one).stream()
+                        .anyMatch(building -> SPACE_ACADEMY.equals(building.code())));
+        if (built) {
+            return Boolean.FALSE;
+        }
+        PlanetEntity yard = mine.stream()
+                .max(Comparator.comparing((PlanetEntity one) -> colonyService.production(one, context.colonyContext()))
+                        .thenComparing(PlanetEntity::getName, Comparator.reverseOrder()))
+                .orElse(null);
+        return yard != null && yard.getId().equals(colony.getId());
+    }
+
+    /** Отсеки истребителей — Physics, перенос MOO II (п. 8). */
+    static final String FIGHTER_BAY_TECH = "fighter-bays";
+
+    /** Слабейший и самый дешёвый ствол истребителя — лазер (п. 8, {@code TacticalBattleService.fighterBeam}). */
+    static final String FIGHTER_BEAM_TECH = "laser-cannon";
+
     public List<String> wantedTechnologies(Set<String> known, Boolean atWar) {
         return wantedTechnologies(known, atWar, Boolean.FALSE);
     }
@@ -2173,6 +2682,28 @@ public class AiEmpireService {
      *                   хватает на соседей, но не на центр.
      */
     public List<String> wantedTechnologies(Set<String> known, Boolean atWar, Boolean wardenhold) {
+        return wantedTechnologies(known, atWar, wardenhold, atWar);
+    }
+
+    /**
+     * Характеры, которые держат оружие в нуждах и в мирное время (п. 8, 14.10.2026): беспощадный и агрессивный
+     * нападают с малым поводом или когда выгодно, и копят для этого флот заранее. Прочие идут к следующей
+     * ступени оружия только на войне — замер партии на 250 ходов показал, что без войны ИИ до 200-го хода
+     * стоял на ракетах.
+     */
+    static final Set<com.sddnw.server.domain.enums.AiPersonality> ARMED_IN_PEACE = Set.of(
+            com.sddnw.server.domain.enums.AiPersonality.RUTHLESS, com.sddnw.server.domain.enums.AiPersonality.AGGRESSIVE);
+
+    /** Держит ли правитель оружие в нуждах науки сейчас — на войне или по характеру ({@link #ARMED_IN_PEACE}). */
+    public Boolean armsRace(com.sddnw.server.domain.enums.AiPersonality personality, Boolean atWar) {
+        return Boolean.TRUE.equals(atWar) || (personality != null && ARMED_IN_PEACE.contains(personality));
+    }
+
+    /**
+     * Нужды науки с гонкой вооружений отдельно от войны: {@code armsRace} добавляет следующую ступень оружия
+     * ({@link #WEAPON_LADDER}), {@code atWar} — десант и средство абордажа.
+     */
+    public List<String> wantedTechnologies(Set<String> known, Boolean atWar, Boolean wardenhold, Boolean armsRace) {
         List<String> wanted = new ArrayList<>(8);
         /*
           Основа кораблестроения — ПЕРВОЙ: двигатель (Power) и топливо (Chemistry). Без обоих
@@ -2205,6 +2736,13 @@ public class AiEmpireService {
                 }
             }
         }
+        // Ствол для истребителей (п. 8, 14.10.2026): звено бьёт лучом или снарядом империи с ближней
+        // обороной, и изученный отсек без такого ствола ИИ не ставил ни разу — партия на 250 ходов,
+        // восемь империй: отсек у пяти, лазер у трёх, носителей ноль. Лазер стоит 50 ОИ — он идёт
+        // ДО хозяйства: после суперкомпьютера и робошахт до него не доходили и к 150-му ходу.
+        if (known.contains(FIGHTER_BAY_TECH) && !known.contains(FIGHTER_BEAM_TECH)) {
+            wanted.add(FIGHTER_BEAM_TECH);
+        }
         // Хозяйство идёт ПОСЛЕ расселения, но раньше вкуса: колониальный корабль стоит 500
         // единиц, и строить его без завода значит строить втрое дольше. Зато и откладывать
         // расселение ради завода нельзя — пока империя сидит на родной звезде, ей не с кем
@@ -2213,6 +2751,22 @@ public class AiEmpireService {
             if (!known.contains(technology)) {
                 wanted.add(technology);
             }
+        }
+        // Средство абордажа — на войне и ПОСЛЕ хозяйства (п. 8): трофеи быстрого боя берёт
+        // только флот, которому есть чем брать, а все три средства в дереве поздние (шаттлы
+        // 900, тяговый луч 1150, транспортёры 2750). Без нужды ИИ доходил до них случайно, к
+        // концу партии, и за две партии взял один трофей на полторы сотни выигранных боёв
+        // (замер 03.10.2026). Шаттлы — дешевле прочих и берут корабль без условий.
+        if (Boolean.TRUE.equals(atWar) && !known.contains(BOARDING_TECH)
+                && !known.contains("transporters") && !known.contains("tractor-beam")) {
+            wanted.add(BOARDING_TECH);
+        }
+        // Следующая ступень оружия — на войне и после хозяйства (п. 8, 14.10.2026). Без нужды ИИ до оружия
+        // не доходил: три партии по 250 ходов, восемь империй — ни нейтронного бластера, ни фазеров ни у
+        // кого, флот всю партию воевал ядерными и меркулитовыми ракетами. Ступень — первая неизученная
+        // в WEAPON_LADDER: каждая заметно сильнее прежней по удару на клетку.
+        if (Boolean.TRUE.equals(armsRace)) {
+            WEAPON_LADDER.stream().filter(code -> !known.contains(code)).findFirst().ifPresent(wanted::add);
         }
         return wanted;
     }
@@ -2230,7 +2784,7 @@ public class AiEmpireService {
         Integer warships = galaxy.owned(empire.getId(), ShipRole.WARSHIP);
 
         if (warships < WARSHIPS_BEFORE_TRANSPORTS) {
-            return warship(available);
+            return warship(context, galaxy, empire, available);
         }
         Integer needed = troopsNeeded(context, galaxy, empire);
         if (available.containsKey(ColonyProject.TRANSPORT)
@@ -2238,7 +2792,7 @@ public class AiEmpireService {
                 && transports * ColonyProject.TRANSPORT_TROOPS < needed) {
             return ColonyProject.TRANSPORT;
         }
-        return warship(available);
+        return warship(context, galaxy, empire, available);
     }
 
     /**
@@ -2249,30 +2803,199 @@ public class AiEmpireService {
      */
     private Integer troopsNeeded(TurnContext context, Galaxy galaxy, PlayerEntity empire) {
         Set<UUID> reachable = reachable(context, empire);
-        Integer weakest = context.colonies().stream()
-                .filter(colony -> !empire.getId().equals(colony.getOwnerPlayerId()))
-                .filter(colony -> reachable.contains(context.systemOf(colony)))
-                // Идти войной на колонию, которой не видел, нельзя.
-                .filter(colony -> Boolean.TRUE.equals(
-                        galaxy.knows(empire.getId(), context.systemOf(colony))))
-                .filter(colony -> galaxy.stanceOf(empire.getId(), colony.getOwnerPlayerId())
+        // Идти войной можно только на колонию, которую видел или помнит (п. 15).
+        Integer weakest = galaxy.sightings(empire.getId()).stream()
+                .filter(seen -> reachable.contains(seen.system().getId()))
+                .filter(seen -> galaxy.stanceOf(empire.getId(), seen.known().ownerId())
                         == DiplomacyStance.WAR)
-                .map(PlanetEntity::getPopulation)
+                .filter(seen -> seen.known().population() > 0)
+                .map(seen -> troopsFor(context, galaxy, empire, seen.planet()))
                 .min(Comparator.naturalOrder())
                 .orElse(0);
-        return weakest * INVASION_ADVANTAGE_PERCENT / 100 + 1;
+        return weakest;
     }
 
-    /** Самый сильный корабль, который колония может поднять: за него и берутся. */
-    private String warship(Map<String, ColonyProjectDto> available) {
-        return available.values().stream()
+    /**
+     * Какой боевой корабль колония поднимает — п. 8, п. 15: проект ТОЙ ЗАДАЧИ, которая сейчас
+     * нужна империи ({@link #wantedMission}), а среди них — самый сильный (дорогой). Нет
+     * проекта нужной задачи — линейный, нет и его — любой самый дорогой, как прежде.
+     * <p>
+     * Прежде правило было одно — «самый дорогой», — и флот ИИ был одинаковым против любого
+     * врага (03.10.2026, просьба хозяина проекта: корабли под разные задачи).
+     */
+    private String warship(TurnContext context, Galaxy galaxy, PlayerEntity empire,
+                           Map<String, ColonyProjectDto> available) {
+        Map<UUID, ShipMission> missions = missionsOf(context, empire.getId());
+        List<ColonyProjectDto> ships = available.values().stream()
                 .filter(project -> ColonyProject.isShip(project.code()))
-                .max(Comparator.comparing(project -> project.cost() == null ? 0 : project.cost()))
+                .sorted(Comparator.comparing(ColonyProjectDto::code))
+                .toList();
+        if (ships.isEmpty()) {
+            return null;
+        }
+        Comparator<ColonyProjectDto> byCost =
+                Comparator.comparing(project -> project.cost() == null ? 0 : project.cost());
+        ShipMission wanted = wantedMission(context, galaxy, empire, missions);
+        log.debug("ИИ {}: задача стройки {}", empire.getName(), wanted);
+        return ships.stream()
+                .filter(project -> missionOf(project, missions) == wanted)
+                .max(byCost)
+                .or(() -> ships.stream()
+                        .filter(project -> missionOf(project, missions) == ShipMission.LINE)
+                        .max(byCost))
+                .or(() -> ships.stream().max(byCost))
                 .map(ColonyProjectDto::code)
                 .orElse(null);
     }
 
+    /** Задача проекта из кода стройки {@code SHIP:<проект>}; проект игрока считается линейным. */
+    private ShipMission missionOf(ColonyProjectDto project, Map<UUID, ShipMission> missions) {
+        UUID design = ColonyProject.shipDesign(project.code());
+        return design == null ? ShipMission.LINE : missions.getOrDefault(design, ShipMission.LINE);
+    }
+
+    /** Задачи действующих проектов империи — из контекста хода, без своей выборки. */
+    private Map<UUID, ShipMission> missionsOf(TurnContext context, UUID empireId) {
+        Map<UUID, ShipMission> missions = new HashMap<>();
+        for (ShipDesignService.ShipBuildOption option
+                : context.colonyContext().shipDesignsByOwner().getOrDefault(empireId, List.of())) {
+            missions.put(option.designId(), option.mission() == null ? ShipMission.LINE : option.mission());
+        }
+        return missions;
+    }
+
+    /** Эскортов в строю не больше одного на столько боевых кораблей — реконструкция. */
+    private static final int SHIPS_PER_ESCORT = 3;
+
+    /** Штурмовиков в строю не больше одного на столько боевых кораблей — реконструкция. */
+    private static final int SHIPS_PER_ASSAULT = 2;
+
+    /** С какой доли ракет в залпе врага ИИ считает его ракетчиком, в процентах. */
+    private static final int MISSILE_FOE_PERCENT = 50;
+
+    /**
+     * Какая задача нужна флоту сейчас — п. 8, п. 15 (03.10.2026).
+     * <p>
+     * <b>Штурмовик</b> — когда цель войны ({@link #invasionChance}) прикрыта обороной: пока
+     * цела хоть одна платформа, десант не садится ({@code GroundCombatService.landable}), и
+     * ломать её выгоднее тяжёлым одиночным выстрелом. <b>Эскорт</b> — когда враг, с которым
+     * идёт война, воюет ракетами: его проекты в среднем больше чем наполовину ракетные.
+     * Проекты врага ИИ знает так же, как игрок узнаёт их осмотром в бою, — это не разведка
+     * сверх меры, а то, с чем он уже сталкивался. Обе задачи — долей строя, а не целиком:
+     * штурмовиков не больше половины, эскортов не больше трети, иначе флот перестал бы быть
+     * флотом. Во всех остальных случаях — линейный корабль.
+     */
+    private ShipMission wantedMission(TurnContext context, Galaxy galaxy, PlayerEntity empire,
+                                      Map<UUID, ShipMission> missions) {
+        int warships = galaxy.owned(empire.getId(), ShipRole.WARSHIP);
+        PlanetEntity target = invasionChance(context, galaxy, empire);
+        if (target != null
+                && !Boolean.TRUE.equals(galaxy.landable(empire.getId(), target))
+                && ownedOf(galaxy, empire, missions, ShipMission.ASSAULT) * SHIPS_PER_ASSAULT <= warships) {
+            return ShipMission.ASSAULT;
+        }
+        // Бомбардировщик — пункт 25: война идёт, а взять десантом нечего (invasionChance
+        // пуст) — колонии врага остаётся только жечь. Не больше трети строя.
+        if (target == null && Boolean.TRUE.equals(atWar(galaxy, empire))
+                && ownedOf(galaxy, empire, missions, ShipMission.BOMBER) * 3 <= warships) {
+            return ShipMission.BOMBER;
+        }
+        // Бомбардировщик и РЯДОМ с десантом — долей строя (04.10.2026): прежде он строился,
+        // только когда десантом взять нечего, а с тех пор, как ИИ научился вскрывать оборону
+        // и брать колонии, цель десанта есть почти всегда — две партии дали один заказ
+        // бомбардировщика на 308 боевых и ни одной бомбёжки. Вторая колония врага, открытая
+        // и не та, куда идёт десант ({@link #bombTarget}), горит, пока первую берут.
+        if (target != null && warships >= BOMBER_SHARE
+                && ownedOf(galaxy, empire, missions, ShipMission.BOMBER) * BOMBER_SHARE <= warships
+                && bombTarget(context, galaxy, empire, context.systemOf(target)) != null) {
+            return ShipMission.BOMBER;
+        }
+        // Проекты врага — только у знакомых (п. 15): с незнакомым ИИ не встречался ни в бою,
+        // ни в переговорах, и чем тот вооружён, знать ему неоткуда.
+        List<UUID> acquainted = galaxy.knownRivals(empire.getId());
+        boolean missileFoe = galaxy.slots().keySet().stream()
+                .filter(other -> !other.equals(empire.getId()))
+                .filter(acquainted::contains)
+                .filter(other -> galaxy.stanceOf(empire.getId(), other) == DiplomacyStance.WAR)
+                // Чем враг воюет, ИИ знает только по УВИДЕННОМУ (п. 15, туман войны): по
+                // стволам, которые разглядел в бою или сканерами флота. Прежде он читал все
+                // проекты врага, хотя мог ни разу их не встретить.
+                .anyMatch(other -> missileFoe(galaxy.observed()
+                        .getOrDefault(empire.getId(), Map.of()).getOrDefault(other, Set.of())));
+        if (missileFoe && ownedOf(galaxy, empire, missions, ShipMission.ESCORT) * SHIPS_PER_ESCORT <= warships) {
+            return ShipMission.ESCORT;
+        }
+        return ShipMission.LINE;
+    }
+
+    /**
+     * Воюет ли враг ракетами — по увиденным его стволам (п. 15): ракетных технологий оружия
+     * не меньше, чем прочих. Ничего не видели — не знаем, и эскорт строить не с чего.
+     */
+    private boolean missileFoe(Set<String> observed) {
+        int missiles = 0;
+        int others = 0;
+        for (ShipComponent weapon : shipCatalog.components(ShipComponentSlot.WEAPON)) {
+            if (weapon.requiredTechCode() == null || !observed.contains(weapon.requiredTechCode())
+                    || weapon.weaponKind() == WeaponKind.BOMB) {
+                continue;
+            }
+            if (weapon.weaponKind() == WeaponKind.MISSILE) {
+                missiles++;
+            } else {
+                others++;
+            }
+        }
+        return missiles > 0 && missiles >= others;
+    }
+
+    /** Сколько у империи в строю кораблей проектов этой задачи. */
+    private int ownedOf(Galaxy galaxy, PlayerEntity empire, Map<UUID, ShipMission> missions, ShipMission mission) {
+        return galaxy.fleets().stream()
+                .filter(fleet -> fleet.getOwnerPlayerId().equals(empire.getId()))
+                .flatMap(fleet -> galaxy.composition().getOrDefault(fleet.getId(), List.of()).stream())
+                .filter(row -> mission == Optional.ofNullable(galaxy.designs().get(row.getDesignId()))
+                        .map(ShipDesignEntity::getMission).orElse(null))
+                .mapToInt(FleetShipEntity::getShips)
+                .sum();
+    }
+
     /** Первый доступный код из списка предпочтений; ничего из списка нет — {@code null}. */
+    /**
+     * Список развития этой колонии — пункт 9: у новичка он перетасован жребием, то есть здание
+     * берётся почти наугад. Жребий — от зерна партии, хода и названия колонии: партия обязана
+     * повторяться (этап 0), а название планеты выводится из зерна.
+     */
+    private List<String> development(TurnContext context, PlanetEntity colony, AiSkill skill) {
+        if (skill.getBuild() != AiSkill.BuildChoice.SHUFFLED) {
+            return DEVELOPMENT;
+        }
+        List<String> shuffled = new ArrayList<>(DEVELOPMENT);
+        java.util.Collections.shuffle(shuffled, new java.util.Random(
+                context.game().getSeed() * 53L + context.turn() * 59L + colony.getName().hashCode()));
+        return shuffled;
+    }
+
+    /**
+     * Следующая постройка дебюта своей расы — пункт 9, только сложный уровень и только родной мир.
+     * Дебют меряется ПОРЯДКОМ, а не ходами: первые здания ИИ ставит после сороковых ходов, когда
+     * изучено, из чего строить, — и книга действует, пока в ней есть непостроенное. Берётся первое из книги, что колония
+     * может построить сейчас (список стройки уже без построенного и без того, что не по карману);
+     * остальное книга ждёт: неизученное станет доступным позже, и тогда дойдёт и до него.
+     */
+    private String fromBook(TurnContext context, PlayerEntity empire, PlanetEntity colony,
+                            Map<String, ColonyProjectDto> available, AiSkill skill) {
+        if (!Boolean.TRUE.equals(skill.getOpeningBook()) || openingBook == null
+                || !Boolean.TRUE.equals(colony.getHomeworld())) {
+            return null;
+        }
+        AiOpeningBook.Opening opening = openingBook.of(empire.getRaceCode());
+        if (opening == null || opening.buildings() == null) {
+            return null;
+        }
+        return first(opening.buildings(), available);
+    }
+
     private String first(List<String> preferred, Map<String, ColonyProjectDto> available) {
         return preferred.stream().filter(available::containsKey).findFirst().orElse(null);
     }
@@ -2296,6 +3019,15 @@ public class AiEmpireService {
      * юнит-тестом без базы и без сервера ({@code AiPaybackTest}).
      */
     public static Integer paybackTurns(Building building, PopulationJobs jobs) {
+        return paybackTurns(building, jobs, 0);
+    }
+
+    /**
+     * Окупаемость с тем, что здание СНИМЕТ на этой колонии, — {@code relief} единиц производства за ход
+     * ({@code ColonyService.reliefGain}: уборка грязи, штраф тяжести, налог). Правило одно на ИИ, автострой и
+     * советника; статическая формула выше её не видит, потому что колонии не знает.
+     */
+    public static Integer paybackTurns(Building building, PopulationJobs jobs, Integer relief) {
         if (building == null || building.cost() == null || building.cost() <= 0) {
             return null;
         }
@@ -2303,12 +3035,40 @@ public class AiEmpireService {
         int gain = amount(building, BuildingEffectType.PRODUCTION_FLAT)
                 + amount(building, BuildingEffectType.RESEARCH_FLAT)
                 + amount(building, BuildingEffectType.PRODUCTION_PER_WORKER) * at.workers()
-                + amount(building, BuildingEffectType.RESEARCH_PER_SCIENTIST) * at.scientists();
+                + amount(building, BuildingEffectType.RESEARCH_PER_SCIENTIST) * at.scientists()
+                // Мораль — процент к выработке рабочих и учёных (п. 10.1); их выработка здесь
+                // берётся базовой, по три единицы: правило статическое и колонии не знает.
+                + amount(building, BuildingEffectType.MORALE_PERCENT)
+                        * MORALE_BASE_OUTPUT * (at.workers() + at.scientists()) / 100
+                // Роботизированный завод даёт по недрам (п. 10), а правило недр не знает:
+                // берётся обычная планета — десять единиц.
+                + amount(building, BuildingEffectType.ROBOTIC_FACTORY) * ROBOTIC_FACTORY_ESTIMATE
+                // Поправка колонии может быть и отрицательной: мораль там считается по настоящей выработке
+                // вместо оценки выше, а строю без морали досуг не даёт ничего (ColonyService.reliefGain).
+                + (relief == null ? 0 : relief);
         if (gain <= 0) {
             return null;
         }
         return Math.max(1, building.cost() / gain);
     }
+
+    /**
+     * Крупнейшая колония империи — п. 10.1: там ИИ отстраивает столицу. Ничья решается
+     * названием планеты: партия обязана повторяться до последнего числа.
+     */
+    private PlanetEntity largestColony(TurnContext context, PlayerEntity empire) {
+        return context.colonies().stream()
+                .filter(colony -> empire.getId().equals(colony.getOwnerPlayerId()))
+                .max(Comparator.comparing(PlanetEntity::getPopulation)
+                        .thenComparing(PlanetEntity::getName, Comparator.reverseOrder()))
+                .orElse(null);
+    }
+
+    /** Производство роботизированного завода на обычной планете — оценка для окупаемости (п. 10). */
+    private static final int ROBOTIC_FACTORY_ESTIMATE = 10;
+
+    /** Выработка рабочего и учёного без зданий — база, от которой окупаемость считает мораль. */
+    static final int MORALE_BASE_OUTPUT = 3;
 
     private static Integer amount(Building building, BuildingEffectType type) {
         Integer value = building.effects().get(type);
@@ -2355,10 +3115,11 @@ public class AiEmpireService {
      * игре быть не должно. Здесь остаётся только то, что знает ИИ: справочник зданий и
      * занятия ЭТОЙ колонии.
      */
-    private String worthwhile(PlanetEntity colony, Map<String, ColonyProjectDto> available,
+    private String worthwhile(TurnContext context, PlanetEntity colony, Map<String, ColonyProjectDto> available,
                               Integer horizon) {
         return AutoBuildRules.worthwhile(buildingCatalog.byCode(), colony.getJobs(),
-                available.values(), horizon);
+                available.values(), horizon,
+                building -> colonyService.reliefGain(colony, context.colonyContext(), building));
     }
 
     /**
@@ -2421,15 +3182,16 @@ public class AiEmpireService {
 
     private Set<UUID> borderSystems(TurnContext context, Galaxy galaxy, PlayerEntity empire) {
         Integer mine = galaxy.might().getOrDefault(empire.getId(), 0);
-        List<StarSystemEntity> dangerous = context.colonies().stream()
-                .filter(colony -> colony.getOwnerPlayerId() != null)
-                .filter(colony -> !empire.getId().equals(colony.getOwnerPlayerId()))
-                .filter(colony -> Boolean.TRUE.equals(
-                        galaxy.knows(empire.getId(), context.systemOf(colony))))
-                .filter(colony -> galaxy.might().getOrDefault(colony.getOwnerPlayerId(), 0) * 100
+        // Мощь соседа ИИ знает только у знакомых — как игрок видит её в «Инфо» лишь у них
+        // (п. 15). Незнакомый сосед границей не считается: о его силе сказать нечего.
+        Set<UUID> known = new HashSet<>(galaxy.knownRivals(empire.getId()));
+        // Чужие колонии — глазами или памятью (п. 15, туман войны), а не живой картой.
+        List<StarSystemEntity> dangerous = galaxy.sightings(empire.getId()).stream()
+                .filter(seen -> known.contains(seen.known().ownerId()))
+                .filter(seen -> galaxy.might().getOrDefault(seen.known().ownerId(), 0) * 100
                         >= mine * THREAT_MIGHT_PERCENT)
-                .map(colony -> galaxy.systemById().get(context.systemOf(colony)))
-                .filter(Objects::nonNull)
+                .map(Sighting::system)
+                .distinct()
                 .toList();
         // Своя колония у Wardenhold — всегда граница (backlog-promo, пункт 3): двадцать
         // ходов удержания к ней потянутся все соседи, и строить оборону там надо заранее.
@@ -2496,7 +3258,24 @@ public class AiEmpireService {
         if (prize == null && Boolean.TRUE.equals(telepathic(galaxy, empire))) {
             prize = invasionChance(context, galaxy, empire, Integer.MAX_VALUE);
         }
+        // Бомбардировщикам цель нужна тоже СВОЯ — пункт 25. Строятся они ровно тогда, когда
+        // десантом взять нечего (wantedMission), то есть когда цели десанта нет, — и без этой
+        // ветки стояли дома: за три партии ИИ собрал бомбардировщиков 78 раз и не сбросил
+        // ни одной бомбы. Цель — ближайшая досягаемая колония врага, без оглядки на десант.
+        if (prize == null && Boolean.TRUE.equals(atWar(galaxy, empire))
+                && ownedOf(galaxy, empire, missionsOf(context, empire.getId()), ShipMission.BOMBER) > 0) {
+            prize = invasionChance(context, galaxy, empire, Integer.MAX_VALUE);
+        }
         UUID front = prize == null ? null : context.systemOf(prize);
+        // Бомбардировщики при живой цели десанта идут СВОИМ фронтом (04.10.2026): флоты в
+        // системе сливаются, и прежде бомбардировщики летели с прикрытием к цели десанта, где
+        // жечь незачем. Уходят они отдельной частью флота, как транспорты, — по флоту за ход.
+        Map<UUID, ShipMission> missions = missionsOf(context, empire.getId());
+        PlanetEntity bombPrize = front != null && ownedOf(galaxy, empire, missions, ShipMission.BOMBER) > 0
+                ? bombTarget(context, galaxy, empire, front)
+                : null;
+        StarSystemEntity bombFront = bombPrize == null ? null : galaxy.systemById().get(context.systemOf(bombPrize));
+        boolean bombersSent = false;
         // Излишек боевых кораблей сверх гарнизона: столько и можно увести.
         int spare = galaxy.owned(empire.getId(), ShipRole.WARSHIP)
                 - context.coloniesOf(empire.getId()).size() * WARSHIPS_PER_COLONY_IN_PEACE;
@@ -2565,6 +3344,23 @@ public class AiEmpireService {
             if (forging) {
                 continue;
             }
+            if (bombFront != null && !bombersSent && !bombFront.getId().equals(origin.getId())) {
+                Map<UUID, Integer> bombers = new LinkedHashMap<>();
+                for (FleetShipEntity row : galaxy.composition().getOrDefault(fleet.getId(), List.of())) {
+                    if (row.getShips() > 0 && missions.get(row.getDesignId()) == ShipMission.BOMBER) {
+                        bombers.merge(row.getDesignId(), row.getShips(), Integer::sum);
+                    }
+                }
+                if (!bombers.isEmpty()) {
+                    bombersSent = true;
+                    if (fleetService.dispatchPart(context.game(), empire, fleet, bombFront, bombers) != null) {
+                        log.info("ИИ {} отправил бомбардировщики {} → {}",
+                                empire.getName(), origin.getName(), bombFront.getName());
+                    }
+                    // Состав флота изменился под ногами: прочие приказы ему — следующим ходом.
+                    continue;
+                }
+            }
             if (galaxy.count(fleet, ShipRole.COLONY) > 0) {
                 // Свободная планета у Wardenhold — первая цель колониального корабля: это
                 // путь к победе, а прочие планеты подождут.
@@ -2577,7 +3373,7 @@ public class AiEmpireService {
                 // окраине: тем и раздвигает пузырь дальности.
                 target = wardenBreak != null
                         ? wardenBreak
-                        : warden != null && Boolean.TRUE.equals(wardenCampaign(context, empire))
+                        : warden != null && Boolean.TRUE.equals(wardenCampaign(context, galaxy, empire))
                                 && !reachable.contains(warden.getId())
                         // Пока Wardenhold недосягаем, застава ставится как можно ближе к
                         // нему: звезда стоит в центре галактики, а «дальняя окраина»
@@ -2586,7 +3382,13 @@ public class AiEmpireService {
                         ? nearest(warden, outpostTargets(context, galaxy, empire, reachable))
                         : farthest(origin, outpostTargets(context, galaxy, empire, reachable));
             } else if (galaxy.troops(fleet) > 0) {
-                target = nearest(origin, warTargets(galaxy, empire, reachable, galaxy.troops(fleet)));
+                List<StarSystemEntity> landable = warTargets(context, galaxy, empire, reachable, galaxy.troops(fleet));
+                // Транспорты идут туда же, куда прикрытие (front), если на ту цель можно сесть:
+                // прежде они шли к ближайшей, а флот — к слабейшей, и это бывали разные системы.
+                target = landable.stream()
+                        .filter(system -> system.getId().equals(front))
+                        .findFirst()
+                        .orElse(nearest(origin, landable));
                 if (target == null) {
                     // Десанта на цель не хватает — транспорты сходятся в кулак. Порознь они
                     // бесполезны: наземный бой считается силами сторон (п. 12), и один
@@ -2649,7 +3451,28 @@ public class AiEmpireService {
             if (target == null || target.getId().equals(origin.getId())) {
                 continue;
             }
-            fleetService.dispatch(context.game(), fleet, origin, target, galaxy.speed(fleet));
+            // Транспорты, стоящие в одном флоте с гарнизоном, уходят ОТДЕЛЬНО: новый транспорт
+            // встаёт в стоящий флот системы, и прежде с ним улетал весь гарнизон.
+            if (galaxy.troops(fleet) > 0 && galaxy.count(fleet, ShipRole.WARSHIP) > 0) {
+                Map<UUID, Integer> transports = new LinkedHashMap<>();
+                for (FleetShipEntity row : galaxy.composition().getOrDefault(fleet.getId(), List.of())) {
+                    if (galaxy.role(row) == ShipRole.TRANSPORT && row.getShips() > 0) {
+                        transports.merge(row.getDesignId(), row.getShips(), Integer::sum);
+                    }
+                }
+                if (!transports.isEmpty()) {
+                    // Транспорты могли высадиться этим же ходом — тогда отделять нечего, и
+                    // гарнизон остаётся: цель выбиралась ради них, а не ради него.
+                    if (fleetService.dispatchPart(context.game(), empire, fleet, target, transports) != null) {
+                        log.info("ИИ {} отправил транспорты {} → {}, гарнизон остался",
+                                empire.getName(), origin.getName(), target.getName());
+                    }
+                    continue;
+                }
+            }
+            fleetService.dispatch(context.game(), fleet, origin, target, galaxy.speed(fleet),
+                    context.colonyContext().technologiesByOwner().getOrDefault(empire.getId(), Set.of()),
+                    interdictorRadius(context, target, empire.getId()));
             log.info("ИИ {} отправил флот {} → {}", empire.getName(), origin.getName(), target.getName());
         }
     }
@@ -2712,7 +3535,7 @@ public class AiEmpireService {
         // на подлёте, не успев её открыть, — и ИИ слал туда корабль за кораблём: замер
         // показал десятки погибших поодиночке флотов за двести ходов.
         StarSystemEntity guarded = wardenhold(context);
-        UUID skip = guarded != null && Boolean.TRUE.equals(guarded.hasLiveMonster())
+        UUID skip = guarded != null && galaxy.wardenGuard(empire.getId(), guarded) != null
                 ? guarded.getId()
                 : null;
         return context.systems().stream()
@@ -2720,6 +3543,23 @@ public class AiEmpireService {
                 .filter(system -> !system.getId().equals(skip))
                 .filter(system -> !Boolean.TRUE.equals(galaxy.knows(empire.getId(), system.getId())))
                 .toList();
+    }
+
+    /**
+     * Радиус чужого варп-перехватчика в системе цели (п. 8) — по постройкам, уже загруженным ходом:
+     * та же мера, что у приказа игрока ({@code FleetService.interdictor}).
+     */
+    private Integer interdictorRadius(TurnContext context, StarSystemEntity target, UUID empireId) {
+        int radius = 0;
+        for (PlanetEntity planet : target.getPlanets()) {
+            if (planet.getOwnerPlayerId() == null || empireId.equals(planet.getOwnerPlayerId())) {
+                continue;
+            }
+            for (Building building : context.colonyContext().buildings(planet)) {
+                radius = Math.max(radius, building.amount(com.sddnw.server.domain.enums.BuildingEffectType.WARP_INTERDICTOR));
+            }
+        }
+        return radius;
     }
 
     /**
@@ -2776,13 +3616,14 @@ public class AiEmpireService {
      * Пока идёт — флот копится по военной норме. Дальности здесь не спрашивают нарочно: это
      * проверка на каждую колонию, а флот копится загодя, пока до звезды ещё не дотянулись.
      */
-    private Boolean wardenCampaign(TurnContext context, PlayerEntity empire) {
+    private Boolean wardenCampaign(TurnContext context, Galaxy galaxy, PlayerEntity empire) {
         StarSystemEntity warden = wardenhold(context);
         if (warden == null) {
             return Boolean.FALSE;
         }
         UUID holder = context.game().getWardenholdHolderPlayerId();
-        return Boolean.TRUE.equals(warden.hasLiveMonster())
+        // Жив ли Страж — по тому, что империя знает (п. 15), а не по правде карты.
+        return galaxy.wardenGuard(empire.getId(), warden) != null
                 || (holder != null && !holder.equals(empire.getId()));
     }
 
@@ -2801,7 +3642,8 @@ public class AiEmpireService {
         // Разведки поход не ждёт: в такой партии звезда — объявленная цель, и о Страже
         // знают все. Ждать разведки значило бы ждать вечно — разведчик у Стража гибнет, не
         // открыв системы.
-        if (warden == null || !Boolean.TRUE.equals(warden.hasLiveMonster())) {
+        IntelService.SeenMonster guard = warden == null ? null : galaxy.wardenGuard(empire.getId(), warden);
+        if (guard == null) {
             return null;
         }
         if (!reachable.contains(warden.getId())) {
@@ -2823,7 +3665,9 @@ public class AiEmpireService {
             log.debug("ИИ {}: поход на Стража — нет стоящих боевых флотов", empire.getName());
             return null;
         }
-        long needed = (long) warden.getMonsterStrength() * WARDEN_STRIKE_PERCENT / 100;
+        // Сила Стража — какой империя его видела (п. 15): прежде ИИ читал её с карты, видя,
+        // как слабеет сторож от чужих походов, хотя сам там не бывал.
+        long needed = (long) guard.strength() * WARDEN_STRIKE_PERCENT / 100;
         Map<UUID, Integer> powers = fleetService.powers(empire, warfleets, galaxy.composition());
         if (log.isDebugEnabled()) {
             log.debug("ИИ {}: поход на Стража — нужно {}, сильнейший флот {}, всего {}, кораблей {} при излишке {}",
@@ -2884,7 +3728,7 @@ public class AiEmpireService {
         StarSystemEntity warden = wardenhold(context);
         UUID holder = context.game().getWardenholdHolderPlayerId();
         if (warden == null || holder == null || holder.equals(empire.getId())
-                || Boolean.TRUE.equals(warden.hasLiveMonster())
+                || galaxy.wardenGuard(empire.getId(), warden) != null
                 || !reachable.contains(warden.getId())
                 || !Boolean.TRUE.equals(galaxy.knows(empire.getId(), warden.getId()))) {
             return null;
@@ -2907,7 +3751,8 @@ public class AiEmpireService {
      */
     private PlanetEntity wardenForge(TurnContext context, Galaxy galaxy, PlayerEntity empire) {
         StarSystemEntity warden = wardenhold(context);
-        if (warden == null || !Boolean.TRUE.equals(warden.hasLiveMonster())) {
+        IntelService.SeenMonster guard = warden == null ? null : galaxy.wardenGuard(empire.getId(), warden);
+        if (guard == null) {
             return null;
         }
         PlanetEntity forge = context.coloniesOf(empire.getId()).stream()
@@ -2925,7 +3770,7 @@ public class AiEmpireService {
         List<FleetEntity> here = galaxy.standing(empire.getId()).stream()
                 .filter(fleet -> system.equals(fleet.getStarSystemId()))
                 .toList();
-        long needed = (long) warden.getMonsterStrength() * WARDEN_STRIKE_PERCENT / 100;
+        long needed = (long) guard.strength() * WARDEN_STRIKE_PERCENT / 100;
         int power = fleetService.powers(empire, here, galaxy.composition()).values().stream()
                 .mapToInt(Integer::intValue).sum();
         return power > needed ? null : forge;
@@ -2959,7 +3804,7 @@ public class AiEmpireService {
                 // разведавший систему — или всевидящая раса, которой он виден всюду
                 // (п. 7): в этом её преимущество, она обходит чудищ с первого хода, а
                 // прочие узнают о них, потеряв корабль.
-                .filter(system -> !Boolean.TRUE.equals(system.hasLiveMonster()))
+                .filter(system -> galaxy.monster(empire.getId(), system) == null)
                 .filter(system -> system.getPlanets().stream()
                         .allMatch(planet -> planet.getOwnerPlayerId() == null))
                 .filter(system -> !system.getPlanets().isEmpty())
@@ -2983,7 +3828,7 @@ public class AiEmpireService {
                 // разведавший систему — или всевидящая раса, которой он виден всюду
                 // (п. 7): в этом её преимущество, она обходит чудищ с первого хода, а
                 // прочие узнают о них, потеряв корабль.
-                .filter(system -> !Boolean.TRUE.equals(system.hasLiveMonster()))
+                .filter(system -> galaxy.monster(empire.getId(), system) == null)
                 .filter(system -> bestFreePlanet(system, race).isPresent())
                 // Чужая система по дороге — не место для колонии: её хозяин и так рядом.
                 .filter(system -> system.getPlanets().stream()
@@ -3001,13 +3846,17 @@ public class AiEmpireService {
      */
     private StarSystemEntity staging(TurnContext context, Galaxy galaxy, PlayerEntity empire,
                                      Set<UUID> reachable, StarSystemEntity origin) {
+        // Только РАЗВЕДАННЫЕ колонии врага (backlog-promo, пункт 8): о колонии, которой ИИ не
+        // видел, он знать не может, — прежде сбор десанта тянулся к ней через всю карту.
         List<StarSystemEntity> enemy = context.systems().stream()
-                .filter(system -> system.getPlanets().stream().anyMatch(planet ->
-                        planet.getOwnerPlayerId() != null
-                                && !planet.getOwnerPlayerId().equals(empire.getId())
-                                && planet.getPopulation() > 0
-                                && galaxy.stanceOf(empire.getId(), planet.getOwnerPlayerId())
-                                == DiplomacyStance.WAR))
+                .filter(system -> Boolean.TRUE.equals(galaxy.knows(empire.getId(), system.getId())))
+                .filter(system -> system.getPlanets().stream().anyMatch(planet -> {
+                    IntelService.Known known = galaxy.seen(empire.getId(), planet);
+                    return known != null
+                            && !known.ownerId().equals(empire.getId())
+                            && known.population() > 0
+                            && galaxy.stanceOf(empire.getId(), known.ownerId()) == DiplomacyStance.WAR;
+                }))
                 .toList();
         if (enemy.isEmpty()) {
             return null;
@@ -3026,20 +3875,36 @@ public class AiEmpireService {
         return front == null || front.getId().equals(origin.getId()) ? null : front;
     }
 
-    /** Системы, где стоит колония врага по силам десанту, — п. 12. */
-    private List<StarSystemEntity> warTargets(Galaxy galaxy, PlayerEntity empire,
+    /**
+     * Системы, где стоит колония врага по силам десанту, — п. 12.
+     * <p>
+     * Только колонии, на которые МОЖНО сесть сейчас ({@code GroundCombatService.landable}):
+     * пока цела оборона, транспорты ждут у своих, а к колонии идёт боевой флот
+     * ({@code invasionChance}). Прежде транспорт летел к колонии под щитом или базой, не
+     * садился и уходил обратно — и так по кругу, пока его не сбивали. Порядок — по названию
+     * звезды: обход карты систем шёл бы по случайному UUID, и при равных расстояниях
+     * «ближайшая» цель в двух прогонах одной партии была бы разной.
+     */
+    private List<StarSystemEntity> warTargets(TurnContext context, Galaxy galaxy, PlayerEntity empire,
                                               Set<UUID> reachable, Integer troops) {
         return galaxy.systemById().values().stream()
+                .sorted(Comparator.comparing(StarSystemEntity::getName))
                 .filter(system -> reachable.contains(system.getId()))
-                .filter(system -> system.getPlanets().stream().anyMatch(planet ->
-                        planet.getOwnerPlayerId() != null
-                                && !planet.getOwnerPlayerId().equals(empire.getId())
-                                && planet.getPopulation() > 0
-                                && galaxy.stanceOf(empire.getId(), planet.getOwnerPlayerId())
-                                == DiplomacyStance.WAR
-                                && !Boolean.TRUE.equals(galaxy.attackForbidden(
-                                empire.getId(), planet.getOwnerPlayerId()))
-                                && troops * 100 >= planet.getPopulation() * INVASION_ADVANTAGE_PERCENT))
+                // Транспорт летит только туда, где ИИ бывал (backlog-promo, пункт 8): та же
+                // оговорка, что у цели войны (invasionChance). Без неё десант уходил к
+                // неразведанной колонии врага, словно карта открыта.
+                .filter(system -> Boolean.TRUE.equals(galaxy.knows(empire.getId(), system.getId())))
+                // Хозяин, население и оборона — глазами или памятью (п. 15, туман войны).
+                .filter(system -> system.getPlanets().stream().anyMatch(planet -> {
+                    IntelService.Known known = galaxy.seen(empire.getId(), planet);
+                    return known != null
+                            && !known.ownerId().equals(empire.getId())
+                            && known.population() > 0
+                            && galaxy.stanceOf(empire.getId(), known.ownerId()) == DiplomacyStance.WAR
+                            && !Boolean.TRUE.equals(galaxy.attackForbidden(empire.getId(), known.ownerId()))
+                            && troops >= troopsFor(context, galaxy, empire, planet)
+                            && Boolean.TRUE.equals(galaxy.landable(empire.getId(), planet));
+                }))
                 .toList();
     }
 

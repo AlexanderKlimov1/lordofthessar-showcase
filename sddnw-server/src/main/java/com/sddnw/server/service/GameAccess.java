@@ -29,9 +29,11 @@ public class GameAccess {
     private final GameRepository gameRepository;
     private final PlayerRepository playerRepository;
     private final PresenceService presence;
+    private final TurnActionService turnActions;
 
     public GameAccess(GameRepository gameRepository, PlayerRepository playerRepository,
-                      PresenceService presence) {
+                      PresenceService presence, TurnActionService turnActions) {
+        this.turnActions = turnActions;
         this.gameRepository = gameRepository;
         this.playerRepository = playerRepository;
         this.presence = presence;
@@ -45,10 +47,13 @@ public class GameAccess {
      * само, пока вкладка открыта, и присутствия не доказывает. Вне запроса (фазы хода,
      * прогоны) отмечать некого.
      */
-    private void present(UUID playerId) {
+    private void present(UUID playerId, UUID gameId) {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes
                 && !"GET".equalsIgnoreCase(attributes.getRequest().getMethod())) {
             presence.act(playerId);
+            // Действие живого игрока — в счёт ходов (field-backlog, пункт 13).
+            turnActions.count(gameId, playerId, attributes.getRequest().getMethod(),
+                    attributes.getRequest().getRequestURI(), attributes.getRequest().getHeader("User-Agent"));
         }
     }
 
@@ -87,14 +92,14 @@ public class GameAccess {
     public UUID requireToken(UUID gameId, String accessToken) {
         UUID playerId = playerRepository.findIdByGameIdAndAccessToken(gameId, accessToken)
                 .orElseThrow(() -> new ForbiddenException("game.unknownPlayer"));
-        present(playerId);
+        present(playerId, gameId);
         return playerId;
     }
 
     public PlayerEntity requirePlayer(GameEntity game, String accessToken) {
         PlayerEntity player = playerRepository.findByGameIdAndAccessToken(game.getId(), accessToken)
                 .orElseThrow(() -> new ForbiddenException("game.unknownPlayer"));
-        present(player.getId());
+        present(player.getId(), game.getId());
         return player;
     }
 

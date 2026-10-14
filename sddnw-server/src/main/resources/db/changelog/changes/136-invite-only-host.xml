@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Хозяева столов (field-backlog, пункт 67): закрытая партия — её нет в списке открытых, и войти
+        в неё можно только по ссылке-приглашению.
+    -->
+    <changeSet id="136-game-invite-only" author="sddnw">
+        <addColumn tableName="game">
+            <column name="invite_only" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!--
+        Звание хозяина стола (пункт 67): партия, которую запись завела и доиграла с другими людьми.
+        После удаления партии судить об этом нечем, поэтому признак пишется при записи истории.
+    -->
+    <changeSet id="136-game-record-hosted" author="sddnw">
+        <addColumn tableName="game_record">
+            <column name="hosted" type="boolean"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

@@ -1,10 +1,14 @@
 package com.sddnw.server.service;
 
+import com.sddnw.server.domain.entity.GameEntity;
 import com.sddnw.server.domain.entity.PlayerEntity;
 import com.sddnw.server.domain.enums.PlayerType;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -56,6 +60,62 @@ public class PresenceService {
         return away.contains(playerId);
     }
 
+    /**
+     * Нет за столом — ушёл (память) или в отпуске (база, field-backlog, пункт 177). Все правила
+     * «кого ждать» и «кого ведёт ИИ» спрашивают это, а не одно из двух.
+     */
+    public Boolean away(PlayerEntity player) {
+        return isAway(player.getId()) || onVacation(player);
+    }
+
+    /** В отпуске сейчас: срок задан и ещё не прошёл. */
+    public static Boolean onVacation(PlayerEntity player) {
+        return player.getVacationUntil() != null && OffsetDateTime.now().isBefore(player.getVacationUntil());
+    }
+
+    /** Сколько сроков хода игрок пропустил подряд. */
+    public Integer missed(UUID playerId) {
+        return missed.getOrDefault(playerId, 0);
+    }
+
+    /**
+     * Ждёт ли кто-нибудь — пункт 11: хотя бы один присутствующий человек уже закончил ход.
+     * Без этого часам делать нечего: одиночная партия против ИИ не идёт сама, пока игрок
+     * отошёл от стола.
+     */
+    public Boolean somebodyWaits(GameEntity game, List<PlayerEntity> players) {
+        return players.stream()
+                .filter(player -> player.getPlayerType() == PlayerType.HUMAN)
+                .filter(player -> !Boolean.TRUE.equals(away(player)))
+                .anyMatch(player -> player.getEndedTurn() >= game.getTurn());
+    }
+
+    /**
+     * Через сколько секунд ИИ возьмёт империю — field-backlog, пункт 127: только тем, кого
+     * часы и правда передадут ИИ, — присутствующим людям, ещё не закончившим ход, пока их
+     * кто-то ждёт. Остальным пусто: им ничего не грозит. Сервер отдаёт срок, а не клиент
+     * считает свой: правило ({@link TurnClockRules#takeoverAt}) живёт в одном месте.
+     */
+    public Map<UUID, Integer> takeoverSeconds(GameEntity game, List<PlayerEntity> players, OffsetDateTime now) {
+        Map<UUID, Integer> seconds = new HashMap<>();
+        if (!Boolean.TRUE.equals(somebodyWaits(game, players))) {
+            return seconds;
+        }
+        for (PlayerEntity player : players) {
+            if (player.getPlayerType() != PlayerType.HUMAN || Boolean.TRUE.equals(away(player))
+                    || player.getEndedTurn() >= game.getTurn()) {
+                continue;
+            }
+            OffsetDateTime at = TurnClockRules.takeoverAt(lastAction(player.getId()), missed(player.getId()),
+                    game.getTurnStartedAt(), game.getTurnSeconds());
+            if (at == null) {
+                continue;
+            }
+            seconds.put(player.getId(), (int) Math.max(0, Duration.between(now, at).getSeconds()));
+        }
+        return seconds;
+    }
+
     /** Ещё один пропущенный срок хода; возвращает, сколько их подряд. */
     public Integer miss(UUID playerId) {
         return missed.merge(playerId, 1, Integer::sum);
@@ -68,6 +128,6 @@ public class PresenceService {
      */
     public Boolean aiDriven(PlayerEntity player) {
         return player.getPlayerType() == PlayerType.AI
-                || (player.getPlayerType() == PlayerType.HUMAN && isAway(player.getId()));
+                || (player.getPlayerType() == PlayerType.HUMAN && away(player));
     }
 }

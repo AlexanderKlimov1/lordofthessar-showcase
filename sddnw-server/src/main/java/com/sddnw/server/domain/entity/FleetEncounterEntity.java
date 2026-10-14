@@ -72,6 +72,21 @@ public class FleetEncounterEntity {
     @Column(name = "state", nullable = false, length = 24)
     private EncounterState state = EncounterState.WAITING_FIRST;
 
+    /**
+     * Встреча у беззащитной колонии флота с бомбами — пункт 25: решение тут «бомбить или
+     * уйти», а не «атаковать флот».
+     */
+    @Column(name = "bombard", nullable = false)
+    private Boolean bombard = Boolean.FALSE;
+
+    public Boolean getBombard() {
+        return bombard;
+    }
+
+    public void setBombard(Boolean bombard) {
+        this.bombard = bombard;
+    }
+
     /** Кто напал, если дело дошло до боя. */
     @Column(name = "attacker_player_id")
     private UUID attackerPlayerId;

@@ -38,7 +38,8 @@ public class CatalogService {
                         race.description(),
                         race.homeClimate(),
                         race.color(),
-                        race.traits()))
+                        race.traits(),
+                        race.lore()))
                 .toList();
     }
 

@@ -73,6 +73,16 @@ public class BalanceGameRunner {
     /** Та же партия, но сборки уже разложены по местам — так её зовёт замер цен. */
     public List<BalanceVerdictRules.Empire> play(String galaxySize, Integer empires,
                                                  Integer turns, List<Design> designs, long seed) {
+        return play(galaxySize, empires, turns, designs, seed, null);
+    }
+
+    /**
+     * То же, и вдобавок — когда партия была решена (пункт 155, {@link DecidedRules}): замер цен
+     * складывает это по прогону; пусто — не нужно.
+     */
+    public List<BalanceVerdictRules.Empire> play(String galaxySize, Integer empires,
+                                                 Integer turns, List<Design> designs, long seed,
+                                                 java.util.function.Consumer<DecidedRules.Decided> decided) {
         CreateGameResponse created = gameService.createGame(new CreateGameRequest(
                 "Прогон " + seed,
                 GalaxySize.valueOf(galaxySize),
@@ -113,7 +123,9 @@ public class BalanceGameRunner {
                 // Итог по могуществу ВЫКЛЮЧЕН по той же причине.
                 Boolean.FALSE,
                 // Срока хода нет: людей в прогоне нет, и торопить некого.
-                null),
+                null,
+                // Правила обычные: прогон мерит игру, а не гостевую партию.
+                null, null, null, null, null, null),
                 // Хозяина у партии прогона нет: её никто не заводил руками, и возвращаться
                 // в неё некому. Оттого прогон и не автосохраняется — сохранять не для кого.
                 null);
@@ -125,7 +137,14 @@ public class BalanceGameRunner {
                     .map(design -> new StartGameRequest.AiEmpireDesign(design.name(), design.traits()))
                     .toList()));
             turnBatchService.advance(gameId, new AdvanceTurnsRequest(token, turns));
-            return measure(telemetryService.of(gameId, token), designs);
+            BalanceTelemetryDto telemetry = telemetryService.of(gameId, token);
+            if (decided != null) {
+                DecidedRules.Decided one = DecidedRules.of(telemetry);
+                if (one != null) {
+                    decided.accept(one);
+                }
+            }
+            return measure(telemetry, designs);
         } finally {
             // Партии удаляются сразу: копить их в базе нельзя, на этом уже погорели — в базе
             // набралось восемь с половиной сотен брошенных партий.

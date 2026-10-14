@@ -111,6 +111,11 @@ public class TurnReport {
         }
     }
 
+    /** События одного игрока, ещё не переведённые: ключ и подстановки — для летописи (пункт 34). */
+    public List<TurnEventDto> events(UUID playerId) {
+        return events.getOrDefault(playerId, List.of());
+    }
+
     /** Отчёт для одного игрока: чужие события в него не попадают. */
     public TurnReportDto forPlayer(UUID playerId) {
         return new TurnReportDto(

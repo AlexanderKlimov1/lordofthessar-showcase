@@ -64,6 +64,21 @@ public class FleetShipEntity {
     @Column(name = "colonists", nullable = false)
     private Integer colonists = 0;
 
+    /**
+     * Опыт экипажей этих кораблей — п. 8 ({@code CrewRules}): средний на строку, при слиянии
+     * усредняется по числу кораблей.
+     */
+    @Column(name = "experience", nullable = false)
+    private Integer experience = 0;
+
+    public Integer getExperience() {
+        return experience == null ? 0 : experience;
+    }
+
+    public void setExperience(Integer experience) {
+        this.experience = experience == null ? 0 : experience;
+    }
+
     /** Версия строки: состав трогают и стройка в конце хода, и перелёт, и бой. */
     @Version
     @Column(name = "version", nullable = false)
@@ -107,6 +122,31 @@ public class FleetShipEntity {
 
     public void setColonists(Integer colonists) {
         this.colonists = colonists;
+    }
+
+    /**
+     * Строка теряет {@code gone} кораблей, и груз уходит вместе с ними — своей долей
+     * (03.10.2026). Прежде бой, мины и отделение отряда меняли только число кораблей:
+     * уцелевший транспорт вёз десант погибших, а отделившийся улетал пустым.
+     *
+     * @return сколько груза ушло с этими кораблями
+     */
+    public int lose(int gone) {
+        int was = ships;
+        int left = Math.max(0, was - gone);
+        int kept = was <= 0 ? 0 : (int) ((long) colonists * left / was);
+        int carried = colonists - kept;
+        ships = left;
+        colonists = kept;
+        return carried;
+    }
+
+    /** Принимает корабли и груз другой строки того же проекта — слияние флотов. */
+    public void absorb(FleetShipEntity other) {
+        experience = com.sddnw.server.service.CrewRules.merged(getExperience(), ships,
+                other.getExperience(), other.getShips());
+        ships += other.getShips();
+        colonists += other.getColonists();
     }
 
     public Long getVersion() {

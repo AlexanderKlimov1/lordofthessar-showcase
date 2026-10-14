@@ -353,36 +353,6 @@ public class PopulationTransferService {
         return transferRepository.findAllByOwnerPlayerIdInOrderByIdAsc(List.of(playerId));
     }
 
-    /**
-     * Жители с числительным в винительном падеже: «приняла 1 жителя», «приняла
-     * 2 жителей».
-     * <p>
-     * Отчёт хода читают каждый ход, а жителей чаще всего возят по одному — перетаскиванием
-     * на экране колоний (п. 4.1.1), — поэтому «1 жителей» попадалось бы игроку постоянно.
-     */
-    private String accusative(Integer count) {
-        return count + (single(count) ? " жителя" : " жителей");
-    }
-
-    /**
-     * Жители с числительным в именительном: «1 житель», «2 жителя», «5 жителей». Стоит
-     * после глагола в единственном числе («остаётся», «возвращается»): так сказуемое согласуется
-     * с любым числом, и второго правила — для глагола — не нужно.
-     */
-    private String nominative(Integer count) {
-        if (single(count)) {
-            return count + " житель";
-        }
-        int last = count % 10;
-        return count + (last >= 2 && last <= 4 && (count % 100 < 12 || count % 100 > 14)
-                ? " жителя" : " жителей");
-    }
-
-    /** Число кончается на один, кроме одиннадцати: «21 житель», но «11 жителей». */
-    private Boolean single(Integer count) {
-        return count % 10 == 1 && count % 100 != 11;
-    }
-
     /** Колония назначения пропала — жители возвращаются в колонию отправления. */
     private void returnHome(PopulationTransferEntity transfer, TurnContext context) {
         PlanetEntity home = planetRepository.findById(transfer.getFromPlanetId()).orElse(null);

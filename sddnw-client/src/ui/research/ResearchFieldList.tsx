@@ -1,6 +1,7 @@
 import type { PlayerResearch, ResearchCategory } from '../../api/types';
 import { useModalEscape } from '../useModalEscape';
-import { givesWholeLevel, isAcquired, nextLevelOrder } from './researchRules';
+import { givesWholeLevel, isAcquired, nextLevelOrder, showsRecommendation } from './researchRules';
+import { RecommendedMark } from './RecommendedMark';
 import { useT } from '../../i18n';
 
 /**
@@ -75,6 +76,7 @@ export function ResearchFieldList({
                 >
                   {isAcquired(research, category.code, option.code) ? '✓ ' : '• '}
                   {option.name}
+                  {showsRecommendation(research, level, option) ? <RecommendedMark /> : null}
                 </li>
               ))}
             </ul>
@@ -88,7 +90,7 @@ export function ResearchFieldList({
 
       <div className="border-t border-space-800 px-[0.6em] py-[0.3em] text-right">
         <button type="button" className="link text-[0.9em]" onClick={onClose}>
-          {t('research.back')}
+          {t('common.ok')}
         </button>
       </div>
     </div>

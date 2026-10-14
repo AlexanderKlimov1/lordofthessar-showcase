@@ -7,7 +7,9 @@ import { useModalEscape } from '../useModalEscape';
 import { t, tf, useT } from '../../i18n';
 import { LeaderEmblem } from './LeaderEmblem';
 import { Figure } from '../Figure';
-import { figureLabelClass, signed } from '../accent';
+import { figureLabelClass, signed, signTone } from '../accent';
+import { FirstTimeNote } from '../FirstTimeNote';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Офицерский резерв империи — п. 6, окно лидеров MOO II.
@@ -96,6 +98,11 @@ export function LeadersScreen({ onClose }: { onClose: () => void }) {
   const shown = everyone.find((leader) => leader.id === looking) ?? null;
   const offering = shown !== null && shown.state === 'OFFERED';
   const affordable = shown !== null && leaders !== null && shown.hireCost <= leaders.credits;
+  // Мест по четыре на род (`leader.noSlots`): занятые все — нанять некуда, и кнопка говорит
+  // это до нажатия, а не отказом после (пункт 76).
+  const postsFull = shown !== null && leaders !== null && (shown.kind === 'COLONY'
+    ? leaders.colony.length >= leaders.colonySlots
+    : leaders.ship.length >= leaders.shipSlots);
 
   return (
     <div className="absolute inset-0 z-40 flex justify-center overflow-y-auto bg-space-950 p-4">
@@ -119,7 +126,7 @@ export function LeadersScreen({ onClose }: { onClose: () => void }) {
           </span>
         </div>
 
-        {error ? <p className="mb-2 text-13 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mb-2 text-13" message={error} /> : null}
         {leaders === null ? <p className="text-13 text-ink-dim">{t('leaders.loading')}</p> : null}
 
         {leaders ? (
@@ -132,6 +139,7 @@ export function LeadersScreen({ onClose }: { onClose: () => void }) {
                   <Figure accent="note" tone="warn" className="ml-2">{leaders.offers.length}</Figure>
                 ) : null}
               </h3>
+              {leaders.offers.length > 0 ? <FirstTimeNote meeting="leader" className="mb-2 text-14" /> : null}
               {leaders.offers.length === 0 ? (
                 <p className="text-12 text-ink-faint">{t('leaders.noOffers')}</p>
               ) : (
@@ -189,11 +197,13 @@ export function LeadersScreen({ onClose }: { onClose: () => void }) {
             {shown !== null && offering ? (
               <>
                 <BarButton
-                  disabled={busy || !affordable}
+                  disabled={busy || !affordable || postsFull}
                   title={
-                    affordable
-                      ? t('leaders.hire.title')
-                      : t('leaders.notEnough', { n: shown.hireCost - (leaders?.credits ?? 0) })
+                    postsFull
+                      ? t('leaders.postsFull')
+                      : affordable
+                        ? t('leaders.hire.title')
+                        : t('leaders.notEnough', { n: shown.hireCost - (leaders?.credits ?? 0) })
                   }
                   onClick={() => act(gameApi.hireLeader(game.id, credentials.accessToken, shown.id))}
                 >
@@ -422,6 +432,28 @@ function LeaderDetails({ leader, turn }: { leader: Leader; turn: number }) {
           : ''}
         {!waiting ? tf('leaders.salary', { n: <Figure accent="note">{leader.salary}</Figure> }) : ''}
       </div>
+
+      {/*
+        Послужной список — field-backlog, пункт 140: что лидер сделал, а не только что умеет.
+        Корабельному — бои его флота; губернатору — с какого хода служит и на сколько выросла
+        система. Нечего сказать — строки нет: «ноль боёв» у новичка звучал бы укором.
+      */}
+      {!waiting && leader.kind === 'SHIP' && ((leader.battlesWon ?? 0) + (leader.battlesLost ?? 0)) > 0 ? (
+        <p className={'mt-1 text-lamp ' + figureLabelClass('note')}>
+          {tf('leaders.record.battles', {
+            won: <Figure accent="note">{leader.battlesWon ?? 0}</Figure>,
+            lost: <Figure accent="note">{leader.battlesLost ?? 0}</Figure>,
+          })}
+        </p>
+      ) : null}
+      {!waiting && leader.kind === 'COLONY' && leader.termStartTurn !== undefined && leader.systemGrowth !== undefined ? (
+        <p className={'mt-1 text-lamp ' + figureLabelClass('note')}>
+          {tf('leaders.record.term', {
+            turn: <Figure accent="note">{leader.termStartTurn}</Figure>,
+            growth: <Figure accent="note" tone={signTone(leader.systemGrowth)}>{signed(leader.systemGrowth)}</Figure>,
+          })}
+        </p>
+      ) : null}
 
       <ul className={'mt-2 flex flex-wrap gap-x-5 gap-y-1 ' + figureLabelClass('note')}>
         {leader.skills.map((skill) => (

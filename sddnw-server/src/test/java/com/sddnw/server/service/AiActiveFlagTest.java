@@ -35,8 +35,8 @@ class AiActiveFlagTest {
         AiEmpireService empires = Mockito.mock(AiEmpireService.class);
         AiDiplomacyService diplomacy = Mockito.mock(AiDiplomacyService.class);
 
-        new AiEmpirePhase(empires).apply(context(false));
-        new AiDiplomacyPhase(diplomacy).apply(context(false));
+        new AiEmpirePhase(empires, Mockito.mock(StewardRecorder.class)).apply(context(false));
+        new AiDiplomacyPhase(diplomacy, Mockito.mock(DiplomacyService.class)).apply(context(false));
 
         verify(empires, never()).play(any());
         verify(diplomacy, never()).act(any());
@@ -50,8 +50,8 @@ class AiActiveFlagTest {
 
         // Сущность партии заводится с признаком «действует»: старые партии и все, кто не
         // назвал признак в запросе, играют с соседями.
-        new AiEmpirePhase(empires).apply(context(new GameEntity().getAiActive()));
-        new AiDiplomacyPhase(diplomacy).apply(context(new GameEntity().getAiActive()));
+        new AiEmpirePhase(empires, Mockito.mock(StewardRecorder.class)).apply(context(new GameEntity().getAiActive()));
+        new AiDiplomacyPhase(diplomacy, Mockito.mock(DiplomacyService.class)).apply(context(new GameEntity().getAiActive()));
 
         verify(empires, times(1)).play(any());
         verify(diplomacy, times(1)).act(any());

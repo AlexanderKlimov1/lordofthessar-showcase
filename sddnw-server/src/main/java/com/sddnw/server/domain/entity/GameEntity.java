@@ -189,6 +189,225 @@ public class GameEntity {
     @Column(name = "rich_start", nullable = false)
     private Boolean richStart = Boolean.FALSE;
 
+    /**
+     * Партия под наблюдением администратора — field-backlog, пункт 197 (решение хозяина
+     * проекта, 05.10.2026): администратор показывал в ней всю галактику, а за столом сидят
+     * другие люди. Пометка видна всем и не снимается — что карты видели, не отменить.
+     * Ставится запросом мимо версии строки ({@code GameRepository.markAdminWatched}), чтобы
+     * взгляд на карту не спорил с концом хода за замок партии.
+     */
+    @Column(name = "admin_watched", nullable = false)
+    private Boolean adminWatched = Boolean.FALSE;
+
+    /**
+     * Партия поднята из файла — field-backlog, пункт 160: файл мог быть поправлен руками,
+     * поэтому её итог не пишется в историю партий и в сравнения.
+     */
+    @Column(name = "imported", nullable = false)
+    private Boolean imported = Boolean.FALSE;
+
+    /**
+     * Партия на своих справочниках основателя — field-backlog, пункт 42: копия набора лежит в
+     * {@code game_mod}, справочники читают её, пока сервер занят этой партией ({@code ModScope}).
+     * Одиночная, в историю и сравнения не идёт.
+     */
+    @Column(name = "modded", nullable = false)
+    private Boolean modded = Boolean.FALSE;
+
+    /**
+     * Учебная партия — field-backlog, пункт 41: звания за трудное по ней не считаются. Ставит её
+     * заказ партии (пункт меню «Обучение»), а не сервер по признакам: правила обучения те же,
+     * что у малой партии на двоих.
+     */
+    @Column(name = "tutorial", nullable = false)
+    private Boolean tutorial = Boolean.FALSE;
+
+    /**
+     * Партию можно смотреть со стороны — field-backlog, пункт 59 ({@code SpectatorService}).
+     * Согласие даёт создатель при создании, а входящий за стол видит его до входа.
+     */
+    @Column(name = "spectators", nullable = false)
+    private Boolean spectators = Boolean.FALSE;
+
+    /**
+     * Особенность галактики — field-backlog, пункт 94 ({@code GalaxyFeature}): код или пусто.
+     * Строкой, а не перечислением в колонке: старые партии и слепки читаются без неё.
+     */
+    @Column(name = "galaxy_feature", length = 16)
+    private String galaxyFeature;
+
+    /** Неделя галактики недели — пункт 146 ({@code WeeklyGalaxyRules}); пусто — обычная партия. */
+    @Column(name = "weekly_week")
+    private Integer weeklyWeek;
+
+    /**
+     * Уровень сложности — field-backlog, пункт 9 ({@code AiSkill}): как хорошо играют империи ИИ.
+     * Код строкой, пусто — обычный: так читаются партии и слепки, заведённые до уровней.
+     */
+    @Column(name = "ai_skill", length = 16)
+    private String aiSkill;
+
+    /**
+     * Союзники, разделившие победу покорением с {@link #winnerPlayerId}, — field-backlog, пункт 145.
+     * Идентификаторы через запятую; пусто — победитель один.
+     */
+    @Column(name = "co_winners", length = 512)
+    private String coWinners;
+
+    /**
+     * Партию продолжили после победы — field-backlog, пункт 131: победа записана, а замысел
+     * доигрывается «ещё ходом», без новых побед ({@code VictoryService} их больше не ищет).
+     */
+    @Column(name = "played_on", nullable = false)
+    private Boolean playedOn = Boolean.FALSE;
+
+    /**
+     * Закрытая партия — field-backlog, пункт 67: в списке открытых её нет, войти можно только по
+     * ссылке-приглашению ({@code InviteService}). Признак лобби: после старта его никто не спрашивает.
+     */
+    @Column(name = "invite_only", nullable = false)
+    private Boolean inviteOnly = Boolean.FALSE;
+
+    public Boolean getInviteOnly() {
+        return inviteOnly;
+    }
+
+    public void setInviteOnly(Boolean inviteOnly) {
+        this.inviteOnly = inviteOnly;
+    }
+
+    public Boolean getPlayedOn() {
+        return playedOn;
+    }
+
+    public void setPlayedOn(Boolean playedOn) {
+        this.playedOn = playedOn;
+    }
+
+    /**
+     * Код приглашения в партию — field-backlog, пункт 15: ссылка {@code /?invite=<код>} ведёт
+     * пришедшего прямо за этот стол. Заводится при первой просьбе о ссылке
+     * ({@code GameRepository.setInviteCode}, мимо версии строки), и до неё пуст.
+     */
+    @Column(name = "invite_code", length = 16)
+    private String inviteCode;
+
+    /**
+     * Партия подбора «сыграть с людьми» — field-backlog, пункт 65: когда она стартует САМА, если
+     * к этому мигу за столом хотя бы двое людей. Пусто — обычная партия, её стартует создатель.
+     */
+    @Column(name = "auto_start_at")
+    private java.time.OffsetDateTime autoStartAt;
+
+    /**
+     * Новая партия тем же составом — field-backlog, пункт 149: её завёл кто-то из участников этой,
+     * и остальные входят в неё из сцены конца. Пусто — никто не заводил.
+     */
+    @Column(name = "rematch_game_id")
+    private UUID rematchGameId;
+
+    public UUID getRematchGameId() {
+        return rematchGameId;
+    }
+
+    public void setRematchGameId(UUID rematchGameId) {
+        this.rematchGameId = rematchGameId;
+    }
+
+    public java.time.OffsetDateTime getAutoStartAt() {
+        return autoStartAt;
+    }
+
+    public void setAutoStartAt(java.time.OffsetDateTime autoStartAt) {
+        this.autoStartAt = autoStartAt;
+    }
+
+    public String getInviteCode() {
+        return inviteCode;
+    }
+
+    public void setInviteCode(String inviteCode) {
+        this.inviteCode = inviteCode;
+    }
+
+    public Boolean getAdminWatched() {
+        return adminWatched;
+    }
+
+    public Boolean getImported() {
+        return imported;
+    }
+
+    public Boolean getModded() {
+        return modded;
+    }
+
+    public void setModded(Boolean modded) {
+        this.modded = modded;
+    }
+
+    public void setImported(Boolean imported) {
+        this.imported = imported;
+    }
+
+    public Boolean getTutorial() {
+        return tutorial;
+    }
+
+    public void setTutorial(Boolean tutorial) {
+        this.tutorial = tutorial;
+    }
+
+    public Boolean getSpectators() {
+        return spectators;
+    }
+
+    public String getGalaxyFeature() {
+        return galaxyFeature;
+    }
+
+    public void setGalaxyFeature(String galaxyFeature) {
+        this.galaxyFeature = galaxyFeature;
+    }
+
+    public Integer getWeeklyWeek() {
+        return weeklyWeek;
+    }
+
+    public void setWeeklyWeek(Integer weeklyWeek) {
+        this.weeklyWeek = weeklyWeek;
+    }
+
+    public String getCoWinners() {
+        return coWinners;
+    }
+
+    public void setCoWinners(String coWinners) {
+        this.coWinners = coWinners;
+    }
+
+    /** Все победители партии: главный и союзники (пункт 145); пусто — партия не выиграна. */
+    public java.util.List<UUID> winners() {
+        java.util.List<UUID> all = new java.util.ArrayList<>();
+        if (winnerPlayerId != null) {
+            all.add(winnerPlayerId);
+        }
+        if (coWinners != null && !coWinners.isBlank()) {
+            for (String part : coWinners.split(",")) {
+                all.add(UUID.fromString(part.trim()));
+            }
+        }
+        return all;
+    }
+
+    public void setSpectators(Boolean spectators) {
+        this.spectators = spectators;
+    }
+
+    public void setAdminWatched(Boolean adminWatched) {
+        this.adminWatched = adminWatched;
+    }
+
     public Boolean getRichStart() {
         return richStart;
     }
@@ -270,6 +489,89 @@ public class GameEntity {
 
     public void setCouncilOpen(Boolean councilOpen) {
         this.councilOpen = councilOpen;
+    }
+
+    /**
+     * Итог по могуществу ждёт согласия людей (09.10.2026, {@code MightConsentService}): кто назван
+     * сильнейшим и на каком ходу. Пусто — никого не спрашивают. В слепок партии не идёт, как и
+     * открытый совет: поднятая партия на сроке спросит заново.
+     */
+    @Column(name = "might_pending_player_id")
+    private UUID mightPendingPlayerId;
+
+    /**
+     * На каком ходу подводится итог по могуществу (09.10.2026, field-backlog, пункт 24): 100, 200 или
+     * 300; пусто — 300, как у партий, заведённых раньше ({@code MightVictoryRules.limit}).
+     */
+    @Column(name = "might_turn")
+    private Integer mightTurn;
+
+    /**
+     * Тихая галактика — field-backlog, пункт 186: ИИ войну первым не начинает и договоров не рвёт,
+     * но защищается и отвечает ({@code AiDiplomacyService}).
+     */
+    @Column(name = "peaceful_ai", nullable = false)
+    private Boolean peacefulAi = Boolean.FALSE;
+
+    /**
+     * Досрочный итог по могуществу — field-backlog, пункт 80: кто держит огромный отрыв и с какого
+     * хода ({@code MightVictoryRules.EARLY_HOLD_TURNS}). Пусто — отрыва нет.
+     */
+    @Column(name = "might_lead_player_id")
+    private UUID mightLeadPlayerId;
+
+    @Column(name = "might_lead_since_turn")
+    private Integer mightLeadSinceTurn;
+
+    public Integer getMightTurn() {
+        return mightTurn;
+    }
+
+    public void setMightTurn(Integer mightTurn) {
+        this.mightTurn = mightTurn;
+    }
+
+    public Boolean getPeacefulAi() {
+        return peacefulAi;
+    }
+
+    public void setPeacefulAi(Boolean peacefulAi) {
+        this.peacefulAi = peacefulAi;
+    }
+
+    public UUID getMightLeadPlayerId() {
+        return mightLeadPlayerId;
+    }
+
+    public void setMightLeadPlayerId(UUID mightLeadPlayerId) {
+        this.mightLeadPlayerId = mightLeadPlayerId;
+    }
+
+    public Integer getMightLeadSinceTurn() {
+        return mightLeadSinceTurn;
+    }
+
+    public void setMightLeadSinceTurn(Integer mightLeadSinceTurn) {
+        this.mightLeadSinceTurn = mightLeadSinceTurn;
+    }
+
+    @Column(name = "might_pending_turn")
+    private Integer mightPendingTurn;
+
+    public UUID getMightPendingPlayerId() {
+        return mightPendingPlayerId;
+    }
+
+    public void setMightPendingPlayerId(UUID mightPendingPlayerId) {
+        this.mightPendingPlayerId = mightPendingPlayerId;
+    }
+
+    public Integer getMightPendingTurn() {
+        return mightPendingTurn;
+    }
+
+    public void setMightPendingTurn(Integer mightPendingTurn) {
+        this.mightPendingTurn = mightPendingTurn;
     }
 
     @Column(name = "host_player_id")
@@ -542,5 +844,13 @@ public class GameEntity {
 
     public void setVersion(Long version) {
         this.version = version;
+    }
+
+    public String getAiSkill() {
+        return aiSkill;
+    }
+
+    public void setAiSkill(String aiSkill) {
+        this.aiSkill = aiSkill;
     }
 }

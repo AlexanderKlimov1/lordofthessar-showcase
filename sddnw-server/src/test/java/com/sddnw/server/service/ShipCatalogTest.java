@@ -63,11 +63,13 @@ class ShipCatalogTest {
     }
 
     @Test
-    @DisplayName("Империя начинает партию с двигателем, бронёй и пушкой — как в MOO II")
+    @DisplayName("С первого хода дан только двигатель; броню и пушку изучают (12.10.2026)")
     void startingComponentsExist() {
         assertTrue(startsWithout(ShipComponentSlot.ENGINE), "нет стартового двигателя");
-        assertTrue(startsWithout(ShipComponentSlot.ARMOR), "нет стартовой брони");
-        assertTrue(startsWithout(ShipComponentSlot.WEAPON), "нет стартового оружия");
+        assertTrue(!startsWithout(ShipComponentSlot.ARMOR), "броня дана без исследования");
+        assertTrue(!startsWithout(ShipComponentSlot.WEAPON), "оружие дано без исследования");
+        assertEquals("titanium-armor", catalog.component("titanium-armor").requiredTechCode());
+        assertEquals("mass-driver", catalog.component("mass-driver").requiredTechCode());
     }
 
     @Test

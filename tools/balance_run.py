@@ -43,6 +43,9 @@ BASE = os.environ.get('SDDNW_BASE', 'http://localhost:8080')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, 'tools', 'balance')
 DEFAULT_OUT = os.path.join(OUT_DIR, 'telemetry.jsonl')
+
+# Партии с путями к победе, как у игрока (`--victories`); по умолчанию — замер на заданном ходу.
+VICTORIES = False
 REPORT = os.path.join(OUT_DIR, 'balance-run-report.txt')
 #: Партии, заведённые прогоном, — по строке «идентификатор пропуск» на каждую.
 #: Нужен потому, что прерванный прогон до своей уборки не доходит, а пропуск создателя
@@ -150,6 +153,12 @@ def play(account, seed, turns, size, name, empires=None, designs=None,
     # бы разной длины, и сравнивать их было бы нельзя (п. 3).
     request = {'name': name, 'playerName': 'Наблюдатель', 'galaxySize': size,
                'observer': True, 'seed': seed, 'council': False}
+    if VICTORIES:
+        # Партия КАК У ИГРОКА (field-backlog, пункты 150 и 79): все пути к победе включены, и
+        # партия кончается тогда же, когда кончилась бы у человека, — а не на заданном ходу.
+        # Для замеров цен такое не годится (партии выходят разной длины), для замера «когда
+        # партия решена» — только такое и годится.
+        request.update({'council': True, 'wardenholdVictory': True, 'mightVictory': True})
     if empires:
         request['totalPlayers'] = empires
     if designs:
@@ -449,7 +458,11 @@ def main():
                         help='курс «очко → сила»: империи получают сборки разного бюджета')
     parser.add_argument('--budgets', default='0,2,4,6,8,10',
                         help='какие бюджеты сравнивать в режиме --curve')
+    parser.add_argument('--victories', action='store_true',
+                        help='все пути к победе, как в партии игрока (совет, Тессар, итог на 300-м ходу)')
     options = parser.parse_args()
+    global VICTORIES
+    VICTORIES = options.victories
 
     # Пустой список открытых партий — это «сервер жив», а не «нет ответа»: проверять надо
     # именно признак отказа, иначе пустая галактика читается как упавший сервер.

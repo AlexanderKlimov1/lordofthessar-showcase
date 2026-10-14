@@ -39,7 +39,7 @@ export function ShipModificationDialog({
   onToggle: (modification: WeaponModification) => void;
   onClose: () => void;
 }) {
-  useModalEscape(true, onClose);
+  useModalEscape(true, onClose, true);
   useT();
 
   const taken = new Set(pick.modifications.map((mod) => mod.code));
@@ -106,7 +106,7 @@ export function ShipModificationDialog({
 
         <div className="mt-4 flex items-center justify-end gap-5 border-t border-space-700 pt-3 text-20">
           <button type="button" className="link" onClick={onClose}>
-            {t('design.mods.done')}
+            {t('common.ok')}
           </button>
         </div>
       </div>

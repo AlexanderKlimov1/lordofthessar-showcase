@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Подсказки — field-backlog, пункты 30 и 130. novice_hints: нужны ли подсказки новичку
+        (пусто — ещё не спрашивали; ветеран MOO II отвечает «нет» одним вопросом при первом входе).
+        dismissed_hints: подсказки, отклонённые «больше не показывать», — строкой JSON-списка
+        ключей, как раскладка клавиш: что эти ключи значат, знает клиент.
+    -->
+    <changeSet id="105-account-hints" author="sddnw">
+        <addColumn tableName="account">
+            <column name="novice_hints" type="boolean"/>
+            <column name="dismissed_hints" type="varchar(2048)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

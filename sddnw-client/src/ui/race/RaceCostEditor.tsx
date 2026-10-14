@@ -7,6 +7,7 @@ import { useModalEscape } from '../useModalEscape';
 import { t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Стоимость особенностей рас — п. 7: правка справочника прямо из главного меню.
@@ -159,7 +160,7 @@ export function RaceCostEditor({ onClose }: { onClose: () => void }) {
           <p className="text-ink-faint">{t('costs.notLoaded')}</p>
         )}
 
-        {error ? <p className="mt-3 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mt-3" message={error} /> : null}
         {saved ? <p className="mt-3 text-accent">{saved}</p> : null}
       </div>
 

@@ -1,0 +1,162 @@
+{
+  "price": "$100",
+  "seatsTotal": 100,
+  "seatsTaken": 0,
+  "published": false,
+  "en": {
+    "title": "Founder of Thessar",
+    "tagline": "One hundred people who leave their mark on the galaxy — for good.",
+    "intro": "Lord of Thessar is made by one developer, slowly and carefully. Founders make it possible to keep going. In return you get no advantage in the game — you get a place in it: a star that every player will see, a voice in what comes next, and a word that the game will not vanish.",
+    "sections": [
+      {
+        "title": "Your mark on the galaxy",
+        "items": [
+          "Your own star. Its name joins the star catalogue and appears in every player's games.",
+          "Your own leader (first 24 founders). You give the name, title and a short story; together we pick abilities from the existing set. Your leader may offer service to any player.",
+          "Your name in the credits and on the Founders page in the main menu."
+        ]
+      },
+      {
+        "title": "The founder's sign — looks only",
+        "items": [
+          "A founder mark next to your name in the lobby, in Races and in tournament tables.",
+          "A golden frame for your race portrait and a special banner pattern.",
+          "Your own variant of the game's theme: the melody is set by numbers, and your number plays in your games."
+        ]
+      },
+      {
+        "title": "A voice in development",
+        "items": [
+          "A closed channel with the developer.",
+          "A monthly vote: the developer offers three mechanics or changes, founders choose which one goes first.",
+          "Once a quarter — a balance review of your race: send your build, get the report of the balance console — what is too cheap, what is too expensive, and which traits are stronger together than apart."
+        ]
+      },
+      {
+        "title": "Before everyone else",
+        "items": [
+          "Access to the test server: new versions arrive there a week before everyone else.",
+          "New races, mechanics and scenes are shown to founders first and discussed before release."
+        ]
+      },
+      {
+        "title": "Tournaments",
+        "items": [
+          "Free entry to every tournament until version 1.0.",
+          "The Founders' Cup — a yearly tournament for founders only."
+        ]
+      },
+      {
+        "title": "A guarantee",
+        "items": [
+          "The whole game and everything released until version 1.0, paid add-ons included.",
+          "If the game's server ever shuts down, the server build will be published so the game can be run on your own computer."
+        ]
+      },
+      {
+        "title": "What is not included",
+        "items": [
+          "No advantage in a game: no resources, special races or extra race points. Founders play by the same rules as everyone.",
+          "No promises of \"forever\" or \"top priority\": the developer decides what the game becomes, founders choose the order."
+        ]
+      }
+    ],
+    "faq": [
+      {
+        "question": "Why only one hundred seats?",
+        "answer": "Every founder gets a star in the catalogue, and the first 24 get a leader; a quarterly balance review takes an evening of server time. One hundred is the number one developer can honour fully."
+      },
+      {
+        "question": "Will founders win more often?",
+        "answer": "No. Everything in the pack is a mark, a voice or an early look — nothing changes the rules of a game."
+      },
+      {
+        "question": "What happens to my star and leader if I stop playing?",
+        "answer": "They stay. They are part of the galaxy, not of your account."
+      },
+      {
+        "question": "What does \"version 1.0\" mean?",
+        "answer": "The release of the full game. Everything that comes out before it is yours, add-ons included."
+      }
+    ],
+    "note": "Sales are not open yet. When they are, the button above will lead to the purchase."
+  },
+  "ru": {
+    "title": "Основатель Тессара",
+    "tagline": "Сто человек, которые оставят след в Галактике — насовсем.",
+    "intro": "«Владыку Тессара» делает один разработчик, неспешно и тщательно. Основатели дают возможность продолжать. Взамен вы получаете не преимущество в игре, а место в ней: звезду, которую увидит каждый игрок, голос в том, что будет дальше, и слово, что игра не исчезнет.",
+    "sections": [
+      {
+        "title": "Ваш след в Галактике",
+        "items": [
+          "Своя звезда. Её название входит в каталог звёзд и встречается в партиях всех игроков.",
+          "Свой лидер (первые 24 основателя). Вы даёте имя, звание и короткую историю, способности подбираем вместе из существующих. Ваш лидер может прийти на службу к любому игроку.",
+          "Имя в титрах и на странице «Основатели» в главном меню."
+        ]
+      },
+      {
+        "title": "Знак основателя — только внешний вид",
+        "items": [
+          "Метка у имени в лобби, в «Расах» и в турнирных таблицах.",
+          "Золотая оправа портрета расы и особый узор знамени.",
+          "Свой вариант темы игры: мелодия задаётся числами, и в ваших партиях звучит ваш номер."
+        ]
+      },
+      {
+        "title": "Голос в разработке",
+        "items": [
+          "Закрытый канал с разработчиком.",
+          "Ежемесячное голосование: разработчик предлагает три механики или правки, основатели выбирают, какая идёт в работу первой.",
+          "Раз в квартал — разбор вашей расы на пульте балансировки: вы присылаете сборку и получаете отчёт — что в ней дёшево, что дорого и какие стороны вместе сильнее, чем порознь."
+        ]
+      },
+      {
+        "title": "Раньше всех",
+        "items": [
+          "Доступ к тестовому серверу: новые версии там на неделю раньше остальных.",
+          "Новые расы, механики и сцены основатели видят первыми и обсуждают до выпуска."
+        ]
+      },
+      {
+        "title": "Турниры",
+        "items": [
+          "Бесплатное участие во всех турнирах до версии 1.0.",
+          "Кубок основателей — ежегодный турнир только для основателей."
+        ]
+      },
+      {
+        "title": "Гарантия",
+        "items": [
+          "Вся игра и всё, что выйдет до версии 1.0, включая платные дополнения.",
+          "Если сервер игры когда-нибудь закроется, сборка сервера будет опубликована, чтобы игру можно было запустить у себя."
+        ]
+      },
+      {
+        "title": "Чего в пакете нет",
+        "items": [
+          "Никаких преимуществ в партии: ни ресурсов, ни особых рас, ни очков сверх бюджета. Основатели играют по тем же правилам, что и все.",
+          "Никаких обещаний «навсегда» и «в первую очередь»: какой будет игра, решает разработчик, а основатели выбирают порядок."
+        ]
+      }
+    ],
+    "faq": [
+      {
+        "question": "Почему мест только сто?",
+        "answer": "Каждому основателю — звезда в каталоге, первым 24 — лидер, а квартальный разбор расы занимает вечер работы сервера. Сто — это столько, сколько один разработчик выполнит честно и полностью."
+      },
+      {
+        "question": "Будут ли основатели чаще побеждать?",
+        "answer": "Нет. Всё в пакете — след, голос или ранний взгляд; ничто не меняет правил партии."
+      },
+      {
+        "question": "Что будет с моей звездой и лидером, если я перестану играть?",
+        "answer": "Они останутся. Они часть Галактики, а не вашей учётной записи."
+      },
+      {
+        "question": "Что значит «версия 1.0»?",
+        "answer": "Выпуск полной игры. Всё, что выйдет до него, — ваше, дополнения тоже."
+      }
+    ],
+    "note": "Продажа пока не открыта. Когда откроется, кнопка выше поведёт к покупке."
+  }
+}

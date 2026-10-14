@@ -24,8 +24,20 @@ import java.util.List;
  */
 public final class TurnClockRules {
 
-    /** Сроки хода, которые предлагает окно новой игры: 1,5, 2, 3, 5 и 10 минут. */
-    public static final List<Integer> ALLOWED_SECONDS = List.of(90, 120, 180, 300, 600);
+    /**
+     * Сроки хода, которые предлагает окно новой игры: 1,5, 2, 3, 5 и 10 минут — и медленные партии
+     * (field-backlog, пункт 64, решение хозяина проекта 08.10.2026): «вечерняя» — ход в четыре часа,
+     * «по переписке» — ход в сутки. Людям не нужно быть за столом одновременно, а без уведомлений о
+     * ходе (пункт 22) такая партия умирает — они уже есть.
+     */
+    public static final List<Integer> ALLOWED_SECONDS = List.of(90, 120, 180, 300, 600, 4 * 3600, 24 * 3600);
+
+    /**
+     * С какого срока партия медленная (пункт 64): ушедшим в ней считают по ПРОПУЩЕННЫМ срокам, а
+     * не по трём минутам без действия — иначе любой игрок «уходил» бы через три минуты после своего
+     * хода, и его империю вёл бы ИИ до вечера.
+     */
+    public static final Integer SLOW_FROM_SECONDS = 3600;
 
     /** Столько без единого настоящего действия — и игрок считается ушедшим. */
     public static final Duration IDLE = Duration.ofMinutes(3);
@@ -55,8 +67,37 @@ public final class TurnClockRules {
         return deadline != null && !now.isBefore(deadline);
     }
 
-    /** Ушёл ли игрок по безделью: последнее настоящее действие — не позже чем {@link #IDLE} назад. */
-    public static Boolean idle(OffsetDateTime lastAction, OffsetDateTime now) {
-        return !lastAction.plus(IDLE).isAfter(now);
+    /**
+     * Когда ИИ возьмёт империю игрока, если тот так ничего и не сделает, — field-backlog,
+     * пункт 127: по безделью ({@link #IDLE} после последнего действия), а если срок хода
+     * станет для него последним пропущенным ({@link #MISSED_LIMIT}) — на этом сроке, когда он
+     * раньше. Одно правило на часы и на предупреждение: посчитанное дважды, оно разошлось бы,
+     * и строка «через минуту» врала бы.
+     */
+    public static OffsetDateTime takeoverAt(OffsetDateTime lastAction, Integer missed,
+                                            OffsetDateTime turnStartedAt, Integer seconds) {
+        OffsetDateTime deadline = deadline(turnStartedAt, seconds);
+        if (Boolean.TRUE.equals(slow(seconds))) {
+            // Медленная партия (пункт 64): только сроки; пока до последнего пропущенного далеко — не грозит.
+            return deadline != null && missed + 1 >= MISSED_LIMIT ? deadline : null;
+        }
+        OffsetDateTime idle = lastAction.plus(IDLE);
+        if (deadline != null && missed + 1 >= MISSED_LIMIT && deadline.isBefore(idle)) {
+            return deadline;
+        }
+        return idle;
+    }
+
+    /**
+     * Ушёл ли игрок по безделью: последнее настоящее действие — не позже чем {@link #IDLE} назад. В
+     * медленной партии безделья не бывает (пункт 64): там ушедшего называют только пропущенные сроки.
+     */
+    public static Boolean idle(OffsetDateTime lastAction, OffsetDateTime now, Integer seconds) {
+        return !Boolean.TRUE.equals(slow(seconds)) && !lastAction.plus(IDLE).isAfter(now);
+    }
+
+    /** Медленная ли партия — ход в часы, а не в минуты (пункт 64). */
+    public static Boolean slow(Integer seconds) {
+        return seconds != null && seconds >= SLOW_FROM_SECONDS;
     }
 }

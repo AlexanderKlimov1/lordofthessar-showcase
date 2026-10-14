@@ -56,6 +56,14 @@ public class CouncilService {
     private final GameRepository gameRepository;
     private final DiplomacyService diplomacyService;
     private final PlayerEventService playerEvents;
+    private final Messages messages;
+
+    /**
+     * Счётчик первых встреч с механиками — field-backlog, пункт 93. Полем, а не параметром
+     * конструктора: службу собирают руками юнит-тесты, а им замер ни к чему (там он пуст).
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private EmpireActivityService activity;
 
     public CouncilService(CouncilRules rules, CouncilVoteRepository voteRepository,
                           DiplomacyRelationRepository relationRepository,
@@ -63,7 +71,9 @@ public class CouncilService {
                           com.sddnw.server.repository.PlayerRepository playerRepository,
                           GameRepository gameRepository,
                           DiplomacyService diplomacyService,
-                          PlayerEventService playerEvents) {
+                          PlayerEventService playerEvents,
+                          Messages messages) {
+        this.messages = messages;
         this.rules = rules;
         this.voteRepository = voteRepository;
         this.relationRepository = relationRepository;
@@ -105,6 +115,9 @@ public class CouncilService {
                 .toList();
         if (!rules.convenes(context.turn(), alive.size())) {
             return null;
+        }
+        if (activity != null) {
+            alive.forEach(player -> activity.record(context.game().getId(), player.getId(), EmpireActivityService.COUNCIL));
         }
 
         Map<UUID, Integer> votes = alive.stream()
@@ -200,6 +213,7 @@ public class CouncilService {
                 row.setChoicePlayerId(choiceByTrust(row.getVoterPlayerId(),
                         candidates.get(0), candidates.get(1), trust));
                 row.setPending(Boolean.FALSE);
+                row.setSilent(Boolean.TRUE);
             }
             voteRepository.saveAll(silent);
         }
@@ -423,7 +437,7 @@ public class CouncilService {
                 game.getCouncilTotalVotes(),
                 game.getCouncilRequiredVotes(),
                 game.getCouncilElectedPlayerId(),
-                elected == null ? null : elected.getName(),
+                elected == null ? null : messages.empire(elected.getName()),
                 voters.stream().filter(CouncilVoterDto::candidate).toList(),
                 voters,
                 Boolean.TRUE.equals(game.getCouncilRefused()),
@@ -444,13 +458,15 @@ public class CouncilService {
         Boolean hidden = open && !yours;
         return new CouncilVoterDto(
                 row.getVoterPlayerId(),
-                player == null ? "" : player.getName(),
+                player == null ? "" : messages.empire(player.getName()),
                 player == null ? null : player.getColor(),
                 row.getWeight(),
                 hidden ? null : row.getChoicePlayerId(),
                 row.getCandidate(),
                 yours,
-                hidden || Boolean.TRUE.equals(row.getPending()));
+                hidden || Boolean.TRUE.equals(row.getPending()),
+                // Как подан СВОЙ голос — только смотрящему: чужое молчание не его дело.
+                yours && Boolean.TRUE.equals(row.getSilent()));
     }
 
     /** Доверие каждой империи к каждой: строка (X, Y) держит мнение X о Y — п. 15. */

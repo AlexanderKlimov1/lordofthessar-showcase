@@ -1,5 +1,10 @@
+import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Colony } from '../../api/types';
-import { t } from '../../i18n';
+import { t, tf, useT } from '../../i18n';
+import { Figure } from '../Figure';
+import { figureLabelClass } from '../accent';
+import { hoverOnly, justTouched } from '../touch';
 
 /**
  * Монетка выкупа стройки в списке колоний — п. 10.
@@ -31,6 +36,12 @@ import { t } from '../../i18n';
  * разобранное здание возвращает колонии половину цены в единицах (п. 10), и их может
  * хватить с избытком. Поэтому состояние выводится из чисел стройки, а не из памяти о
  * нажатии: своего признака «куплено» у колонии нет, и он был бы второй правдой.
+ *
+ * <b>Подсказка — своя, плашкой сцены (`panel`), а не системная</b> (06.10.2026, решение
+ * хозяина проекта): системная подсказка браузера выглядит чужой на любом экране игры, а у
+ * погашенной кнопки её иной браузер не показывает вовсе. При нехватке казны она называет
+ * одно число — сколько не хватает: «нужно и есть» заставляли вычитать в уме. Рисуется в
+ * `body` и по месту монетки: строки списка колоний режет своя прокрутка.
  */
 export type BuyState = 'ready' | 'poor' | 'paid' | 'nothing';
 
@@ -79,33 +90,73 @@ export function BuyCoin({
   busy: boolean;
   onBuy: () => void;
 }) {
+  useT();
   const state = buyState(colony, credits);
+  const [tip, setTip] = useState<DOMRect | null>(null);
   const title =
     state === 'ready'
       ? t('build.buy.title', { n: colony.buyCost ?? 0 })
       : state === 'poor'
-        ? t('build.buy.noCredits', { n: colony.buyCost ?? 0, have: credits })
+        ? tf('build.buy.short', {
+          n: <Figure accent="value" tone="danger">{(colony.buyCost ?? 0) - credits}</Figure>,
+        })
         : state === 'paid'
           ? t('build.buy.paid')
           : t('build.buy.nothing');
+  const show = (event: React.SyntheticEvent<HTMLElement>) =>
+    setTip(event.currentTarget.getBoundingClientRect());
 
   return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={hoverOnly(show)}
+      onMouseLeave={() => setTip(null)}
+      // Касание: погашенная монетка нажатий не принимает, и её подсказку показывает само касание.
+      onClick={(event) => {
+        if (justTouched() && state !== 'ready') {
+          if (tip) {
+            setTip(null);
+          } else {
+            show(event);
+          }
+        }
+      }}
+    >
     <button
       type="button"
       // Вжатая монетка — это состояние, и о нём говорят не только тени: экран читают и
       // с клавиатуры.
       aria-pressed={state === 'paid'}
       aria-label={t('colonyRow.buy.aria', { name: colonyName })}
-      title={title}
       disabled={state !== 'ready' || busy}
       className={
         'flex h-6 w-6 shrink-0 items-center justify-center rounded-full border '
+        // Погашенная кнопка мышь не отдаёт: наведение должна поймать обёртка с подсказкой.
+        + (state !== 'ready' || busy ? 'pointer-events-none ' : '')
         + LOOK[state]
       }
+      onFocus={hoverOnly(show)}
+      onBlur={() => setTip(null)}
       onClick={onBuy}
     >
       <Coin />
     </button>
+    {tip
+      ? createPortal(
+        <div
+          role="tooltip"
+          className={'panel pointer-events-none fixed z-[70] max-w-[22rem] -translate-x-1/2 whitespace-nowrap px-3 py-1.5 text-ink ' + figureLabelClass('value')}
+          style={{
+            left: Math.min(Math.max(tip.left + tip.width / 2, 120), window.innerWidth - 120),
+            top: tip.bottom + 6 + 40 > window.innerHeight ? tip.top - 40 : tip.bottom + 6,
+          }}
+        >
+          {title}
+        </div>,
+        document.body,
+      )
+      : null}
+    </span>
   );
 }
 

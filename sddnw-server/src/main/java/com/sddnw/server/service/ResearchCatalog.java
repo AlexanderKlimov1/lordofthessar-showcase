@@ -4,7 +4,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sddnw.server.config.GameProperties;
+import com.sddnw.server.domain.BuildingEffects;
 import com.sddnw.server.domain.LocalizedText;
+import com.sddnw.server.domain.enums.BuildingEffectType;
 import com.sddnw.server.dto.ResearchCategoryDto;
 import com.sddnw.server.dto.ResearchLevelDto;
 import com.sddnw.server.dto.ResearchOptionDto;
@@ -20,6 +22,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -43,6 +47,49 @@ public class ResearchCatalog {
     private static final Logger log = LoggerFactory.getLogger(ResearchCatalog.class);
 
     private final Path file;
+
+    /**
+     * Набор справочников партии основателя — field-backlog, пункт 42. Поток занят партией с
+     * набором ({@link ModScope}) — справочник отдаёт разобранный набор этой партии, иначе файл.
+     * Набор у партии не меняется, поэтому разбирается один раз и помнится по партии.
+     */
+    private final GameMods gameMods;
+    private final java.util.Map<java.util.UUID, Snapshot> modSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Текст набора, который сейчас разбирается вместо файла: разбор один и тот же. */
+    private static final ThreadLocal<byte[]> PARSING = new ThreadLocal<>();
+
+    private byte[] source() throws IOException {
+        byte[] text = PARSING.get();
+        return text != null ? text : Files.readAllBytes(file);
+    }
+
+    private <T> T parsing(String text, java.util.function.Supplier<T> work) {
+        PARSING.set(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            return work.get();
+        } finally {
+            PARSING.remove();
+        }
+    }
+
+    /** Проверить текст набора тем же разбором, каким читается файл; неверный — исключение. */
+    public void check(String text) {
+        parsing(text, () -> build(0L));
+    }
+
+    /** Разобранный набор партии, которую считает поток; {@code null} — справочник обычный. */
+    private Snapshot modded() {
+        java.util.UUID game = ModScope.current();
+        if (game == null) {
+            return null;
+        }
+        String text = gameMods.content(game, GameMods.Kind.TECHNOLOGIES);
+        if (text == null) {
+            return null;
+        }
+        return modSnapshots.computeIfAbsent(game, id -> parsing(text, () -> build(0L)));
+    }
     private final ObjectMapper objectMapper;
 
     /** Разобранное дерево и время правки файла, из которого оно прочитано. */
@@ -61,7 +108,14 @@ public class ResearchCatalog {
     /** Когда файл проверяли в последний раз — по монотонным часам, а не по системным. */
     private volatile long checkedAt = 0L;
 
+    /** Без наборов партий — так справочник собирают проверки (пункт 42). */
     public ResearchCatalog(GameProperties gameProperties, ObjectMapper objectMapper) {
+        this(gameProperties, objectMapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ResearchCatalog(GameProperties gameProperties, ObjectMapper objectMapper, GameMods gameMods) {
+        this.gameMods = gameMods;
         this.file = Path.of(gameProperties.techFile()).toAbsolutePath();
         this.objectMapper = objectMapper;
     }
@@ -102,6 +156,25 @@ public class ResearchCatalog {
         return current().startingLevels();
     }
 
+    /**
+     * Что изученное даёт колониям и империи — п. 9 (13.10.2026, перенос «достижений» MOO II):
+     * сумма пар «тип — количество» из поля {@code effects} технологий, тех же, что у зданий.
+     * Колония складывает это слагаемым «технологии» ({@code ColonyService.ColonyContext}),
+     * разведка берёт свою подготовку ({@link BuildingEffectType#ESPIONAGE_TRAINING}).
+     * Технология без поля не даёт ничего — её действие, если оно есть, живёт в своём правиле.
+     */
+    public BuildingEffects effectsOf(Collection<String> technologyCodes) {
+        Map<String, BuildingEffects> all = current().effects();
+        BuildingEffects total = BuildingEffects.NONE;
+        for (String code : technologyCodes) {
+            BuildingEffects one = all.get(code);
+            if (one != null) {
+                total = total.plus(one);
+            }
+        }
+        return total;
+    }
+
     /** Уровень, который выдаётся с первого хода: раздел и его номер — п. 9. */
     public record StartingLevel(String categoryCode, Integer levelOrder) {
     }
@@ -137,17 +210,62 @@ public class ResearchCatalog {
     }
 
     private Snapshot current() {
+        Snapshot mod = modded();
+        if (mod != null) {
+            return mod;
+        }
         long modifiedAt = modifiedAtCached();
         Snapshot found = snapshot;
         if (found == null || found.modifiedAt() != modifiedAt) {
-            ResearchTreeDto english = read(Locale.ENGLISH);
-            List<StartingLevel> starting = english.startingLevels().stream()
-                    .map(reference -> parseLevelRef(reference, english.categories()))
-                    .toList();
-            found = new Snapshot(modifiedAt, english, read(RUSSIAN), starting);
+            found = build(modifiedAt);
             snapshot = found;
         }
         return found;
+    }
+
+    /** Дерево на обоих языках и стартовые уровни — из файла или из набора партии. */
+    private Snapshot build(long modifiedAt) {
+        ResearchTreeDto english = read(Locale.ENGLISH);
+        List<StartingLevel> starting = english.startingLevels().stream()
+                .map(reference -> parseLevelRef(reference, english.categories()))
+                .toList();
+        return new Snapshot(modifiedAt, english, read(RUSSIAN), starting, readEffects());
+    }
+
+    /**
+     * Действия технологий по кодам — поле {@code effects} в файле. Неизвестный тип — отказ
+     * при чтении: опечатка в типе иначе молча значила бы «технология ничего не даёт».
+     */
+    private Map<String, BuildingEffects> readEffects() {
+        TechFile parsed;
+        try {
+            parsed = objectMapper.readValue(source(), TechFile.class);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Не удалось разобрать описание дерева технологий: " + file, e);
+        }
+        Map<String, BuildingEffects> result = new java.util.HashMap<>();
+        for (Category category : parsed.categories().values()) {
+            for (Level level : category.levels()) {
+                for (Technology tech : level.technologies()) {
+                    if (tech.effects() == null || tech.effects().isEmpty()) {
+                        continue;
+                    }
+                    Map<BuildingEffectType, Integer> amounts = new EnumMap<>(BuildingEffectType.class);
+                    for (Effect effect : tech.effects()) {
+                        BuildingEffectType type;
+                        try {
+                            type = BuildingEffectType.valueOf(effect.type());
+                        } catch (IllegalArgumentException | NullPointerException unknown) {
+                            throw new IllegalStateException("Неизвестный тип действия «" + effect.type()
+                                    + "» у технологии " + tech.code() + " (" + file + ")", unknown);
+                        }
+                        amounts.merge(type, effect.amount() == null ? 0 : effect.amount(), Integer::sum);
+                    }
+                    result.put(tech.code(), new BuildingEffects(Map.copyOf(amounts), 0));
+                }
+            }
+        }
+        return Map.copyOf(result);
     }
 
     /** Раздел дерева по коду. */
@@ -253,7 +371,7 @@ public class ResearchCatalog {
     private ResearchTreeDto read(Locale locale) {
         TechFile parsed;
         try {
-            parsed = objectMapper.readValue(Files.readAllBytes(file), TechFile.class);
+            parsed = objectMapper.readValue(source(), TechFile.class);
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось разобрать описание дерева технологий: " + file, e);
         }
@@ -352,7 +470,7 @@ public class ResearchCatalog {
     }
 
     private record Snapshot(long modifiedAt, ResearchTreeDto english, ResearchTreeDto russian,
-                            List<StartingLevel> startingLevels) {
+                            List<StartingLevel> startingLevels, Map<String, BuildingEffects> effects) {
 
         /** Дерево на языке читателя; не русский — английский, он же запасной. */
         ResearchTreeDto tree(Locale locale) {
@@ -387,7 +505,13 @@ public class ResearchCatalog {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record Technology(String code, LocalizedText name, LocalizedText description) {
+    private record Technology(String code, LocalizedText name, LocalizedText description,
+                              List<Effect> effects) {
+    }
+
+    /** Действие технологии — пара «тип — количество», как у зданий (п. 9). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record Effect(String type, Integer amount) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

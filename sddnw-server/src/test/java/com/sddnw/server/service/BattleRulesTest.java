@@ -50,9 +50,12 @@ class BattleRulesTest {
             new ShipHull("doom-star", LocalizedText.of("Leviathan"), LocalizedText.of(""), 1200, 1800, 640, 6, 100, 40, null, 6, Boolean.FALSE, Boolean.FALSE, Boolean.FALSE);
 
     private final ShipComponent drive = component("nuclear-drive", ShipComponentSlot.ENGINE,
-            Map.of(ShipEffectType.SPEED, 2));
+            Map.of(ShipEffectType.SPEED, 2, ShipEffectType.COMBAT_SPEED, 12));
     private final ShipComponent fastDrive = component("hyper-drive", ShipComponentSlot.ENGINE,
-            Map.of(ShipEffectType.SPEED, 6));
+            Map.of(ShipEffectType.SPEED, 6, ShipEffectType.COMBAT_SPEED, 28));
+    /** Плавники чудища: боевая скорость есть, скорости полёта нет — чудище не летает. */
+    private final ShipComponent fins = component("monster-fins", ShipComponentSlot.ENGINE,
+            Map.of(ShipEffectType.COMBAT_SPEED, 14));
     private final ShipComponent computer = component("electronic-computer", ShipComponentSlot.COMPUTER,
             Map.of(ShipEffectType.ATTACK_PERCENT, 25));
     private final ShipComponent gun = component("mass-driver", ShipComponentSlot.WEAPON,
@@ -80,8 +83,17 @@ class BattleRulesTest {
 
         assertThat(fastInitiative).isGreaterThan(smartInitiative);
         assertThat(smartInitiative).isGreaterThan(slowInitiative);
-        // Скорость весит сто, прицел добавляется процентами: 2 * 100 + 25.
-        assertThat(smartInitiative).isEqualTo(225);
+        // Боевая скорость весит двадцать пять (сто на клетку), прицел — процентами: 12 * 25 + 25.
+        assertThat(smartInitiative).isEqualTo(325);
+    }
+
+    @Test
+    @DisplayName("Чудище с плавниками ходит раньше фрегата на ядерном двигателе — очередь по боевой скорости")
+    void monsterOutpacesNuclearFrigate() {
+        List<ShipDesignRules.Item> frigateItems = List.of(item(drive, 1));
+        List<ShipDesignRules.Item> monsterItems = List.of(item(fins, 1));
+        assertThat(rules.initiative(stats(frigate, monsterItems), monsterItems))
+                .isGreaterThan(rules.initiative(stats(frigate, frigateItems), frigateItems));
     }
 
     @Test
@@ -210,7 +222,7 @@ class BattleRulesTest {
 
     /** Характеристики только со скоростями: прочему этих проверок не нужно. */
     private static ShipStats stats(int speed, int combatSpeed) {
-        return new ShipStats(0, 0, 0, 0, 0, 0, speed, combatSpeed, 0, 0, 0, 0, 0, 0);
+        return new ShipStats(0, 0, 0, 0, 0, 0, speed, combatSpeed, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     @Test
@@ -278,6 +290,21 @@ class BattleRulesTest {
     }
 
     @Test
+    @DisplayName("Быструю и крепкую ракету сбить выстрелом труднее, метким стволом — легче — пункт 30")
+    void missileShotChance() {
+        // Защита ракеты — скорость на пять: при меткости, равной защите, — половина.
+        assertThat(rules.missileShotChancePercent(50, 10, 0)).isEqualTo(50);
+        assertThat(rules.missileShotChancePercent(50, 14, 0))
+                .isLessThan(rules.missileShotChancePercent(50, 10, 0));
+        assertThat(rules.missileShotChancePercent(50, 10, 100)).isEqualTo(25);
+        assertThat(rules.missileShotChancePercent(90, 10, 0))
+                .isGreaterThan(rules.missileShotChancePercent(50, 10, 0));
+        // Пределы: без надежды и наверняка не бывает.
+        assertThat(rules.missileShotChancePercent(-500, 30, 0)).isEqualTo(5);
+        assertThat(rules.missileShotChancePercent(500, 10, 0)).isEqualTo(95);
+    }
+
+    @Test
     @DisplayName("Защитник видит ракету там, где она проходит мимо, а не только на концах пути — пункт 30")
     void closestPointOfMissilePath() {
         // Ракета идёт по строке 10 от 0 до 20; защитник стоит над серединой пути.
@@ -298,8 +325,8 @@ class BattleRulesTest {
 
         // Луч бьёт в полную силу на 0–2 клетках.
         assertThat(rules.preferredDistance(List.of(beam))).isEqualTo(2);
-        // Ракета — там, где долетает за один круг.
-        assertThat(rules.preferredDistance(List.of(rocket))).isEqualTo(BattleRules.MISSILE_BASE_SPEED);
+        // Ракета — на половину своего пути за круг: короче путь — меньше перехватов.
+        assertThat(rules.preferredDistance(List.of(rocket))).isEqualTo(BattleRules.MISSILE_BASE_SPEED / 2);
         // Смешанный залп сходится по самому слабеющему стволу.
         assertThat(rules.preferredDistance(List.of(beam, rocket))).isEqualTo(2);
         // Снаряд не слабеет — бьёт с предела.
@@ -425,6 +452,72 @@ class BattleRulesTest {
             }
         }
         assertThat(hits).isBetween(20, 90);
+    }
+
+    @Test
+    void marinesGrowWithHullAndTroopPodsDoubleThem() {
+        // Абордаж (п. 8): у фрегата двое, у Левиафана полсотни; десантные отсеки удваивают
+        // команду — правило оригинала («doubles the number Marines it carries»).
+        ShipComponent pods = component("troop-pods", ShipComponentSlot.SPECIAL,
+                Map.of(ShipEffectType.MARINES_PERCENT, 100));
+
+        assertThat(rules.marines(frigate, List.of(item(drive, 1)))).isEqualTo(2);
+        assertThat(rules.marines(frigate, List.of(item(drive, 1), item(pods, 1)))).isEqualTo(4);
+        assertThat(rules.marines(doomStar, List.of(item(drive, 1)))).isEqualTo(50);
+        assertThat(rules.marines(doomStar, List.of(item(drive, 1), item(pods, 1)))).isEqualTo(100);
+    }
+
+    @Test
+    void tractorBeamsHoldOnePerHullClass() {
+        // Тяговый луч (п. 8): луч на класс корпуса обездвиживает, меньше — замедляет долей.
+        assertThat(rules.tractoredSpeed(12, 0, doomStar)).isEqualTo(12);
+        assertThat(rules.tractoredSpeed(12, 3, doomStar)).isEqualTo(6);
+        assertThat(rules.tractoredSpeed(12, 6, doomStar)).isZero();
+        assertThat(rules.tractoredSpeed(12, 1, frigate)).isZero();
+    }
+
+    @Test
+    void shuttlesFlyByDriveParsecs() {
+        // Скорость шаттла — число оригинала: 2 + 2 × парсеки двигателя за ход.
+        assertThat(rules.shuttleSpeed(List.of(item(drive, 1)))).isEqualTo(2 + 2 * drive.amount(ShipEffectType.SPEED));
+        assertThat(rules.shuttleShots(3, 6)).hasSize(3)
+                .allMatch(shot -> shot.flightSpeed() == 6 && shot.damage() == 0);
+    }
+
+    @Test
+    void antiMissileRocketsLoseThreePercentPerSquare() {
+        // Правило MOO II дословно: 60 % в упор и на 3 % меньше за каждую клетку (пункт 30).
+        ShipComponent rockets = component("anti-missile-rockets", ShipComponentSlot.SPECIAL,
+                Map.of(ShipEffectType.ANTI_MISSILE, 60));
+        Integer base = rules.antiMissilePercent(List.of(item(drive, 1), item(rockets, 1)));
+
+        assertThat(base).isEqualTo(60);
+        assertThat(rules.antiMissilePercent(List.of(item(drive, 1)))).isZero();
+        assertThat(rules.antiMissileChancePercent(base, 0)).isEqualTo(60);
+        assertThat(rules.antiMissileChancePercent(base, 10)).isEqualTo(30);
+        assertThat(rules.antiMissileChancePercent(base, 20)).isZero();
+        assertThat(rules.antiMissileChancePercent(base, 25)).isZero();
+    }
+
+    @Test
+    void expectedDownsCountRocketsBeforeGuns() {
+        // Противоракеты бьют по каждой ракете залпа, стволы — по одной на выстрел.
+        assertThat(rules.expectedDownsCentis(60, List.of(), 2)).isEqualTo(120);
+        assertThat(rules.expectedDownsCentis(0, List.of(50, 50), 4)).isEqualTo(100);
+        assertThat(rules.expectedDownsCentis(0, List.of(), 3)).isZero();
+        // Ствол не сбивает больше, чем осталось ракет.
+        assertThat(rules.expectedDownsCentis(90, List.of(80), 1)).isEqualTo(98);
+    }
+
+    @Test
+    void onlyPointDefenceGunsAreRowsForInterception() {
+        // Номер строки — место среди оружия проекта, ракетная строка не годится вовсе.
+        List<ShipDesignRules.Item> items = List.of(item(drive, 1), item(gun, 2),
+                new ShipDesignRules.Item(blaster, 1, List.of(catalog.modification("point-defense"))),
+                item(missile, 2));
+
+        assertThat(rules.pointDefenceRows(items)).containsExactly(1);
+        assertThat(rules.pointDefenceRows(List.of(item(drive, 1), item(gun, 2)))).isEmpty();
     }
 
     private ShipStats stats(ShipHull hull, List<ShipDesignRules.Item> items) {

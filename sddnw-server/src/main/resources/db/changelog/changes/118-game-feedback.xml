@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Отзыв после партии — field-backlog, пункты 46 и 187: оценка, что понравилось больше
+        всего и строка. Отказ отвечать — та же строка с пустой оценкой: так он запоминается.
+    -->
+    <changeSet id="118-game-feedback" author="sddnw">
+        <createTable tableName="game_feedback">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="rating" type="int"/>
+            <column name="liked" type="varchar(16)"/>
+            <column name="comment" type="varchar(500)"/>
+            <column name="outcome" type="varchar(16)"/>
+            <column name="victory_kind" type="varchar(16)"/>
+            <column name="galaxy_size" type="varchar(16)"/>
+            <column name="empires" type="int"/>
+            <column name="turn" type="int"/>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="game_feedback" columnNames="account_id, game_id"
+                             constraintName="uq_game_feedback"/>
+        <createIndex tableName="game_feedback" indexName="ix_game_feedback_account">
+            <column name="account_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

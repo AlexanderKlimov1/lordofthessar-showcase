@@ -98,7 +98,8 @@ public class LeaderService {
     @Transactional(readOnly = true)
     public List<PlayerLeaderEntity> of(PlayerEntity player) {
         return leaders.findAllByPlayerId(player.getId()).stream()
-                .filter(row -> row.getState() != LeaderState.DISMISSED)
+                // Отказанные и погибшие в бою (п. 6) игроку не показываются.
+                .filter(row -> row.getState() == LeaderState.OFFERED || row.getState() == LeaderState.HIRED)
                 .sorted(Comparator.comparing(PlayerLeaderEntity::getState)
                         .thenComparing(PlayerLeaderEntity::getOfferedTurn))
                 .toList();
@@ -120,7 +121,7 @@ public class LeaderService {
         }
         Map<UUID, List<PlayerLeaderEntity>> byPlayer = new HashMap<>();
         for (PlayerLeaderEntity row : ordered(leaders.findAllByPlayerIdIn(playerIds))) {
-            if (row.getState() != LeaderState.DISMISSED) {
+            if (row.getState() == LeaderState.OFFERED || row.getState() == LeaderState.HIRED) {
                 byPlayer.computeIfAbsent(row.getPlayerId(), id -> new ArrayList<>()).add(row);
             }
         }
@@ -171,6 +172,16 @@ public class LeaderService {
                 salary, player.getCredits());
     }
 
+    /** Население своих колоний системы — мерило губернатора (пункт 140). */
+    private Integer systemPopulation(UUID playerId, UUID systemId) {
+        return systems.findById(systemId)
+                .map(system -> system.getPlanets().stream()
+                        .filter(planet -> playerId.equals(planet.getOwnerPlayerId()))
+                        .mapToInt(planet -> planet.getPopulation() == null ? 0 : planet.getPopulation())
+                        .sum())
+                .orElse(0);
+    }
+
     /** Строка службы в вид для экрана: справочник плюс состояние из базы. */
     private LeaderDto toDto(PlayerLeaderEntity row, Map<UUID, String> systemNames) {
         Leader leader = catalog.require(row.getLeaderCode());
@@ -212,7 +223,12 @@ public class LeaderService {
                 row.getStarSystemId(),
                 systemNames.get(row.getStarSystemId()),
                 row.getFleetId(),
-                row.getArrivesTurn());
+                row.getArrivesTurn(),
+                row.getBattlesWon(),
+                row.getBattlesLost(),
+                row.getStarSystemId() == null ? null : row.getTermStartTurn(),
+                row.getStarSystemId() == null || row.getTermStartPopulation() == null ? null
+                        : systemPopulation(row.getPlayerId(), row.getStarSystemId()) - row.getTermStartPopulation());
     }
 
     /**
@@ -328,6 +344,9 @@ public class LeaderService {
                     });
             row.setStarSystemId(targetId);
             row.setFleetId(null);
+            // Срок губернатора — с этого хода (пункт 140): рост системы считается от него.
+            row.setTermStartTurn(turn);
+            row.setTermStartPopulation(systemPopulation(player.getId(), targetId));
         } else {
             fleets.findById(targetId).orElseThrow(
                     () -> new NotFoundException("fleet.notFound", targetId));
@@ -352,7 +371,8 @@ public class LeaderService {
      */
     @Transactional
     public Map<UUID, Integer> advance(List<PlayerEntity> players, Integer turn,
-                                      Map<UUID, RaceEffects> races, Long seed) {
+                                      Map<UUID, RaceEffects> races, Long seed,
+                                      java.util.Set<UUID> withoutCapitol) {
         List<UUID> playerIds = players.stream().map(PlayerEntity::getId).toList();
         List<PlayerLeaderEntity> all = ordered(leaders.findAllByPlayerIdIn(playerIds));
         Map<UUID, List<PlayerLeaderEntity>> byPlayer = new HashMap<>();
@@ -389,7 +409,10 @@ public class LeaderService {
              // же зерном должна давать тех же лидеров — иначе парные прогоны балансировки
              // сравнивают не расы, а разную удачу (balance-metrics-works.txt, этап 0).
             Random random = new Random(seed * SEED_TURN + turn * SEED_SLOT + player.getSlot());
-            offer(player, own, turn, race, random).ifPresent(offered -> own.add(offered));
+            // Без столицы предложений нет — п. 10.1: лидеры ждут в её покоях.
+            if (!withoutCapitol.contains(player.getId())) {
+                offer(player, own, turn, race, random).ifPresent(offered -> own.add(offered));
+            }
             money.put(player.getId(), balance);
         }
 

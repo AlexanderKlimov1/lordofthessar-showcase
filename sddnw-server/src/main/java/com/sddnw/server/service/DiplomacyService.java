@@ -1,6 +1,7 @@
 package com.sddnw.server.service;
 
 import com.sddnw.server.domain.BuildingEffects;
+import com.sddnw.server.domain.entity.DiplomacyProposalEntity;
 import com.sddnw.server.domain.entity.DiplomacyRelationEntity;
 import com.sddnw.server.domain.entity.PlanetEntity;
 import com.sddnw.server.domain.entity.PlayerEntity;
@@ -15,6 +16,7 @@ import com.sddnw.server.dto.DiplomacyActionRequest;
 import com.sddnw.server.dto.DiplomacyRelationDto;
 import com.sddnw.server.dto.TechTradeDto;
 import com.sddnw.server.domain.enums.FuelTech;
+import com.sddnw.server.repository.DiplomacyProposalRepository;
 import com.sddnw.server.repository.DiplomacyRelationRepository;
 import com.sddnw.server.repository.PlayerRepository;
 import com.sddnw.server.repository.PlayerTechnologyRepository;
@@ -84,16 +86,16 @@ public class DiplomacyService {
     private static final Logger log = LoggerFactory.getLogger(DiplomacyService.class);
 
     /** Доверие при первом знакомстве — середина шкалы. */
-    private static final int INITIAL_TRUST = 50;
+    public static final int INITIAL_TRUST = 50;
 
     /** С какого доверия принимают мир. */
-    private static final int PEACE_TRUST = 50;
+    public static final int PEACE_TRUST = 50;
 
     /** Насколько доверие меняется от согласия, отказа, разрыва и объявления войны. */
-    private static final int AGREEMENT_BONUS = 15;
+    public static final int AGREEMENT_BONUS = 15;
     private static final int REFUSAL_PENALTY = 10;
-    private static final int BREAK_PENALTY = 25;
-    private static final int WAR_PENALTY = 40;
+    public static final int BREAK_PENALTY = 25;
+    public static final int WAR_PENALTY = 40;
 
     /** Доверие, ниже которого дань платят из страха, и выше которого — по дружбе. */
     private static final int TRIBUTE_FEAR_TRUST = 25;
@@ -135,6 +137,7 @@ public class DiplomacyService {
     private static final int TREATY_BIAS = 15;
 
     private final DiplomacyRelationRepository relationRepository;
+    private final TechSightService techSight;
     private final EmpireActivityService activity;
     private final Messages messages;
     private final PlayerRepository playerRepository;
@@ -145,6 +148,15 @@ public class DiplomacyService {
     private final ResearchCatalog researchCatalog;
     private final LeaderBonusService leaderBonuses;
 
+    /** Хроника (пункт 138): в неё ложатся обиды игрока, их сосед и вспоминает вслух (пункт 139). */
+    private final MilestoneService milestones;
+
+    /** Предложения, ждущие ответа человека (field-backlog, пункт 182). */
+    private final DiplomacyProposalRepository proposalRepository;
+
+    /** Кто за столом: человеку, которого ведёт ИИ, предложение не шлют — решает доверие. */
+    private final PresenceService presence;
+
     public DiplomacyService(Messages messages,
                             DiplomacyRelationRepository relationRepository,
                             PlayerRepository playerRepository,
@@ -154,7 +166,15 @@ public class DiplomacyService {
                             PlayerTechnologyRepository playerTechnologyRepository,
                             ResearchCatalog researchCatalog,
                             LeaderBonusService leaderBonuses,
-                            EmpireActivityService activity) {
+                            EmpireActivityService activity,
+                            TechSightService techSight,
+                            MilestoneService milestones,
+                            DiplomacyProposalRepository proposalRepository,
+                            PresenceService presence) {
+        this.proposalRepository = proposalRepository;
+        this.presence = presence;
+        this.techSight = techSight;
+        this.milestones = milestones;
         this.leaderBonuses = leaderBonuses;
         this.activity = activity;
         this.messages = messages;
@@ -272,6 +292,12 @@ public class DiplomacyService {
 
                 if (mine == null || theirs == null) {
                     if (inReach && Boolean.TRUE.equals(meet(first, second, context.turn()))) {
+                        // Первое знакомство — первая встреча с механикой (пункт 93); юнит-тесты
+                        // собирают службу без счётчика.
+                        if (activity != null) {
+                            activity.record(context.game().getId(), first.getId(), EmpireActivityService.CONTACT);
+                            activity.record(context.game().getId(), second.getId(), EmpireActivityService.CONTACT);
+                        }
                         announce(context, first, second, "turn.diplomacy.met");
                     }
                     continue;
@@ -347,29 +373,287 @@ public class DiplomacyService {
 
         requireNotRepulsive(player, other, request.action());
 
-        /*
-          Ответ собирается КЛЮЧОМ, а не текстом (п. 3.5): язык известен только в момент
-          ответа, и по ключу же видно, был ли отказ, — раньше это решала проверка
-          answer.startsWith("Отказ"), то есть управление шло по показываемому тексту.
-        */
-        MessageKey answer = switch (request.action()) {
-            case DECLARE_WAR -> declareWar(player, other, mine, theirs);
-            case PROPOSE_PEACE -> proposePeace(player, other, mine, theirs);
-            case PROPOSE_TREATY -> proposeTreaty(player, other, mine, theirs, requireTreaty(request));
-            case BREAK_TREATY -> breakTreaty(player, other, mine, theirs, requireTreaty(request));
-            case DEMAND_TRIBUTE -> demandTribute(player, other, mine, theirs);
-            case EXCHANGE_TECH -> exchangeTech(player, other, mine, theirs, request, turn);
-            case GIFT_CREDITS -> giftCredits(player, other, theirs, request);
-            case GIFT_TECH -> giftTech(player, other, theirs, request, turn);
-        };
-
-        // Вторая сторона узнаёт о случившемся в итогах своего хода: дипломатию с ней ведут,
-        // не спрашивая, и без этого события чужая война свалилась бы как снег на голову.
-        notifyOther(player, other, turn, request, answer);
+        Consent consent = asksHuman(player, other, request.action()) ? Consent.ASK : Consent.TRUST;
+        if (consent == Consent.ASK && Boolean.TRUE.equals(proposalRepository
+                .existsByFromPlayerIdAndToPlayerIdAndAction(player.getId(), other.getId(), request.action()))) {
+            throw new ConflictException("diplomacy.proposalPending", other.getName());
+        }
+        MessageKey answer = perform(player, other, mine, theirs, request, turn, consent);
+        if (answer == null) {
+            propose(player, other, request, turn);
+            answer = new MessageKey("diplomacy.proposal.sent", other.getName());
+            return toDto(mine, other, playerRoster.raceNames(), theirs.getTrust(),
+                    messages.get(answer.key(), answer.args()), player);
+        }
+        conclude(player, other, request, turn, answer);
 
         relationRepository.saveAll(List.of(mine, theirs));
         return toDto(mine, other, playerRoster.raceNames(), theirs.getTrust(),
-                messages.get(answer.key(), answer.args()), player);
+                speech(player, other, request, answer), player);
+    }
+
+    /**
+     * Как решается просьба — field-backlog, пункт 182: доверием (так отвечает ИИ и человек, не
+     * ответивший в срок), ответом человека «да» или «нет» — или откладывается до ответа
+     * ({@code ASK}: проверки правил пройдены, решать будет адресат).
+     */
+    private enum Consent { TRUST, YES, NO, ASK }
+
+    /**
+     * Просьбы, на которые человек отвечает сам, — пункт 182: мир, договор, дань и обмен. Война,
+     * разрыв и подарок согласия не спрашивают и у ИИ, поэтому идут сразу.
+     */
+    private static final java.util.Set<DiplomacyAction> CONSENTED = java.util.EnumSet.of(
+            DiplomacyAction.PROPOSE_PEACE, DiplomacyAction.PROPOSE_TREATY,
+            DiplomacyAction.DEMAND_TRIBUTE, DiplomacyAction.EXCHANGE_TECH);
+
+    /** Адресат — живой человек за столом, и просьба требует его согласия. */
+    private Boolean asksHuman(PlayerEntity player, PlayerEntity other, DiplomacyAction action) {
+        return CONSENTED.contains(action)
+                && other.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.HUMAN
+                && !Boolean.TRUE.equals(presence.aiDriven(other))
+                && !other.getId().equals(player.getId());
+    }
+
+    /**
+     * Действие целиком. Ответ собирается КЛЮЧОМ, а не текстом (п. 3.5): язык известен только в
+     * момент ответа, и по ключу же видно, был ли отказ. {@code null} — просьба отложена до ответа
+     * человека ({@link Consent#ASK}).
+     */
+    private MessageKey perform(PlayerEntity player, PlayerEntity other, DiplomacyRelationEntity mine,
+                               DiplomacyRelationEntity theirs, DiplomacyActionRequest request,
+                               Integer turn, Consent consent) {
+        return switch (request.action()) {
+            case DECLARE_WAR -> declareWar(player, other, mine, theirs);
+            case PROPOSE_PEACE -> proposePeace(player, other, mine, theirs, consent);
+            case PROPOSE_TREATY -> proposeTreaty(player, other, mine, theirs, requireTreaty(request), consent);
+            case BREAK_TREATY -> breakTreaty(player, other, mine, theirs, requireTreaty(request));
+            case DEMAND_TRIBUTE -> demandTribute(player, other, mine, theirs, consent);
+            case EXCHANGE_TECH -> exchangeTech(player, other, mine, theirs, request, turn, consent);
+            case GIFT_CREDITS -> giftCredits(player, other, theirs, request);
+            case GIFT_TECH -> giftTech(player, other, theirs, request, turn);
+        };
+    }
+
+    /** Что остаётся после исполненного действия: весть второй стороне и обида в хронику. */
+    private void conclude(PlayerEntity player, PlayerEntity other, DiplomacyActionRequest request,
+                          Integer turn, MessageKey answer) {
+        // Вторая сторона узнаёт о случившемся в итогах своего хода: дипломатию с ней ведут,
+        // не спрашивая, и без этого события чужая война свалилась бы как снег на голову.
+        notifyOther(player, other, turn, request, answer);
+        // Обида — в хронику самого игрока (пункты 138 и 139): по ней сосед и вспомнит.
+        rememberOffence(player, other, turn, request, answer);
+    }
+
+    /** Записывает предложение человеку и кладёт ему весть в итоги хода — пункт 182. */
+    private void propose(PlayerEntity player, PlayerEntity other, DiplomacyActionRequest request,
+                         Integer turn) {
+        DiplomacyProposalEntity row = new DiplomacyProposalEntity();
+        row.setGameId(player.getGame().getId());
+        row.setFromPlayerId(player.getId());
+        row.setToPlayerId(other.getId());
+        row.setAction(request.action());
+        row.setTreaty(request.action() == DiplomacyAction.PROPOSE_TREATY ? request.treaty() : null);
+        row.setOfferedTech(request.action() == DiplomacyAction.EXCHANGE_TECH ? request.offeredTech() : null);
+        row.setRequestedTech(request.action() == DiplomacyAction.EXCHANGE_TECH ? request.requestedTech() : null);
+        row.setTurn(turn);
+        proposalRepository.save(row);
+        playerEvents.record(row.getGameId(), other.getId(), turn, "DIPLOMACY",
+                new MessageKey("turn.diplomacy.proposalReceived", player.getName(), request.action()));
+        log.info("Игрок {} предложил империи {}: {} — ждёт ответа человека",
+                player.getName(), other.getName(), request.action());
+    }
+
+    /**
+     * Ответ человека на предложение — пункт 182. Ответ записывается, а исполняется в конце хода
+     * ({@link #resolveProposals}): посреди хода галактика не меняется ответом одного игрока.
+     * Передумать можно, пока ход не посчитан.
+     */
+    @Transactional
+    public void answerProposal(PlayerEntity player, UUID proposalId, Boolean accept) {
+        DiplomacyProposalEntity row = proposalRepository.findById(proposalId)
+                .filter(found -> found.getToPlayerId().equals(player.getId()))
+                .orElseThrow(() -> new NotFoundException("diplomacy.proposalNotFound"));
+        row.setAccepted(Boolean.TRUE.equals(accept));
+        proposalRepository.save(row);
+    }
+
+    /** Предложения игроку и от игрока, ждущие итога, — для переговоров и окна ответа (пункт 182). */
+    @Transactional(readOnly = true)
+    public com.sddnw.server.dto.DiplomacyProposalsDto proposals(PlayerEntity player) {
+        Map<UUID, String> names = playerRepository.findAllByGameIdOrderBySlotAsc(player.getGame().getId())
+                .stream().collect(Collectors.toMap(PlayerEntity::getId, PlayerEntity::getName));
+        return new com.sddnw.server.dto.DiplomacyProposalsDto(
+                proposalRepository.findAllByToPlayerIdOrderByTurnAsc(player.getId()).stream()
+                        .map(row -> proposalDto(row, names)).toList(),
+                proposalRepository.findAllByFromPlayerIdOrderByTurnAsc(player.getId()).stream()
+                        .map(row -> proposalDto(row, names)).toList());
+    }
+
+    private com.sddnw.server.dto.DiplomacyProposalDto proposalDto(DiplomacyProposalEntity row,
+                                                                  Map<UUID, String> names) {
+        return new com.sddnw.server.dto.DiplomacyProposalDto(
+                row.getId(), row.getFromPlayerId(), messages.empire(names.get(row.getFromPlayerId())),
+                row.getToPlayerId(), messages.empire(names.get(row.getToPlayerId())),
+                row.getAction(), row.getTreaty(),
+                row.getOfferedTech(), techName(row.getOfferedTech()),
+                row.getRequestedTech(), techName(row.getRequestedTech()),
+                row.getTurn(), row.getTurn() + 1, row.getAccepted());
+    }
+
+    private String techName(String code) {
+        return code == null ? null : researchCatalog.place(code).option().name();
+    }
+
+    /**
+     * Итог предложений человеку — пункт 182, внутри посчитанного хода. Ответил — исполняется
+     * его ответ; не ответил до конца следующего хода — решает доверие, как отвечал бы ИИ. Правила
+     * могли измениться за ход (война, договор уже есть, технология изучена), и тогда предложение
+     * теряет силу — обе стороны узнают об этом словами.
+     */
+    public void resolveProposals(TurnContext context) {
+        List<DiplomacyProposalEntity> rows = proposalRepository
+                .findAllByGameIdOrderByTurnAscActionAsc(context.game().getId());
+        if (rows.isEmpty()) {
+            return;
+        }
+        Map<UUID, PlayerEntity> players = context.players().stream()
+                .collect(Collectors.toMap(PlayerEntity::getId, player -> player));
+        for (DiplomacyProposalEntity row : rows) {
+            PlayerEntity from = players.get(row.getFromPlayerId());
+            PlayerEntity to = players.get(row.getToPlayerId());
+            Boolean late = context.turn() > row.getTurn();
+            Consent consent = row.getAccepted() != null
+                    ? (row.getAccepted() ? Consent.YES : Consent.NO)
+                    : (late ? Consent.TRUST : null);
+            if (from == null || to == null) {
+                proposalRepository.delete(row);
+                continue;
+            }
+            if (consent == null) {
+                continue;
+            }
+            DiplomacyActionRequest request = new DiplomacyActionRequest(from.getAccessToken(), to.getId(),
+                    row.getAction(), row.getTreaty(), row.getOfferedTech(), row.getRequestedTech(), null);
+            UUID gameId = context.game().getId();
+            try {
+                DiplomacyRelationEntity mine = requireRelation(from.getId(), to.getId());
+                DiplomacyRelationEntity theirs = requireRelation(to.getId(), from.getId());
+                MessageKey answer = perform(from, to, mine, theirs, request, context.turn(), consent);
+                conclude(from, to, request, context.turn(), answer);
+                relationRepository.saveAll(List.of(mine, theirs));
+                Boolean agreed = !answer.key().startsWith("diplomacy.refusal.");
+                String key = consent == Consent.TRUST
+                        ? (agreed ? "turn.diplomacy.proposalTrustAccepted" : "turn.diplomacy.proposalTrustRefused")
+                        : (agreed ? "turn.diplomacy.proposalAccepted" : "turn.diplomacy.proposalDeclined");
+                playerEvents.record(gameId, from.getId(), context.turn(), "DIPLOMACY",
+                        new MessageKey(key, to.getName(), row.getAction()));
+                if (consent == Consent.TRUST) {
+                    playerEvents.record(gameId, to.getId(), context.turn(), "DIPLOMACY",
+                            new MessageKey("turn.diplomacy.proposalTimedOut", from.getName(), row.getAction()));
+                }
+            } catch (ConflictException | NotFoundException lapsed) {
+                playerEvents.record(gameId, from.getId(), context.turn(), "DIPLOMACY",
+                        new MessageKey("turn.diplomacy.proposalLapsed", to.getName(), row.getAction()));
+                playerEvents.record(gameId, to.getId(), context.turn(), "DIPLOMACY",
+                        new MessageKey("turn.diplomacy.proposalLapsed", from.getName(), row.getAction()));
+            }
+            proposalRepository.delete(row);
+        }
+    }
+
+    /**
+     * Чем ответ сводится к одному из семи исходов — для реплики посла по характеру (пункт 139).
+     * Ответ без исхода (неизвестный ключ) реплики не получает: лучше сухо, чем невпопад.
+     */
+    static String outcome(String answerKey) {
+        if (answerKey.startsWith("diplomacy.refusal.")) {
+            return "refusal";
+        }
+        return switch (answerKey) {
+            case "diplomacy.answer.war" -> "war";
+            case "diplomacy.answer.peace" -> "peace";
+            case "diplomacy.answer.treatySigned" -> "treaty";
+            case "diplomacy.answer.treatyBroken" -> "broken";
+            case "diplomacy.answer.tribute" -> "tribute";
+            case "diplomacy.answer.exchange" -> "exchange";
+            case "diplomacy.answer.giftCredits", "diplomacy.answer.giftTech" -> "gift";
+            default -> null;
+        };
+    }
+
+    /**
+     * Речь посла — field-backlog, пункт 139: сосед с характером, а не строка доверия.
+     * <p>
+     * Решение не меняется — меняется то, КАК оно сказано: реплика по характеру правителя
+     * ({@code envoy.<ХАРАКТЕР>.<исход>}), за ней — сам ответ, чтобы смысл не терялся в манере. А
+     * если игрок просит (мира, договора, обмена, дани), сосед вспоминает вслух последнюю обиду из
+     * хроники: «вы разорвали договор на 80-м ходу». Обида, названная словами, — сюжет, а не
+     * число. У империи человека посла нет: за неё говорит человек.
+     */
+    private String speech(PlayerEntity player, PlayerEntity other, DiplomacyActionRequest request,
+                          MessageKey answer) {
+        String plain = messages.get(answer.key(), answer.args());
+        if (other.getPlayerType() != com.sddnw.server.domain.enums.PlayerType.AI
+                || other.getAiPersonality() == null) {
+            return plain;
+        }
+        String outcome = outcome(answer.key());
+        if (outcome == null) {
+            return plain;
+        }
+        String said = messages.get("envoy.say",
+                messages.get("envoy." + other.getAiPersonality().name() + "." + outcome), plain);
+        String memory = memory(player, other, request);
+        return memory == null ? said : messages.get("envoy.withMemory", said, memory);
+    }
+
+    /** Действия-просьбы: на них сосед припоминает обиду. На войну и подарок — нет. */
+    private static final java.util.Set<DiplomacyAction> ASKS = java.util.EnumSet.of(
+            DiplomacyAction.PROPOSE_PEACE, DiplomacyAction.PROPOSE_TREATY,
+            DiplomacyAction.EXCHANGE_TECH, DiplomacyAction.DEMAND_TRIBUTE);
+
+    /** Ключи обид в хронике игрока: их пишет {@link #rememberOffence}. */
+    static final String OFFENCE_WAR = "milestone.youDeclaredWar";
+    static final String OFFENCE_BROKEN = "milestone.youBrokeTreaty";
+
+    private String memory(PlayerEntity player, PlayerEntity other, DiplomacyActionRequest request) {
+        if (!ASKS.contains(request.action()) || player.getPlayerType() != com.sddnw.server.domain.enums.PlayerType.HUMAN) {
+            return null;
+        }
+        com.sddnw.server.domain.entity.GameMilestoneEntity last = null;
+        for (var row : milestones.chronicle(player.getId())) {
+            boolean offence = OFFENCE_WAR.equals(row.getMessageKey()) || OFFENCE_BROKEN.equals(row.getMessageKey());
+            if (offence && row.getArgs() != null && !row.getArgs().isEmpty()
+                    && other.getName().equals(row.getArgs().get(0))) {
+                last = row;
+            }
+        }
+        if (last == null) {
+            return null;
+        }
+        return OFFENCE_WAR.equals(last.getMessageKey())
+                ? messages.get("envoy.memory.war", last.getTurn())
+                : messages.event("envoy.memory.broken", List.of(String.valueOf(last.getTurn()),
+                        last.getArgs().size() > 1 ? last.getArgs().get(1) : ""));
+    }
+
+    /**
+     * Объявленная игроком война и разорванный им договор — в его хронику (пункты 138 и 139):
+     * отказ ничего не сделал и обидой не считается.
+     */
+    private void rememberOffence(PlayerEntity player, PlayerEntity other, Integer turn,
+                                 DiplomacyActionRequest request, MessageKey answer) {
+        if (milestones == null || answer == null || answer.key().startsWith("diplomacy.refusal.")) {
+            return;
+        }
+        UUID gameId = player.getGame().getId();
+        if (request.action() == DiplomacyAction.DECLARE_WAR) {
+            milestones.note(gameId, player, turn, MilestoneService.WAR, new MessageKey(OFFENCE_WAR, other.getName()));
+        } else if (request.action() == DiplomacyAction.BREAK_TREATY) {
+            milestones.note(gameId, player, turn, MilestoneService.TREATY_BROKEN,
+                    new MessageKey(OFFENCE_BROKEN, other.getName(), requireTreaty(request)));
+        }
     }
 
     /**
@@ -489,6 +773,14 @@ public class DiplomacyService {
         return allies;
     }
 
+    /** Знакомые империи — п. 15: те, с кем знакомство есть сейчас (потерянное — пауза). */
+    public Set<UUID> contacts(UUID playerId) {
+        return relationRepository.findAllByPlayerId(playerId).stream()
+                .filter(relation -> Boolean.TRUE.equals(relation.getInContact()))
+                .map(DiplomacyRelationEntity::getOtherPlayerId)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
     public Set<UUID> allies(UUID playerId) {
         return relationRepository.findAllByPlayerId(playerId).stream()
                 .filter(relation -> Boolean.TRUE.equals(relation.getInContact()))
@@ -562,14 +854,18 @@ public class DiplomacyService {
     }
 
     private MessageKey proposePeace(PlayerEntity player, PlayerEntity other,
-                                DiplomacyRelationEntity mine, DiplomacyRelationEntity theirs) {
+                                DiplomacyRelationEntity mine, DiplomacyRelationEntity theirs,
+                                Consent consent) {
         if (mine.getStance() == DiplomacyStance.PEACE) {
             throw new ConflictException("diplomacy.alreadyAtPeace", other.getName());
         }
-        if (theirs.getTrust() < charmed(player, PEACE_TRUST) + treatyBias(other)) {
+        if (consent == Consent.ASK) {
+            return null;
+        }
+        if (!decided(consent, theirs.getTrust() >= charmed(player, PEACE_TRUST) + treatyBias(other))) {
             loseTrust(mine, player, REFUSAL_PENALTY);
             log.info("Империя {} отказала игроку {} в мире", other.getName(), player.getName());
-            return new MessageKey("diplomacy.refusal.trust");
+            return refusal(consent, "diplomacy.refusal.trust");
         }
 
         setStance(mine, theirs, DiplomacyStance.PEACE);
@@ -580,18 +876,21 @@ public class DiplomacyService {
 
     private MessageKey proposeTreaty(PlayerEntity player, PlayerEntity other,
                                  DiplomacyRelationEntity mine, DiplomacyRelationEntity theirs,
-                                 DiplomacyTreaty treaty) {
+                                 DiplomacyTreaty treaty, Consent consent) {
         if (mine.getTreaties().contains(treaty)) {
             throw new ConflictException("diplomacy.treatyExists", treaty, other.getName());
         }
         if (mine.getStance() == DiplomacyStance.WAR) {
             throw new ConflictException("diplomacy.peaceFirst");
         }
-        if (!agrees(player, other, theirs, treaty)) {
+        if (consent == Consent.ASK) {
+            return null;
+        }
+        if (!decided(consent, agrees(player, other, theirs, treaty))) {
             loseTrust(mine, player, REFUSAL_PENALTY);
             log.info("Империя {} отказала игроку {} в договоре {}",
                     other.getName(), player.getName(), treaty.getLabel());
-            return new MessageKey("diplomacy.refusal.trust");
+            return refusal(consent, "diplomacy.refusal.trust");
         }
 
         activity.record(player.getGame().getId(), player.getId(), EmpireActivityService.TREATY);
@@ -633,11 +932,15 @@ public class DiplomacyService {
      * приязни. В обоих случаях дань бьёт по доверию: её помнят.
      */
     private MessageKey demandTribute(PlayerEntity player, PlayerEntity other,
-                                 DiplomacyRelationEntity mine, DiplomacyRelationEntity theirs) {
-        if (!agreesToTribute(player, theirs)) {
+                                 DiplomacyRelationEntity mine, DiplomacyRelationEntity theirs,
+                                 Consent consent) {
+        if (consent == Consent.ASK) {
+            return null;
+        }
+        if (!decided(consent, agreesToTribute(player, theirs))) {
             loseTrust(theirs, other, REFUSAL_PENALTY);
             log.info("Империя {} отказала игроку {} в дани", other.getName(), player.getName());
-            return new MessageKey("diplomacy.refusal.tribute");
+            return refusal(consent, "diplomacy.refusal.tribute");
         }
 
         Integer tribute = Math.max(0, other.getCredits()) * TRIBUTE_PERCENT / 100;
@@ -667,8 +970,10 @@ public class DiplomacyService {
         requireRelation(player.getId(), otherPlayerId);
 
         Set<String> ours = technologiesOf(player.getId());
-        Set<String> theirs = technologiesOf(otherPlayerId);
-        return new TechTradeDto(offers(ours, theirs), offers(theirs, ours));
+        // Чужое изученное — только увиденное (п. 15, туман войны): доклад о расе больше не
+        // перечисляет науку соседа, как в оригинале, — решение хозяина проекта.
+        Set<String> seen = techSight.observedBy(player.getId(), otherPlayerId);
+        return new TechTradeDto(offers(ours, seen), offers(seen, ours), offers(seen, Set.of()));
     }
 
     /** Технологии первой стороны, которых нет у второй, — в порядке дерева. */
@@ -702,7 +1007,7 @@ public class DiplomacyService {
      */
     private MessageKey exchangeTech(PlayerEntity player, PlayerEntity other,
                                 DiplomacyRelationEntity mine, DiplomacyRelationEntity theirs,
-                                DiplomacyActionRequest request, Integer turn) {
+                                DiplomacyActionRequest request, Integer turn, Consent consent) {
         ResearchCatalog.TechnologyPlace offered = requireTech(request.offeredTech(), "diplomacy.tech.offered");
         ResearchCatalog.TechnologyPlace requested = requireTech(request.requestedTech(), "diplomacy.tech.requested");
         if (offered.option().code().equals(requested.option().code())) {
@@ -721,14 +1026,22 @@ public class DiplomacyService {
             throw new ConflictException("diplomacy.youHaveTech", requested.option().name());
         }
         if (yours.contains(offered.option().code())) {
+            // Отказ «это у нас есть» — тоже знание (п. 15, туман войны): игрок узнал, что у
+            // соседа эта технология есть, и предлагать её снова не станет. Конфликт здесь
+            // транзакцию не откатывает (noRollbackFor у act) — запись остаётся.
+            techSight.observe(player.getGame().getId(), player.getId(), other.getId(),
+                    List.of(offered.option().code()), turn);
             throw new ConflictException("diplomacy.theyHaveTech", offered.option().name(), other.getName());
         }
 
-        if (!agreesToExchange(player, theirs, offered, requested)) {
+        if (consent == Consent.ASK) {
+            return null;
+        }
+        if (!decided(consent, agreesToExchange(player, theirs, offered, requested))) {
             loseTrust(theirs, other, REFUSAL_PENALTY);
             log.info("Империя {} отказала игроку {} в обмене {} на {}", other.getName(),
                     player.getName(), offered.option().name(), requested.option().name());
-            return new MessageKey("diplomacy.refusal.exchange");
+            return refusal(consent, "diplomacy.refusal.exchange");
         }
 
         activity.record(player.getGame().getId(), player.getId(),
@@ -737,6 +1050,11 @@ public class DiplomacyService {
                 EmpireActivityService.TECH_EXCHANGE);
         grantTechnology(player, requested, turn);
         grantTechnology(other, offered, turn);
+        // После обмена обе стороны знают, что отданное теперь у другой (п. 15).
+        techSight.observe(player.getGame().getId(), player.getId(), other.getId(),
+                List.of(offered.option().code(), requested.option().code()), turn);
+        techSight.observe(player.getGame().getId(), other.getId(), player.getId(),
+                List.of(offered.option().code(), requested.option().code()), turn);
         reward(player, other, mine, theirs);
         log.info("Игрок {} обменял с империей {}: {} на {}", player.getName(), other.getName(),
                 offered.option().name(), requested.option().name());
@@ -784,10 +1102,15 @@ public class DiplomacyService {
             throw new ConflictException("diplomacy.youLackTech", gift.option().name());
         }
         if (technologiesOf(other.getId()).contains(gift.option().code())) {
+            techSight.observe(player.getGame().getId(), player.getId(), other.getId(),
+                    List.of(gift.option().code()), turn);
             throw new ConflictException("diplomacy.theyHaveTech", gift.option().name(), other.getName());
         }
 
         grantTechnology(other, gift, turn);
+        // Подаренное у соседа теперь есть — и дарящий это знает (п. 15).
+        techSight.observe(player.getGame().getId(), player.getId(), other.getId(),
+                List.of(gift.option().code()), turn);
         gainTrust(theirs, other, GIFT_TECH_TRUST);
         log.info("Игрок {} подарил империи {} технологию {}",
                 player.getName(), other.getName(), gift.option().name());
@@ -880,6 +1203,16 @@ public class DiplomacyService {
             case GIFT_TECH -> new MessageKey("turn.diplomacy.giftTech", player.getName());
         };
         playerEvents.record(gameId, other.getId(), turn, "DIPLOMACY", message);
+    }
+
+    /** Согласие по ответу человека, а без ответа — по правилу доверия (пункт 182). */
+    private static Boolean decided(Consent consent, Boolean byTrust) {
+        return consent == Consent.TRUST ? byTrust : consent == Consent.YES;
+    }
+
+    /** Отказ человека называется отказом человека, а не нехваткой доверия (пункт 182). */
+    private static MessageKey refusal(Consent consent, String byTrustKey) {
+        return new MessageKey(consent == Consent.NO ? "diplomacy.refusal.declined" : byTrustKey);
     }
 
     /**
@@ -1084,7 +1417,7 @@ public class DiplomacyService {
         List<DiplomacyTreaty> treaties = List.copyOf(relation.getTreaties());
         return new DiplomacyRelationDto(
                 relation.getOtherPlayerId(),
-                other == null ? null : other.getName(),
+                other == null ? null : messages.empire(other.getName()),
                 other == null ? null : raceService.raceName(other, raceNames::get),
                 other == null ? null : other.getRaceCode(),
                 other == null ? null : other.getColor(),
@@ -1097,7 +1430,9 @@ public class DiplomacyService {
                 character(other),
                 relation.getMetTurn(),
                 answer,
-                negotiates(player, other));
+                negotiates(player, other),
+                other != null && other.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.AI
+                        && other.getAiPersonality() != null ? other.getAiPersonality().name() : null);
     }
 
     /** Ведутся ли переговоры этих двоих: отталкивающая раса любой стороны отменяет их. */
@@ -1185,8 +1520,23 @@ public class DiplomacyService {
      * обаятельных, на пятую часть у телепатов.
      */
     private Integer charmed(PlayerEntity asking, Integer required) {
-        return required * 100 / (100 + raceService.effects(asking).diplomacyPercent());
+        int bar = required * 100 / (100 + raceService.effects(asking).diplomacyPercent());
+        // Ксенопсихология (перенос MOO II): «permanently add +30 diplomatic points to every deal».
+        if (technologiesOf(asking.getId()).contains(XENO_PSYCHOLOGY_TECH)) {
+            bar -= XENO_PSYCHOLOGY_TRUST;
+        }
+        return Math.max(0, bar);
     }
+
+    /** Технология, облегчающая всякую сделку, — Sociology (перенос MOO II). */
+    public static final String XENO_PSYCHOLOGY_TECH = "xeno-psychology";
+
+    /**
+     * На сколько ксенопсихология опускает планку доверия. <i>Реконструкция</i>: «+30 дипломатических
+     * очков» оригинала — на его шкале отношений от −100 до +100, то есть 15 % её размаха; наша шкала
+     * доверия — 0…100, и 15 % от неё — 15.
+     */
+    public static final int XENO_PSYCHOLOGY_TRUST = 15;
 
     /** Доля от величины в процентах, но не меньше единицы: поправка не должна всё съедать. */
     private Integer scaled(Integer amount, Integer percent) {

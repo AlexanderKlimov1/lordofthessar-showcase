@@ -21,6 +21,17 @@ public record ColonyProjectDto(
         Integer upkeep,
         Boolean special,
         Integer sellValue,
-        Boolean repeatable
+        Boolean repeatable,
+        /**
+         * За сколько ходов здание окупится НА ЭТОЙ колонии — field-backlog, пункт 122: то же число,
+         * по которому выбирают ИИ и автострой ({@code AiEmpireService.paybackTurns}). Пусто — у
+         * здания нет окупаемости в производстве, и тогда говорит {@link #purpose}.
+         */
+        Integer paybackTurns,
+        /**
+         * Ради чего строят здание без окупаемости: DEFENCE, FOOD, INCOME, GROWTH, POLLUTION,
+         * MORALE, GOVERNANCE или OTHER. Число не выдумывается — называется назначение.
+         */
+        String purpose
 ) {
 }

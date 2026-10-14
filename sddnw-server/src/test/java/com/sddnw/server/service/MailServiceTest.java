@@ -94,7 +94,7 @@ class MailServiceTest {
 
         assertEquals(1, sender.sent.size(), "письмо должно уйти одно");
         MimeMessage message = sender.sent.get(0);
-        assertEquals("Stellar Dominion: подтверждение регистрации", message.getSubject(),
+        assertEquals("Владыка Тессара: подтверждение регистрации", message.getSubject(),
                 "тема приходит в UTF-8, а не вопросительными знаками");
         assertEquals("igrok@example.test", message.getAllRecipients()[0].toString());
         assertEquals("sddnw@example.test", message.getFrom()[0].toString());
@@ -130,7 +130,7 @@ class MailServiceTest {
 
         mail.sendConfirmation("player@example.test", "Player", "http://localhost:5173/?confirm=abc123");
 
-        assertEquals("Stellar Dominion: confirm your registration", sender.sent.get(0).getSubject(),
+        assertEquals("Lord of Thessar: confirm your registration", sender.sent.get(0).getSubject(),
                 "язык письма — язык запроса регистрации, а не сервера");
     }
 

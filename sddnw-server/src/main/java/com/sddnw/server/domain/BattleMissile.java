@@ -35,14 +35,37 @@ public record BattleMissile(Integer id,
                             Integer fuel,
                             Integer attackRating,
                             Integer damagePercent,
-                            List<BattleRules.Shot> shots) {
+                            List<BattleRules.Shot> shots,
+                            /**
+                             * Пехота на борту, если это не ракеты, а штурмовые шаттлы (п. 8,
+                             * абордаж): долетевшие идут на абордаж. У ракет — пусто.
+                             */
+                            Integer marines) {
+
+        /** Ракетный залп — без пехоты. */
+        public BattleMissile(Integer id, BattleSide side, UUID shooterShipId, UUID targetShipId,
+                             Integer x, Integer y, Integer speed, Integer fuel, Integer attackRating,
+                             Integer damagePercent, List<BattleRules.Shot> shots) {
+            this(id, side, shooterShipId, targetShipId, x, y, speed, fuel, attackRating,
+                    damagePercent, shots, null);
+        }
+
+        /** Штурмовые шаттлы — п. 8. */
+        public Boolean shuttles() {
+            return marines != null && marines > 0;
+        }
 
     /**
      * Тот же залп в другой клетке, с топливом на круг меньше и без ракет, сбитых по пути
      * (пункт 30): {@code left} — что от него осталось.
      */
     public BattleMissile flown(int toX, int toY, List<BattleRules.Shot> left) {
+        // Ветвь «пусто» — явным Integer: в тернарном операторе с int на другой ветви Java
+        // распаковывает обе, и залп без пехоты (ракеты, истребители) падал NullPointerException.
+        Integer aboard = marines == null || shots.isEmpty()
+                ? marines
+                : Integer.valueOf(marines * left.size() / shots.size());
         return new BattleMissile(id, side, shooterShipId, targetShipId, toX, toY, speed,
-                fuel - 1, attackRating, damagePercent, List.copyOf(left));
+                fuel - 1, attackRating, damagePercent, List.copyOf(left), aboard);
     }
 }

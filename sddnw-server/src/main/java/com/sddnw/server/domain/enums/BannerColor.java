@@ -20,21 +20,48 @@ import java.util.Optional;
  * (Земляне синие, Церебри красные, Читарри зелёные…): ИИ берёт знамя своей расы, если оно
  * свободно, и привычные цвета соседей сохраняются. Хранится у игрока по-прежнему строка
  * цвета — знамя лишь выбирает её из восьми.
+ * <p>
+ * <b>Оттенки различимы и при дальтонизме</b> (field-backlog, пункты 168 и 173, 05.10.2026):
+ * подобраны РАСЧЁТОМ — симуляция протанопии, дейтеранопии и тританопии (Machado 2009) и
+ * CIEDE2000 между каждой парой, каждый оттенок в границах своего названия. Худшая пара при
+ * любом виде зрения — 13,1; у прежней палитры было 2,9 (синее и фиолетовое при
+ * дейтеранопии сливались, красное с коричневым при протанопии). Порог держит
+ * {@code BannerPaletteTest}: девятое знамя или новый оттенок не пройдут молча. Цвет при этом
+ * не единственная примета — у знамени есть знак на клиенте ({@code ui/race/banners.ts}).
+ * <p>
+ * {@link #legacyHex()} — прежний оттенок. Им записаны цвета в старых слепках партий и в
+ * базе до миграции 102; {@link #ofHex} узнаёт знамя и по нему, а {@link #current} переводит
+ * старый цвет в нынешний.
  */
 public enum BannerColor {
-    RED("#ff5f5f"),
-    YELLOW("#ffd447"),
-    GREEN("#57d977"),
-    SILVER("#c9d1dc"),
-    BLUE("#4fa3ff"),
-    BROWN("#b07a4a"),
-    PURPLE("#b56cff"),
-    ORANGE("#ff9a3c");
+    RED("#fa260f", "#ff5f5f"),
+    YELLOW("#fff822", "#ffd447"),
+    GREEN("#53df82", "#57d977"),
+    SILVER("#d7dce0", "#c9d1dc"),
+    BLUE("#5fa3fc", "#4fa3ff"),
+    BROWN("#9f7756", "#b07a4a"),
+    PURPLE("#973afe", "#b56cff"),
+    ORANGE("#fd9d0d", "#ff9a3c");
 
     private final String hex;
+    private final String legacyHex;
 
-    BannerColor(String hex) {
+    BannerColor(String hex, String legacyHex) {
         this.hex = hex;
+        this.legacyHex = legacyHex;
+    }
+
+    /** Прежний оттенок знамени — до пунктов 168 и 173: им записаны старые партии. */
+    public String legacyHex() {
+        return legacyHex;
+    }
+
+    /**
+     * Цвет империи нынешним оттенком: прежний оттенок знамени переводится в новый, прочее
+     * (цвет расы без своего знамени) остаётся как есть.
+     */
+    public static String current(String hex) {
+        return hex == null ? null : ofHex(hex).map(BannerColor::hex).orElse(hex);
     }
 
     /** Цвет знамени строкой `#rrggbb` — так он хранится у игрока и уходит клиенту. */
@@ -44,6 +71,8 @@ public enum BannerColor {
 
     /** Знамя по цвету; пусто — цвет не из восьми (раса без своего знамени, старая партия). */
     public static Optional<BannerColor> ofHex(String hex) {
-        return Arrays.stream(values()).filter(banner -> banner.hex.equalsIgnoreCase(hex)).findFirst();
+        return Arrays.stream(values())
+                .filter(banner -> banner.hex.equalsIgnoreCase(hex) || banner.legacyHex.equalsIgnoreCase(hex))
+                .findFirst();
     }
 }

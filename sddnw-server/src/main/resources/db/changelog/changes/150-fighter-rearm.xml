@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        14.10.2026, истребители по правилу MOO II: звено «attacks ... before returning to the launching ship».
+        Прежде отсек выпускал новое звено каждый круг. Круг, с которого звено снова на борту, помнит строка
+        корабля на поле; пусто — звено дома.
+    -->
+    <changeSet id="150-fighter-rearm" author="sddnw">
+        <addColumn tableName="battle_ship">
+            <column name="fighters_back_round" type="integer"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

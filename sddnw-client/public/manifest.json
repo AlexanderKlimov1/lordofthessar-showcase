@@ -1,0 +1,33 @@
+{
+  "name": "Lord of Thessar",
+  "short_name": "Thessar",
+  "description": "A calm turn-based strategy of galactic empires",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d0a07",
+  "theme_color": "#0d0a07",
+  "icons": [
+    {
+      "src": "/brand/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "display_override": [
+    "window-controls-overlay"
+  ]
+}

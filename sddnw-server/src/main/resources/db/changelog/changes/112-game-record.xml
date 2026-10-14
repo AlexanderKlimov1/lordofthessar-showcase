@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        История своих партий (field-backlog, пункт 18): строка на учётную запись и партию, пишется
+        в конце партии или при признанном поражении. Значения, а не ссылки: партию потом удаляют,
+        а история остаётся. Прошлые партии сюда не попадают — история начинается с этой версии.
+    -->
+    <changeSet id="112-game-record" author="sddnw">
+        <createTable tableName="game_record">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid"><constraints nullable="false"/></column>
+            <column name="game_id" type="uuid"><constraints nullable="false"/></column>
+            <column name="game_name" type="varchar(128)"><constraints nullable="false"/></column>
+            <column name="race_name" type="varchar(64)"/>
+            <column name="galaxy_size" type="varchar(16)"/>
+            <column name="empires" type="int"><constraints nullable="false"/></column>
+            <column name="outcome" type="varchar(16)"><constraints nullable="false"/></column>
+            <column name="victory_kind" type="varchar(16)"/>
+            <column name="turn" type="int"><constraints nullable="false"/></column>
+            <column name="place" type="int"><constraints nullable="false"/></column>
+            <column name="peak_colonies" type="int"><constraints nullable="false"/></column>
+            <column name="deficit_turn" type="int"/>
+            <column name="deficit_percent" type="int"/>
+            <column name="finished_at" type="timestamp with time zone"><constraints nullable="false"/></column>
+        </createTable>
+        <createIndex tableName="game_record" indexName="ix_game_record_account">
+            <column name="account_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

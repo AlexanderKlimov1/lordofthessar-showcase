@@ -1,11 +1,10 @@
 import type { Planet } from '../../api/types';
-import { useGameStore } from '../../state/gameStore';
-import { findTechnology } from '../research/researchRules';
 import type { ReactNode } from 'react';
 import { t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
 import type { FieldSide } from './OrbitDiagram';
+import { climateName, mineralsName, planetSizeName } from '../planetLabels';
 
 /**
  * Карточка планеты под указателем — п. 4.1, тем же сегментом, что и в окне «Star System»
@@ -18,26 +17,22 @@ import type { FieldSide } from './OrbitDiagram';
  * Отдельной таблицы планет в оригинале нет и здесь не осталось: выбранную планету
  * называет эта карточка, а перебираются планеты кликом по схеме.
  */
-export function PlanetInfo({ planet, side }: {
+export function PlanetInfo({ planet, side, openHint = false }: {
   /** Планета под указателем; пусто — указатель ни на какой планете, и карточки нет. */
   planet: Planet | null;
+  /**
+   * Назвать двойной щелчок — field-backlog, пункт 72: колония открывается двойным щелчком по
+   * планете, и без строки об этом действие для игрока не существует.
+   */
+  openHint?: boolean;
   /** Половина поля, в которую встаёт карточка, — та, где указателя НЕТ. */
   side: FieldSide;
 }) {
-  const players = useGameStore((state) => state.players);
-  const climates = useGameStore((state) => state.planetClimates);
-  const researchTree = useGameStore((state) => state.researchTree);
   useT();
 
   if (!planet) {
     return null;
   }
-
-  const owner = players.find((player) => player.id === planet.ownerPlayerId) ?? null;
-  const climate = climates.find((entry) => entry.code === planet.climate) ?? null;
-  const nextClimate = climate?.nextClimateCode
-    ? (climates.find((entry) => entry.code === climate.nextClimateCode) ?? null)
-    : null;
 
   return (
     /*
@@ -56,7 +51,7 @@ export function PlanetInfo({ planet, side }: {
 
       ГОРИЗОНТАЛЬНОЙ прокрутки у карточки быть не должно ни при каком тексте, поэтому
       перенос разрешён и посреди слова (`overflow-wrap: anywhere`): длинное неразрывное
-      слово — код технологии в строке терраформирования — иначе вылезало за рамку.
+      слово иначе вылезало бы за рамку.
 
       КЕГЛЬ — 16, а не 11 (30.09.2026, решение хозяина проекта): карточку читают, выбирая,
       куда слать колониальный корабль, а одиннадцать пикселей на полупрозрачной подложке
@@ -64,31 +59,26 @@ export function PlanetInfo({ planet, side }: {
     */
     <div
       className={
+        // В узком окне — кегль 14 (03.10.2026; с 06.10.2026 «узкое» — уже 1024 точек, планшет): при 42 % поля шириной в полторы сотни точек
+        // текст рвался на два десятка строк, и оборона внизу срезалась. Шире карточку не
+        // сделать — она заходила бы за середину поля и закрывала планету под указателем.
         'pointer-events-none absolute top-3 z-10 max-h-[calc(100%-1.5rem)] w-[42%] overflow-hidden '
-        + 'border border-space-700 bg-space-950/90 px-3 py-2 text-16 leading-snug '
+        + 'border border-space-700 bg-space-950/90 px-3 py-2 text-14 lg:text-16 leading-snug '
         + '[overflow-wrap:anywhere] '
         + (side === 'left' ? 'left-3' : 'right-3')
       }
     >
-      <p className={planet.homeworld ? 'text-accent' : 'text-ink-bright'}>
-        {planet.name}
-        {owner ? (
-          <span style={{ color: owner.color }}> ({owner.name})</span>
-        ) : null}
-      </p>
+      {/* Первой строкой — имя как есть, второй — размер, климат и недра (09.10.2026, решение хозяина
+          проекта): хозяина называет флажок у планеты, а плодородность — вместимость ниже. Тяжесть
+          (п. 4.1) пишется, только когда она не обычная: тогда она роняет производство колонии. */}
+      <p className={planet.homeworld ? 'text-accent' : 'text-ink-bright'}>{planet.name}</p>
+      {/* Под названием, а не в конце: низ длинной карточки срезается (пункт 72). */}
+      {openHint && planet.colony ? <p className="text-ink-faint">{t('planet.openHint')}</p> : null}
 
       <p className={figureLabelClass('value')}>
-        {planet.sizeLabel}, {planet.climateLabel}
-        {planet.colonizable ? <>{' '}<Figure accent="value">{planet.populationMultiplierPercent}%</Figure></> : null}
-      </p>
-
-      {/* Тяжесть — п. 4.1: непривычная расе роняет производство колонии на четверть
-          или вдвое, и знать о ней надо до высадки, а не после. */}
-      <p className="text-ink-soft">
-        {planet.gravityLabel}
-        {/* Родной мир всегда обычной тяжести (PlanetGravity) — иначе большой родной мир за
-            очко расы обернулся бы половиной производства на старте; пункт 12. */}
-        {planet.homeworld ? t('rule.homeworldGravity') : null}
+        {planetSizeName(planet.size, planet.sizeLabel)} {climateName(planet.climate, planet.climateLabel)}{' '}
+        {mineralsName(planet.minerals, planet.mineralsLabel)}
+        {planet.gravity !== 'NORMAL' && !planet.homeworld ? `, ${t(`planet.gravity.${planet.gravity}`)}` : null}
       </p>
 
       {/* Находка — п. 4.1: она решает, стоит ли планета колонии, поэтому стоит выше
@@ -104,34 +94,10 @@ export function PlanetInfo({ planet, side }: {
 
       <p className={figureLabelClass('value')}>{population(planet)}</p>
 
-      <p className={figureLabelClass('value')}>
-        {tf('planet.perWorker', {
-          minerals: planet.mineralsLabel,
-          n: <Figure accent="value">{planet.productionPerWorker}</Figure>,
-        })}
-        {planet.colonizable
-          ? tf('planet.perFarmer', { n: <Figure accent="value">{planet.foodPerFarmer}</Figure> })
-          : null}
-      </p>
+      {/* Постройки (у чужой колонии — оборона) сразу за населением: по ним решают, лезть ли
+          туда флотом, и в узком окне они не должны уходить под обрез карточки. */}
+      <p className="text-ink-dim">{buildings(planet)}</p>
 
-      {/* Пустая строка и список построек — как в оригинале под данными планеты. */}
-      <p className="mt-2 text-ink-dim">{buildings(planet)}</p>
-
-      {nextClimate && climate?.requiredTechCode ? (
-        <p className="text-ink-faint">
-          {t('planet.terraforming', {
-            climate: nextClimate.label,
-            /*
-              Технология — НАЗВАНИЕМ из дерева, а не кодом: прежде игрок читал здесь
-              «GAIA_TRANSFORMATION». Код, которого в дереве нет, показывается как есть:
-              молчать о требовании хуже, чем показать его строкой (так же и в окне
-              дизайна кораблей, `ShipDesignService.techName`).
-            */
-            tech: findTechnology(researchTree, climate.requiredTechCode)?.name
-              ?? climate.requiredTechCode,
-          })}
-        </p>
-      ) : null}
     </div>
   );
 }
@@ -140,6 +106,11 @@ export function PlanetInfo({ planet, side }: {
 const population = (planet: Planet): ReactNode => {
   if (!planet.colonizable) {
     return t('planet.uninhabitable');
+  }
+  // Чужая колония (п. 15, туман войны): видно население — глазами или памятью, — а
+  // раскладки и вместимости со стороны не видно.
+  if (!planet.colony && planet.ownerPlayerId) {
+    return tf('planet.foreignPopulation', { n: <Figure accent="value">{planet.population}</Figure> });
   }
   if (!planet.colony) {
     return tf('planet.unsettled', { n: <Figure accent="value">{planet.maxPopulation}</Figure> });
@@ -150,8 +121,17 @@ const population = (planet: Planet): ReactNode => {
   });
 };
 
-/** Что на планете построено. Особые проекты — дома и товары — зданиями не становятся. */
+/**
+ * Что на планете построено. Особые проекты — дома и товары — зданиями не становятся.
+ * У чужой колонии видна только оборона (п. 15, туман войны) и ход, когда её видели.
+ */
 const buildings = (planet: Planet): string => {
+  if (!planet.colony && planet.ownerPlayerId) {
+    const seen = planet.defences && planet.defences.length > 0
+      ? t('planet.defences', { list: planet.defences.join(' · ') })
+      : t('planet.noDefences');
+    return planet.seenTurn ? `${seen} · ${t('planet.seenTurn', { n: planet.seenTurn })}` : seen;
+  }
   const built = planet.colony?.buildings ?? [];
   if (built.length === 0) {
     return planet.colony ? t('planet.noBuildings') : '—';

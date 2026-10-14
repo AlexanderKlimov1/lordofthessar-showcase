@@ -110,8 +110,111 @@ public record CreateGameRequest(
          * ровно их, а произвольный срок в секунду значил бы партию, которую никто не успеет
          * сыграть.
          */
-        Integer turnSeconds
+        Integer turnSeconds,
+
+        /**
+         * Гостевые правила для партии АДМИНИСТРАТОРА — field-backlog, пункт 190: тесный и богатый
+         * старт, первые уровни по оплате и наука вдвое, как у гостя. Нужен замерам: гостевую
+         * партию иначе не сыграть наблюдателем — гостю наблюдать не дают. У всех прочих поле
+         * не читается: гость получает свои правила всё равно, а игрок их не выбирает.
+         */
+        Boolean guestRules,
+
+        /**
+         * Учебная партия — field-backlog, пункт 41: звания за трудное по ней не считаются. Шлёт
+         * его пункт меню «Обучение»; пусто — партия обычная.
+         */
+        Boolean tutorial,
+
+        /**
+         * Своя раса из личного кабинета, которой заводят партию, — field-backlog, пункт 99: если
+         * её взяли по чужой ссылке, автор узнает, что ею сыграли. Пусто — раса не из кабинета.
+         */
+        java.util.UUID raceTemplateId,
+
+        /**
+         * Разрешить зрителей — field-backlog, пункт 59: партию смотрят со стороны без тумана войны,
+         * но с отставанием на {@code SpectatorService.DELAY_TURNS} ходов. Согласие даёт создатель, а
+         * входящий за стол видит его до входа; пусто — нельзя.
+         */
+        Boolean spectators,
+
+        /**
+         * Особенность галактики — field-backlog, пункт 94: код {@code GalaxyFeature}, «RANDOM» —
+         * жребием от зерна, «NONE» или пусто — без особенности. Окно новой игры шлёт жребий.
+         */
+        String galaxyFeature,
+
+        /**
+         * Галактика недели — пункт 146: условия назначает сервер ({@code WeeklyGalaxyRules}),
+         * игрок выбирает расу и имена. Пусто — обычная партия.
+         */
+        Boolean weekly,
+
+        /**
+         * Уровень сложности — field-backlog, пункт 9: код {@code AiSkill}, как хорошо играют империи
+         * ИИ. Прибавок у ИИ нет ни на одном уровне. Пусто — обычный: прогоны и сквозная проверка
+         * этого поля не шлют и играют ту же игру, что и до уровней.
+         */
+        String aiSkill,
+
+        /**
+         * Закрытая партия — field-backlog, пункт 67: в списке открытых её нет, войти можно только по
+         * ссылке-приглашению. Пусто — открытая.
+         */
+        Boolean inviteOnly,
+
+        /** Ход итога по могуществу (пункт 24): 100, 200 или 300; пусто — 300. */
+        Integer mightTurn,
+
+        /** Тихая галактика (пункт 186): ИИ войну первым не начинает. */
+        Boolean peacefulAi,
+
+        /**
+         * Свой набор справочников основателя (пункт 42): партия одиночная, в историю не идёт.
+         * Пусто — справочники игры.
+         */
+        java.util.UUID modId
 ) {
+
+    public CreateGameRequest(String name, GalaxySize galaxySize, String playerName, String homeStarName,
+                             String raceCode, String raceName, List<String> raceTraits, Long seed,
+                             Boolean galacticEvents, Boolean observer, Integer totalPlayers, Boolean council,
+                             Boolean aiActive, BannerColor banner, Boolean wardenholdVictory, Boolean mightVictory,
+                             Integer turnSeconds, Boolean guestRules, Boolean tutorial,
+                             java.util.UUID raceTemplateId, Boolean spectators, String galaxyFeature,
+                             Boolean weekly, String aiSkill, Boolean inviteOnly) {
+        this(name, galaxySize, playerName, homeStarName, raceCode, raceName, raceTraits, seed, galacticEvents,
+                observer, totalPlayers, council, aiActive, banner, wardenholdVictory, mightVictory, turnSeconds,
+                guestRules, tutorial, raceTemplateId, spectators, galaxyFeature, weekly, aiSkill, inviteOnly,
+                null, null, null);
+    }
+
+    /** Запрос без признака закрытой партии — открытая (пункт 67): так его собирают служебные партии. */
+    public CreateGameRequest(String name, GalaxySize galaxySize, String playerName, String homeStarName,
+                             String raceCode, String raceName, List<String> raceTraits, Long seed,
+                             Boolean galacticEvents, Boolean observer, Integer totalPlayers, Boolean council,
+                             Boolean aiActive, BannerColor banner, Boolean wardenholdVictory, Boolean mightVictory,
+                             Integer turnSeconds, Boolean guestRules, Boolean tutorial,
+                             java.util.UUID raceTemplateId, Boolean spectators, String galaxyFeature,
+                             Boolean weekly, String aiSkill) {
+        this(name, galaxySize, playerName, homeStarName, raceCode, raceName, raceTraits, seed, galacticEvents,
+                observer, totalPlayers, council, aiActive, banner, wardenholdVictory, mightVictory, turnSeconds,
+                guestRules, tutorial, raceTemplateId, spectators, galaxyFeature, weekly, aiSkill, null);
+    }
+
+    /** Запрос без уровня сложности — обычный уровень (пункт 9): так его собирают служебные партии. */
+    public CreateGameRequest(String name, GalaxySize galaxySize, String playerName, String homeStarName,
+                             String raceCode, String raceName, List<String> raceTraits, Long seed,
+                             Boolean galacticEvents, Boolean observer, Integer totalPlayers, Boolean council,
+                             Boolean aiActive, BannerColor banner, Boolean wardenholdVictory, Boolean mightVictory,
+                             Integer turnSeconds, Boolean guestRules, Boolean tutorial,
+                             java.util.UUID raceTemplateId, Boolean spectators, String galaxyFeature,
+                             Boolean weekly) {
+        this(name, galaxySize, playerName, homeStarName, raceCode, raceName, raceTraits, seed, galacticEvents,
+                observer, totalPlayers, council, aiActive, banner, wardenholdVictory, mightVictory, turnSeconds,
+                guestRules, tutorial, raceTemplateId, spectators, galaxyFeature, weekly, null, null);
+    }
 
     /** Сколько империй в партии; пусто — как задано настройкой сервера. */
     public Integer totalPlayersOr(Integer fallback) {

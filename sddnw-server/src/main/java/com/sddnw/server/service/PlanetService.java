@@ -14,6 +14,7 @@ import com.sddnw.server.dto.EnqueueTemplateRequest;
 import com.sddnw.server.dto.PlanetDto;
 import com.sddnw.server.dto.QueueProjectsRequest;
 import com.sddnw.server.dto.StarSystemDto;
+import com.sddnw.server.dto.TemplateLaidDto;
 import com.sddnw.server.dto.SellBuildingRequest;
 import com.sddnw.server.dto.SetPopulationRequest;
 import com.sddnw.server.dto.SetProjectRequest;
@@ -40,12 +41,18 @@ import java.util.UUID;
 public class PlanetService {
 
     private final GameAccess gameAccess;
+    private final IntelService intelService;
     private final ColonyService colonyService;
     private final GroundCombatService groundCombatService;
     private final ExpeditionService expeditionService;
     private final PopulationTransferService transferService;
     private final GameMapper gameMapper;
     private final BuildTemplateService buildTemplates;
+    private final Messages messages;
+
+    /** Журнал отмены в пределах хода — пункт 74. Полем: конструктор и так длинен. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TurnUndoService undo;
 
     public PlanetService(GameAccess gameAccess,
                          ColonyService colonyService,
@@ -53,7 +60,11 @@ public class PlanetService {
                          ExpeditionService expeditionService,
                          PopulationTransferService transferService,
                          GameMapper gameMapper,
-                         BuildTemplateService buildTemplates) {
+                         BuildTemplateService buildTemplates,
+                         IntelService intelService,
+                         Messages messages) {
+        this.messages = messages;
+        this.intelService = intelService;
         this.buildTemplates = buildTemplates;
         this.transferService = transferService;
         this.gameAccess = gameAccess;
@@ -95,8 +106,20 @@ public class PlanetService {
     /** Выкуп стройки колонии за кредиты — п. 10: достроится тем же ходом. */
     @Transactional
     public PlanetDto buyProject(UUID gameId, UUID planetId, String accessToken) {
-        PlayerEntity player = gameAccess.requirePlayerOfRunningGame(gameId, accessToken);
-        return gameMapper.toPlanet(colonyService.buyProject(player, planetId));
+        GameEntity game = gameAccess.requireRunningGame(gameId);
+        PlayerEntity player = gameAccess.requirePlayer(game, accessToken);
+        Integer creditsBefore = player.getCredits();
+        Integer pointsBefore = colonyService.projectPointsOf(planetId);
+        PlanetEntity planet = colonyService.buyProject(player, planetId);
+        PlanetDto shown = gameMapper.toPlanet(planet);
+        // Выкуп отменяется до конца хода (пункт 74): сколько было единиц и сколько заплачено.
+        if (undo != null) {
+            undo.record(game, player, TurnUndoService.BUY, new TurnUndoService.Bought(planetId,
+                    planet.getProjectCode(), planet.getProjectDesignId(),
+                    shown.colony() == null ? null : shown.colony().projectName(),
+                    pointsBefore, planet.getProjectPoints(), creditsBefore - player.getCredits()));
+        }
+        return shown;
     }
 
     /**
@@ -109,8 +132,15 @@ public class PlanetService {
     public PlanetDto sellBuilding(UUID gameId, UUID planetId, SellBuildingRequest request) {
         GameEntity game = gameAccess.requireRunningGame(gameId);
         PlayerEntity player = gameAccess.requirePlayer(game, request.accessToken());
-        return gameMapper.toPlanet(colonyService.sellBuilding(
-                player, planetId, request.buildingCode(), game.getTurn()));
+        Integer creditsBefore = player.getCredits();
+        Integer builtTurn = colonyService.builtTurnOf(planetId, request.buildingCode());
+        PlanetEntity planet = colonyService.sellBuilding(player, planetId, request.buildingCode(), game.getTurn());
+        // Продажа отменяется до конца хода (пункт 74): здание вернётся с прежним ходом постройки.
+        if (undo != null) {
+            undo.record(game, player, TurnUndoService.SELL, new TurnUndoService.Sold(planetId,
+                    request.buildingCode(), builtTurn, player.getCredits() - creditsBefore));
+        }
+        return gameMapper.toPlanet(planet);
     }
 
     /** Добавить проект в очередь стройки колонии — п. 10. */
@@ -128,11 +158,14 @@ public class PlanetService {
      * двух менеджеров транзакций не бывает.
      */
     @Transactional
-    public PlanetDto enqueueTemplate(UUID gameId, UUID planetId, EnqueueTemplateRequest request,
-                                     UUID accountId) {
+    public TemplateLaidDto enqueueTemplate(UUID gameId, UUID planetId, EnqueueTemplateRequest request,
+                                           UUID accountId) {
         PlayerEntity player = gameAccess.requirePlayerOfRunningGame(gameId, request.accessToken());
-        return gameMapper.toPlanet(
-                colonyService.enqueueTemplate(player, planetId, templateCodes(accountId, request)));
+        ColonyService.TemplateOutcome outcome =
+                colonyService.enqueueTemplate(player, planetId, templateCodes(accountId, request));
+        return new TemplateLaidDto(gameMapper.toPlanet(outcome.planet()), outcome.skipped().stream()
+                .map(skip -> new TemplateLaidDto.Skipped(messages.display(skip.name()), messages.display(skip.reason())))
+                .toList());
     }
 
     /** Коды шаблона: своя транзакция истории, отдельно от игровой. */
@@ -204,7 +237,8 @@ public class PlanetService {
                 outcome.survivors(),
                 outcome.attackPower(),
                 outcome.defencePower(),
-                gameMapper.toSystem(system, colonyService.context(system.getPlanets())));
+                gameMapper.toSystem(system, colonyService.context(system.getPlanets()),
+                        intelService.presentLens(player, system.getId())));
     }
 
     /**
@@ -220,7 +254,8 @@ public class PlanetService {
         StarSystemEntity system = expeditionService
                 .colonize(player, fleetId, request.targetPlanetId())
                 .getStarSystem();
-        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()));
+        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()),
+                        intelService.presentLens(player, system.getId()));
     }
 
     /**
@@ -233,7 +268,8 @@ public class PlanetService {
         StarSystemEntity system = expeditionService
                 .outpost(player, fleetId, request.targetPlanetId())
                 .getStarSystem();
-        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()));
+        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()),
+                        intelService.presentLens(player, system.getId()));
     }
 
     /**
@@ -253,7 +289,8 @@ public class PlanetService {
                 outcome.survivors(),
                 outcome.attackPower(),
                 outcome.defencePower(),
-                gameMapper.toSystem(system, colonyService.context(system.getPlanets())));
+                gameMapper.toSystem(system, colonyService.context(system.getPlanets()),
+                        intelService.presentLens(player, system.getId())));
     }
 
     /**
@@ -271,7 +308,8 @@ public class PlanetService {
                 player, fleetId, request.targetPlanetId(), game.getTurn(), game.getId());
 
         StarSystemEntity system = planet.getStarSystem();
-        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()));
+        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()),
+                        intelService.presentLens(player, system.getId()));
     }
 
     /**
@@ -284,6 +322,7 @@ public class PlanetService {
     public StarSystemDto colonize(UUID gameId, UUID planetId, ColonizeRequest request) {
         PlayerEntity player = gameAccess.requirePlayerOfRunningGame(gameId, request.accessToken());
         StarSystemEntity system = colonyService.colonize(player, planetId, request).getStarSystem();
-        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()));
+        return gameMapper.toSystem(system, colonyService.context(system.getPlanets()),
+                        intelService.presentLens(player, system.getId()));
     }
 }

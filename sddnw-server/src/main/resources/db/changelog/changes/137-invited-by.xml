@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Подарок за приглашение (field-backlog, пункты 50 и 174): кто позвал этого игрока в партию.
+        Подарок — за партию, ДОИГРАННУЮ вместе, а судить об этом после удаления партии нечем,
+        поэтому позвавший пишется при записи истории. Пусто — пришёл сам.
+    -->
+    <changeSet id="137-game-record-invited-by" author="sddnw">
+        <addColumn tableName="game_record">
+            <column name="invited_by" type="uuid"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

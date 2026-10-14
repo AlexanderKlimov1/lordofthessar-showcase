@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { gameApi } from '../../api/client';
 import type { Colony, ColonyProject, Planet } from '../../api/types';
 import { useGameStore } from '../../state/gameStore';
 import { ColonySellDialog } from './ColonySellDialog';
 import { ColonySurface } from './ColonySurface';
+import { isCapitol } from './buildingArt';
 import { PlanetInfo } from './PlanetInfo';
 import { t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
@@ -33,9 +34,11 @@ import { figureLabelClass } from '../accent';
  * у него нет ни кода в справочнике, ни цены. Под указателем он подсвечивается и показывает
  * карточку планеты (`PlanetInfo`).
  */
-export function ColonyBuildings({ planet, colony, own }: {
+export function ColonyBuildings({ planet, colony, own, governor }: {
   planet: Planet;
   colony?: Colony;
+  /** Губернатор системы — портретом в правом нижнем углу построек (09.10.2026). */
+  governor?: ReactNode;
   /** Колония своя: чужую не продают. */
   own: boolean;
 }) {
@@ -104,8 +107,7 @@ export function ColonyBuildings({ planet, colony, own }: {
         <span className={figureLabelClass('value')}>
           {built.length === 0
             ? t('colony.buildings.none')
-            : tf('colony.buildings.summary', {
-                n: <Figure accent="value">{built.length}</Figure>,
+            : tf('colony.buildings.costs', {
                 upkeep: <Figure accent="value">{colony?.upkeep ?? 0}</Figure>,
               })}
         </span>
@@ -137,6 +139,14 @@ export function ColonyBuildings({ planet, colony, own }: {
         {/* Базовое здание — сам посёлок — не продаётся, зато называет планету: карточка та
             же, что на экране системы. Слева: посёлок стоит посередине, и пейзаж читается. */}
         {overCentre && !selling ? <PlanetInfo planet={planet} side="left" /> : null}
+        {governor ? <div className="absolute bottom-2 right-2">{governor}</div> : null}
+        {/* Столица — п. 10.1: подписана под курсором, как постройка, раз сама постройкой
+            на поверхности не стоит. */}
+        {overCentre && !selling && isCapitol(colony) ? (
+          <div className={'pointer-events-none absolute inset-x-0 bottom-0 bg-space-950/80 px-2 py-1 ' + figureLabelClass('value')}>
+            {t('colony.capitol.caption')}
+          </div>
+        ) : null}
         {hovered ? (
           <div className={'pointer-events-none absolute inset-x-0 bottom-0 bg-space-950/80 px-2 py-1 ' + figureLabelClass('value')}>
             {hovered.name}

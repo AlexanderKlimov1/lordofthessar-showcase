@@ -1,8 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { DifficultySuggestion } from '../../api/types';
+import { gameApi } from '../../api/client';
 import { useGameStore } from '../../state/gameStore';
 import { useModalEscape } from '../useModalEscape';
 import { t, useT } from '../../i18n';
 import { GalaxyPicture } from './GalaxyPicture';
+import { galaxySizeName } from '../planetLabels';
+import { RuleNote } from '../RuleNote';
+import { GALAXY_FEATURES, featureNameKey, featureNoteKey } from './galaxyFeatures';
+import { AI_SKILLS, SkillLines, skillNameKey } from './aiSkills';
+import type { ModSet } from '../../api/types';
+import { canMod } from '../profile/ModsSection';
+import { chooseMod, chosenMod } from '../../state/chosenMod';
 
 /**
  * Окно новой игры — п. 3, окно NEW GAME MOO II.
@@ -35,6 +44,26 @@ interface NewGameScreenProps {
   /** Срок хода в секундах — backlog-promo, пункт 11; пусто — без срока. */
   turnSeconds?: number;
   onTurnSeconds: (value: number | undefined) => void;
+  /** Разрешить зрителей — field-backlog, пункт 59. */
+  spectators: boolean;
+  onSpectators: (value: boolean) => void;
+  /** Закрытая партия — пункт 67: только по ссылке-приглашению. */
+  inviteOnly: boolean;
+  onInviteOnly: (value: boolean) => void;
+  /** Ход итога по могуществу — пункт 24: 100, 200 или 300. */
+  mightTurn: number;
+  onMightTurn: (value: number) => void;
+  /** Тихая галактика — пункт 186: ИИ войну первым не начинает. */
+  peacefulAi: boolean;
+  onPeacefulAi: (value: boolean) => void;
+  /** «Партия под вечер» — пункт 24: набор настроек одной кнопкой. */
+  onEvening: () => void;
+  /** Особенность галактики — пункт 94: RANDOM, NONE или код. */
+  galaxyFeature: string;
+  onGalaxyFeature: (value: string) => void;
+  /** Уровень сложности — пункт 9: BEGINNER, EASY, NORMAL или HARD. */
+  aiSkill: string;
+  onAiSkill: (value: string) => void;
   onGameName: (value: string) => void;
   onGalaxySize: (value: string) => void;
   onTotalPlayers: (value: number) => void;
@@ -66,6 +95,19 @@ export function NewGameScreen({
   mightVictory,
   turnSeconds,
   onTurnSeconds,
+  spectators,
+  onSpectators,
+  inviteOnly,
+  onInviteOnly,
+  mightTurn,
+  onMightTurn,
+  peacefulAi,
+  onPeacefulAi,
+  onEvening,
+  galaxyFeature,
+  onGalaxyFeature,
+  aiSkill,
+  onAiSkill,
   onGameName,
   onGalaxySize,
   onTotalPlayers,
@@ -77,9 +119,31 @@ export function NewGameScreen({
   onCancel,
 }: NewGameScreenProps) {
   useT();
+  /*
+    Свой набор справочников (пункт 42) — только основателю: по кругу «справочники игры» и наборы из
+    кабинета. Выбор живёт в `chosenMod` до заказа партии — как своя раса из кабинета.
+  */
+  const [mods, setMods] = useState<ModSet[]>([]);
+  const [modId, setModId] = useState<string | null>(chosenMod());
+  useEffect(() => {
+    if (canMod()) {
+      gameApi.listMods().then(setMods).catch(() => setMods([]));
+    }
+  }, []);
+  const cycleMod = () => {
+    const order = [null, ...mods.map((mod) => mod.id)];
+    const next = order[(order.indexOf(modId) + 1) % order.length] ?? null;
+    setModId(next);
+    chooseMod(next);
+  };
   useModalEscape(true, onCancel);
   const galaxySizes = useGameStore((state) => state.galaxySizes);
   const [pressed, setPressed] = useState<string | null>(null);
+  // Подсказка уровня по прошлой партии — пункт 10: только ПРЕДЛАГАЕТ, выбор остаётся игроку.
+  const [suggestion, setSuggestion] = useState<DifficultySuggestion>({});
+  useEffect(() => {
+    gameApi.difficultySuggestion().then((answer) => setSuggestion(answer ?? {})).catch(() => undefined);
+  }, []);
 
   const index = Math.max(0, galaxySizes.findIndex((size) => size.code === galaxySize));
   const selected = galaxySizes[index];
@@ -92,6 +156,16 @@ export function NewGameScreen({
       return;
     }
     onGalaxySize(galaxySizes[(index + 1) % galaxySizes.length].code);
+  };
+
+  const cycleFeature = () => {
+    const at = GALAXY_FEATURES.indexOf(galaxyFeature);
+    onGalaxyFeature(GALAXY_FEATURES[(at + 1) % GALAXY_FEATURES.length]);
+  };
+
+  const cycleSkill = () => {
+    const at = AI_SKILLS.indexOf(aiSkill);
+    onAiSkill(AI_SKILLS[(at + 1) % AI_SKILLS.length]);
   };
 
   const cycleTurnSeconds = () => {
@@ -135,7 +209,7 @@ export function NewGameScreen({
         <div className="flex items-start justify-between gap-[4%]">
           <Option
             title={t('menu.galaxySize')}
-            value={selected?.label ?? galaxySize}
+            value={galaxySizeName(galaxySize, selected?.label)}
             note={selected
               ? t('menu.galaxy.summary', {
                 w: selected.widthParsecs,
@@ -178,8 +252,12 @@ export function NewGameScreen({
           */}
           <div className="w-[32%] space-y-2 border border-space-700 bg-space-950/60 p-3">
             <Flag on={galacticEvents} label={t('menu.events')} onToggle={() => onGalacticEvents(!galacticEvents)} />
+            {/* Удача названа удачей (пункт 104): перекос событий против сильнейшего сказан, а не спрятан. */}
+            {galacticEvents ? <RuleNote text={t('rule.eventsBias')} /> : null}
             <div className="pt-2 text-11 uppercase tracking-[0.2em] text-ink-dim">{t('newGame.victory')}</div>
             <Flag on label={t('newGame.victory.conquest')} note={t('newGame.victory.always')} />
+            {/* Покорение союзом — пункт 145, отступление от оригинала: сказано там, где выбирают пути. */}
+            <RuleNote text={t('rule.alliedVictory')} />
             <Flag
               on={council}
               label={t('newGame.victory.council')}
@@ -194,10 +272,106 @@ export function NewGameScreen({
             />
             <Flag
               on={mightVictory}
-              label={t('newGame.victory.might', { turn: MIGHT_VICTORY_TURN })}
-              note={t('rule.might', { turn: MIGHT_VICTORY_TURN })}
+              label={t('newGame.victory.might', { turn: mightTurn })}
+              note={t('rule.might', { turn: mightTurn })}
               onToggle={() => onMightVictory(!mightVictory)}
             />
+            {/*
+              Срок итога (пункт 24) — по кругу: 100, 200, 300. Сотый — «партия под вечер»; итог
+              спрашивает согласия людей, и при огромном отрыве может прийти раньше (пункт 80).
+            */}
+            {mightVictory ? (
+              <button
+                type="button"
+                className="flex w-full items-baseline justify-between gap-2 pl-7 text-left text-13 text-ink hover:text-accent"
+                onClick={() => onMightTurn(MIGHT_TURNS[(MIGHT_TURNS.indexOf(mightTurn) + 1) % MIGHT_TURNS.length])}
+              >
+                <span className="text-11 uppercase tracking-[0.2em] text-ink-dim">{t('newGame.mightTurn')}</span>
+                <span>{mightTurn}</span>
+              </button>
+            ) : null}
+            {mightVictory ? <RuleNote text={t('rule.mightEarly')} /> : null}
+            {/*
+              Тихая галактика (пункт 186): другой вид партии, не уровень сложности. В оригинале такой
+              настройки нет — сказано строкой отступления.
+            */}
+            {mods.length > 0 ? (
+              <button
+                type="button"
+                className="flex w-full items-baseline justify-between gap-2 text-left text-14 text-ink hover:text-accent"
+                title={t('newGame.mod.note')}
+                onClick={cycleMod}
+              >
+                <span className="text-11 uppercase tracking-[0.2em] text-ink-dim">{t('newGame.mod')}</span>
+                <span>{mods.find((mod) => mod.id === modId)?.name ?? t('newGame.mod.none')}</span>
+              </button>
+            ) : null}
+            {modId ? <RuleNote text={t('rule.mod')} /> : null}
+            <Flag
+              on={peacefulAi}
+              label={t('newGame.peaceful')}
+              note={t('newGame.peaceful.note')}
+              onToggle={() => onPeacefulAi(!peacefulAi)}
+            />
+            {peacefulAi ? <RuleNote text={t('rule.peaceful')} /> : null}
+            {/*
+              Зрители (пункт 59): партию смотрят со стороны без тумана войны, но с отставанием на
+              несколько ходов. Согласие даёт создатель, и входящий за стол видит его до входа.
+            */}
+            <Flag
+              on={spectators}
+              label={t('newGame.spectators')}
+              note={t('newGame.spectators.note')}
+              onToggle={() => onSpectators(!spectators)}
+            />
+            {/*
+              Закрытая партия (пункт 67): хозяин стола собирает своих — в списке открытых её нет,
+              а ссылку-приглашение он берёт в лобби.
+            */}
+            <Flag
+              on={inviteOnly}
+              label={t('newGame.inviteOnly')}
+              note={t('newGame.inviteOnly.note')}
+              onToggle={() => onInviteOnly(!inviteOnly)}
+            />
+            {/*
+              Особенность галактики (пункт 94) — по кругу, как всё в этом окне. Умолчание — жребий
+              (решение хозяина проекта): каждая партия приносит новый узор, если игрок не против.
+            */}
+            <button
+              type="button"
+              className="flex w-full items-baseline justify-between gap-2 pt-2 text-left text-13 text-ink hover:text-accent"
+              title={t(featureNoteKey(galaxyFeature))}
+              onClick={cycleFeature}
+            >
+              <span className="text-11 uppercase tracking-[0.2em] text-ink-dim">{t('newGame.feature')}</span>
+              <span>{t(featureNameKey(galaxyFeature))}</span>
+            </button>
+            {/*
+              Уровень сложности (пункты 9, 10, 87) — по кругу, умолчание — обычный. Под ним — что ИИ
+              этого уровня делает (признаками его правила, с сервера) и подсказка по прошлой партии.
+            */}
+            <button
+              type="button"
+              className="flex w-full items-baseline justify-between gap-2 pt-2 text-left text-13 text-ink hover:text-accent"
+              onClick={cycleSkill}
+            >
+              <span className="text-11 uppercase tracking-[0.2em] text-ink-dim">{t('newGame.difficulty')}</span>
+              <span>{t(skillNameKey(aiSkill))}</span>
+            </button>
+            <SkillLines code={aiSkill} className="space-y-0.5 text-11 text-ink-soft" />
+            {suggestion.suggested && suggestion.suggested !== aiSkill ? (
+              <p className="text-11 text-ink-dim">
+                {t(suggestion.reason === 'EASY_WIN' ? 'difficulty.suggest.easyWin'
+                  : suggestion.reason === 'FIRST_GAME' ? 'difficulty.suggest.firstGame' : 'difficulty.suggest.earlyLoss', {
+                  turn: suggestion.turn ?? 0,
+                  level: t(skillNameKey(suggestion.last)),
+                })}{' '}
+                <button type="button" className="link" onClick={() => onAiSkill(suggestion.suggested!)}>
+                  {t('difficulty.suggest.take', { level: t(skillNameKey(suggestion.suggested)) })}
+                </button>
+              </p>
+            ) : null}
             {/*
               Срок хода (backlog-promo, пункт 11) — по кругу, как всё в этом окне: истёк, и
               ход считается сам, опоздавший пропускает свои решения. Нужен партии людей —
@@ -223,6 +397,15 @@ export function NewGameScreen({
           >
             {t('common.cancel')}
           </button>
+          {/* Партия под вечер (пункт 24): малая галактика, три империи, итог на сотом ходу — одной кнопкой. */}
+          <button
+            type="button"
+            className="link text-14"
+            title={t('newGame.evening.note')}
+            onClick={onEvening}
+          >
+            {t('newGame.evening')}
+          </button>
           <button
             type="button"
             className="w-[18%] border border-accent bg-space-800 py-2 text-center text-14 uppercase tracking-widest text-accent"
@@ -243,17 +426,27 @@ export function NewGameScreen({
  */
 export const MIGHT_VICTORY_TURN = 300;
 
+/** Сроки итога по могуществу — те же, что на сервере (`MightVictoryRules.ALLOWED_TURNS`). */
+const MIGHT_TURNS = [100, 200, 300];
+
 /**
  * Сроки хода по кругу — те же, что принимает сервер (`TurnClockRules.ALLOWED_SECONDS`),
  * и первым «без срока»: таймер — выбор для партии людей, а не правило игры.
  */
-const TURN_SECONDS: (number | undefined)[] = [undefined, 90, 120, 180, 300, 600];
+const TURN_SECONDS: (number | undefined)[] = [undefined, 90, 120, 180, 300, 600, 4 * 3600, 24 * 3600];
 
-/** Подпись срока: «без срока», «1,5 мин», «2 мин». */
-const turnTimerLabel = (seconds?: number) =>
+/**
+ * Подпись срока: «без срока», «1,5 мин», «2 мин» — и медленные партии (пункт 64): «вечерняя, 4 ч»,
+ * «по переписке, сутки».
+ */
+export const turnTimerLabel = (seconds?: number) =>
   seconds === undefined
     ? t('newGame.turnTimer.none')
-    : t('newGame.turnTimer.minutes', { n: String(seconds / 60).replace('.', t('newGame.turnTimer.decimal')) });
+    : seconds >= 24 * 3600
+      ? t('newGame.turnTimer.mail')
+      : seconds >= 3600
+        ? t('newGame.turnTimer.evening', { n: seconds / 3600 })
+        : t('newGame.turnTimer.minutes', { n: String(seconds / 60).replace('.', t('newGame.turnTimer.decimal')) });
 
 /**
  * Флажок блока переключателей. Без `onToggle` он закреплён: виден, но не выключается —

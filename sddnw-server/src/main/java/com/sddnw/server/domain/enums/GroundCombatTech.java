@@ -77,6 +77,12 @@ public enum GroundCombatTech {
     /** Engineering, уровень 5: силовой доспех, 0,1. */
     POWERED_ARMOR("powered-armor", "Powered Armor", Kind.GEAR, 10, 10),
 
+    /**
+     * Force Fields, уровень 2: антигравитационная сбруя — «improves ground units' performance
+     * by +10» (13.10.2026, перенос MOO II). Снаряжение, как доспех: складывается с прочим.
+     */
+    ANTI_GRAV_HARNESS("anti-grav-harness", "Anti-Grav Harness", Kind.GEAR, 10, 10),
+
     /** Force Fields, уровень 4: личный щит, 0,1. */
     PERSONAL_SHIELD("personal-shield", "Personal Shield", Kind.GEAR, 10, 10),
 

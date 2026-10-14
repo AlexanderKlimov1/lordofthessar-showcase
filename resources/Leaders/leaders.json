@@ -72,8 +72,8 @@
       "name": { "en": "Megawealth", "ru": "Богач" },
       "unit": "CREDITS",
       "description": {
-        "en": "Takes no salary at all and brings the treasury 10 credits a turn. The sum does not grow with experience.",
-        "ru": "Жалованья не берёт вовсе, а приносит казне 10 кредитов за ход. С опытом сумма не растёт."
+        "en": "Takes no salary at all and brings the treasury 10 gc a turn. The sum does not grow with experience.",
+        "ru": "Жалованья не берёт вовсе, а приносит казне 10 gc за ход. С опытом сумма не растёт."
       },
       "works": "ALWAYS",
       "effect": "TREASURY"
@@ -225,14 +225,10 @@
       "unit": "PERCENT",
       "description": {
         "en": "Raises the morale in the system. Useless to Unification.",
-        "ru": "Поднимает настроение в системе. Объединению бесполезен."
+        "ru": "Поднимает мораль в системе. Объединению бесполезен."
       },
       "works": "ASSIGNED",
-      "effect": "NONE",
-      "note": {
-        "en": "Colony morale is not in the game yet — the ability is shown and changes nothing.",
-        "ru": "Настроения колоний в игре пока нет — способность показывается, но ни на что не влияет."
-      }
+      "effect": "MORALE"
     },
     {
       "code": "TACTICS",
@@ -240,8 +236,8 @@
       "name": { "en": "Tactician", "ru": "Тактик" },
       "unit": "POINTS",
       "description": {
-        "en": "It does not work in the original either — a known MOO II bug since 1996.",
-        "ru": "В оригинале не работает — известная ошибка MOO II с 1996 года."
+        "en": "Has no effect: a governor's tactics have nothing to act on.",
+        "ru": "Ничего не даёт: тактике губернатора не на что влиять."
       },
       "works": "ASSIGNED",
       "effect": "NONE",

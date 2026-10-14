@@ -1,5 +1,6 @@
 package com.sddnw.server.domain.entity;
 
+import com.sddnw.server.domain.enums.ShipMission;
 import com.sddnw.server.domain.enums.ShipRole;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -96,6 +97,50 @@ public class ShipDesignEntity {
      */
     @Column(name = "auto", nullable = false)
     private Boolean auto = Boolean.FALSE;
+
+    /** Задача проекта, собранного игрой (ShipMission); у проекта игрока — пусто. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "mission", length = 16)
+    private ShipMission mission;
+
+    /**
+     * Проект — трофей абордажа (п. 8): копия чужого проекта у захватчика. Разобранный на
+     * списании, такой корабль приносит технологию из своего состава («captured ships can be
+     * scrapped for tech», StrategyWiki).
+     */
+    @Column(name = "trophy", nullable = false)
+    private Boolean trophy = Boolean.FALSE;
+
+    /**
+     * Сколько кораблей построено по проекту — field-backlog, пункт 98: по нему конец партии и
+     * история называют «ваш лучший проект». Растёт в фазе производства ({@code ProductionPhase}).
+     */
+    @Column(name = "built", nullable = false)
+    private Integer built = 0;
+
+    public Integer getBuilt() {
+        return built;
+    }
+
+    public void setBuilt(Integer built) {
+        this.built = built;
+    }
+
+    public Boolean getTrophy() {
+        return trophy;
+    }
+
+    public void setTrophy(Boolean trophy) {
+        this.trophy = trophy;
+    }
+
+    public ShipMission getMission() {
+        return mission;
+    }
+
+    public void setMission(ShipMission mission) {
+        this.mission = mission;
+    }
 
     /** Версия строки: проект правит игрок, а читает его стройка в конце хода. */
     @Version

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        13.10.2026, перенос технологий MOO II: маскировка и стазисное поле. Маскировка спадает, когда
+        корабль стреляет, и возвращается после круга без выстрелов — для этого помнится круг последнего
+        выстрела. Стазис замораживает цель до конца следующего круга — помнится этот круг.
+    -->
+    <changeSet id="145-cloak-stasis" author="sddnw">
+        <addColumn tableName="battle_ship">
+            <column name="last_fired_round" type="integer"/>
+            <column name="frozen_until_round" type="integer"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

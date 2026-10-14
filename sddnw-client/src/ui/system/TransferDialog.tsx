@@ -6,6 +6,7 @@ import { useModalEscape } from '../useModalEscape';
 import { tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Перевозка жителей в другую свою колонию — п. 4.1.1.
@@ -53,7 +54,11 @@ export function TransferDialog({ from, onClose }: { from: Planet; onClose: () =>
   )?.id;
   const chosen = colonies.find((entry) => entry.planet.id === target) ?? null;
   const sameSystem = chosen !== null && chosen.system.id === fromSystemId;
-  const limit = sameSystem ? maxByPopulation : Math.min(maxByPopulation, free);
+  // В своей системе жители переходят сразу, и место на планете назначения спрашивается тоже
+  // сразу (`transfer.noRoom`) — тем же правилом, что у переноса щелчками в списке колоний
+  // (`ColoniesScreen.tripRefusal`). Прежде окно этого не знало и доводило до отказа (пункт 76).
+  const room = chosen ? Math.max(0, (chosen.planet.colony?.maxPopulation ?? 0) - chosen.planet.population) : 0;
+  const limit = sameSystem ? Math.min(maxByPopulation, room) : Math.min(maxByPopulation, free);
 
   const send = () => {
     if (!game || !credentials || !target || count <= 0) {
@@ -147,7 +152,7 @@ export function TransferDialog({ from, onClose }: { from: Planet; onClose: () =>
           </div>
         )}
 
-        {error ? <p className="mt-2 text-11 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mt-2 text-11" message={error} /> : null}
 
         <div className="mt-4 flex items-center justify-between border-t border-space-700 pt-2 text-xs">
           <button type="button" className="link-quiet" onClick={onClose}>
@@ -156,7 +161,8 @@ export function TransferDialog({ from, onClose }: { from: Planet; onClose: () =>
           <button
             type="button"
             className="link-quiet text-accent disabled:cursor-not-allowed disabled:text-ink-off"
-            disabled={busy || !target || limit <= 0}
+            disabled={busy || !target || limit <= 0 || count > limit}
+            title={sameSystem && room <= 0 && chosen ? t('colonies.noRoom', { name: chosen.planet.name, room }) : undefined}
             onClick={send}
           >
             {t('transfer.send')}

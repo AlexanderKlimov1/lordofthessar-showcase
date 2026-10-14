@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      Честный стол — field-backlog, пункт 197 (решение хозяина проекта, 05.10.2026).
+
+      «Показать галактику» у администратора остаётся и в партии с людьми — им пользуются
+      отладка и проверки, — но такая партия ДЛЯ ВСЕХ помечается «под наблюдением
+      администратора»: один за столом видит карты остальных, и скрывать это от сидящих за
+      столом значило бы нарушить круг тяжелее, чем само наблюдение. Пометка не снимается:
+      что карты однажды видели, уже не отменить.
+    -->
+    <changeSet id="099-game-admin-watched" author="sddnw">
+        <addColumn tableName="game">
+            <column name="admin_watched" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!--
+      Ни одна потеря — молча — field-backlog, пункт 161.
+
+      Объявления об изменениях, которые что-то отняли или сдвинули (миграция, переименование
+      ключей браузера, сброс партий, правка цен), лежат в notices.json сервера; учётная
+      запись помнит, когда видела их последний раз, и при входе показываются только новые.
+      Запись, заведённая после объявления, его не получает: ничего у неё не отняли.
+    -->
+    <changeSet id="099-account-notices-seen" author="sddnw">
+        <addColumn tableName="account">
+            <column name="notices_seen_at" type="timestamptz"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

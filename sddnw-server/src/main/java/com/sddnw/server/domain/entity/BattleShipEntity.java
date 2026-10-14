@@ -122,9 +122,213 @@ public class BattleShipEntity {
     @Column(name = "damaged_systems", length = 512)
     private List<String> damagedSystems;
 
+    /**
+     * Морская пехота на борту — п. 8, абордаж (BattleRules.marines). Уходит на абордаж вся
+     * разом: погибшие не возвращаются, уцелевшие остаются экипажем взятого корабля.
+     */
+    @Column(name = "marines", nullable = false)
+    private Integer marines = 0;
+
+    /**
+     * Корабль взят абордажем и воюет за захватчика — п. 8. Владелец и сторона у него уже
+     * новые; отметка нужна концу боя: для прежнего хозяина это потеря, а захватчику —
+     * трофей, который встаёт в его флот.
+     */
+    @Column(name = "captured", nullable = false)
+    private Boolean captured = Boolean.FALSE;
+
+    /**
+     * Сколько тяговых лучей держит корабль в этом круге — п. 8: луч на класс корпуса
+     * обездвиживает его. Сбрасывается на смене круга.
+     */
+    @Column(name = "tractored", nullable = false)
+    private Integer tractored = 0;
+
+    /**
+     * Промахов подряд у этого стрелка — field-backlog, пункт 86 ({@code StreakRules}): чем длиннее
+     * полоса, тем выше шанс следующего выстрела; попадание сбрасывает счёт.
+     */
+    @Column(name = "miss_streak", nullable = false)
+    private Integer missStreak = 0;
+
+    public Integer getMissStreak() {
+        return missStreak;
+    }
+
+    public void setMissStreak(Integer missStreak) {
+        this.missStreak = missStreak;
+    }
+
+    /**
+     * Приказ отходить — п. 8 (06.10.2026, решение хозяина проекта): корабль развернулся к
+     * своему краю и уйдёт в гиперпространство в СВОЙ следующий ход, если доживёт до него.
+     * До того он на поле и под огнём.
+     */
+    @Column(name = "retreating")
+    private Boolean retreating;
+
+    /** Ушёл с поля отходом: не погиб и не потерян, но в бою его больше нет. */
+    @Column(name = "retreated")
+    private Boolean retreated;
+
+    /**
+     * Круг, в который лучи молчат после двойного залпа гиперконденсаторов — п. 8 (13.10.2026,
+     * перенос MOO II): «fire twice in a combat turn, but the ship then has to wait 1 combat turn
+     * without firing». Пусто — лучи не молчат.
+     */
+    @Column(name = "beams_rest_round")
+    private Integer beamsRestRound;
+
+    /** То же для ракет — скоростные ракетные стойки (п. 8). */
+    @Column(name = "missiles_rest_round")
+    private Integer missilesRestRound;
+
+    /**
+     * С какого круга отсеки истребителей снова выпускают звено — п. 8 (14.10.2026): звено отбивает свои
+     * удары и возвращается на носитель перевооружаться. Пусто — звено дома.
+     */
+    @Column(name = "fighters_back_round")
+    private Integer fightersBackRound;
+
+    public Integer getFightersBackRound() {
+        return fightersBackRound;
+    }
+
+    public void setFightersBackRound(Integer fightersBackRound) {
+        this.fightersBackRound = fightersBackRound;
+    }
+
+    /**
+     * Круг последнего выстрела — п. 8 (маскировка MOO II): стреляющий корабль раскрывается и
+     * прячется снова, только пропустив круг без выстрелов. Пусто — не стрелял.
+     */
+    @Column(name = "last_fired_round")
+    private Integer lastFiredRound;
+
+    /**
+     * До какого круга корабль заморожен стазисным полем — п. 8: «cannot move, fire or be
+     * attacked». Пусто — не заморожен.
+     */
+    @Column(name = "frozen_until_round")
+    private Integer frozenUntilRound;
+
+    /**
+     * Круг, в котором корабль уже взял лишний ход ускорителя времени (п. 8, перенос MOO II):
+     * «an additional turn at the end of every combat turn». Пусто — не брал ни разу.
+     */
+    @Column(name = "warp_round")
+    private Integer warpRound;
+
+    /** Прибавка звания экипажа к меткости и защите (п. 8, {@code CrewRules}); ставится при расстановке. */
+    @Column(name = "crew_bonus", nullable = false)
+    private Integer crewBonus = 0;
+
+    public Integer getCrewBonus() {
+        return crewBonus == null ? 0 : crewBonus;
+    }
+
+    public void setCrewBonus(Integer crewBonus) {
+        this.crewBonus = crewBonus;
+    }
+
+    /**
+     * Плазменная сеть на корабле — п. 8: столько урона она даст в начале следующего круга, а потом
+     * ослабнет на 5. Ноль — сети нет.
+     */
+    @Column(name = "plasma_web", nullable = false)
+    private Integer plasmaWeb = 0;
+
+    public Integer getWarpRound() {
+        return warpRound;
+    }
+
+    public void setWarpRound(Integer warpRound) {
+        this.warpRound = warpRound;
+    }
+
+    public Integer getPlasmaWeb() {
+        return plasmaWeb == null ? 0 : plasmaWeb;
+    }
+
+    public void setPlasmaWeb(Integer plasmaWeb) {
+        this.plasmaWeb = plasmaWeb;
+    }
+
+    public Integer getLastFiredRound() {
+        return lastFiredRound;
+    }
+
+    public void setLastFiredRound(Integer lastFiredRound) {
+        this.lastFiredRound = lastFiredRound;
+    }
+
+    public Integer getFrozenUntilRound() {
+        return frozenUntilRound;
+    }
+
+    public void setFrozenUntilRound(Integer frozenUntilRound) {
+        this.frozenUntilRound = frozenUntilRound;
+    }
+
+    public Integer getBeamsRestRound() {
+        return beamsRestRound;
+    }
+
+    public void setBeamsRestRound(Integer beamsRestRound) {
+        this.beamsRestRound = beamsRestRound;
+    }
+
+    public Integer getMissilesRestRound() {
+        return missilesRestRound;
+    }
+
+    public void setMissilesRestRound(Integer missilesRestRound) {
+        this.missilesRestRound = missilesRestRound;
+    }
+
+    public Boolean getRetreating() {
+        return retreating;
+    }
+
+    public void setRetreating(Boolean retreating) {
+        this.retreating = retreating;
+    }
+
+    public Boolean getRetreated() {
+        return retreated;
+    }
+
+    public void setRetreated(Boolean retreated) {
+        this.retreated = retreated;
+    }
+
+    public Integer getTractored() {
+        return tractored;
+    }
+
+    public void setTractored(Integer tractored) {
+        this.tractored = tractored;
+    }
+
     @Version
     @Column(name = "version", nullable = false)
     private Long version;
+
+    public Integer getMarines() {
+        return marines;
+    }
+
+    public void setMarines(Integer marines) {
+        this.marines = marines;
+    }
+
+    public Boolean getCaptured() {
+        return captured;
+    }
+
+    public void setCaptured(Boolean captured) {
+        this.captured = captured;
+    }
 
     public List<String> getDamagedSystems() {
         return damagedSystems == null ? List.of() : damagedSystems;
@@ -151,9 +355,12 @@ public class BattleShipEntity {
         setDamagedSystems(broken);
     }
 
-    /** Жив ли корабль — им и меряется, кончился ли бой. */
+    /**
+     * На поле ли корабль — им и меряется, кончился ли бой. Ушедший отходом на поле больше
+     * не стоит: по нему не стреляют, он не ходит и сторону на поле не держит.
+     */
     public Boolean alive() {
-        return !Boolean.TRUE.equals(destroyed);
+        return !Boolean.TRUE.equals(destroyed) && !Boolean.TRUE.equals(retreated);
     }
 
     public UUID getId() {

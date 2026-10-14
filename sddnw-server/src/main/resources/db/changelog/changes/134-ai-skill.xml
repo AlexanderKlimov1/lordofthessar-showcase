@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- Уровень сложности (field-backlog, пункт 9): как хорошо играют империи ИИ партии. Пусто — обычный. -->
+    <changeSet id="134-game-ai-skill" author="sddnw">
+        <addColumn tableName="game">
+            <column name="ai_skill" type="varchar(16)"/>
+        </addColumn>
+    </changeSet>
+
+    <!-- Уровень у самой империи ИИ: прогоны сравнивают уровни в одной партии (пункт 9). Пусто — обычный. -->
+    <changeSet id="134-player-ai-skill" author="sddnw">
+        <addColumn tableName="player">
+            <column name="ai_skill" type="varchar(16)"/>
+        </addColumn>
+    </changeSet>
+
+    <!-- Уровень в истории партий: по нему подсказывается сложность следующей (пункт 10). -->
+    <changeSet id="134-game-record-ai-skill" author="sddnw">
+        <addColumn tableName="game_record">
+            <column name="ai_skill" type="varchar(16)"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

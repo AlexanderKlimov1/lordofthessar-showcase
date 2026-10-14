@@ -67,7 +67,7 @@ export function BattleScene({
 
         <div className="mt-4 flex justify-end border-t border-space-700 pt-2 text-xs">
           <button type="button" className="link" onClick={onClose}>
-            {t('common.closeEsc')}
+            {t('common.ok')}
           </button>
         </div>
       </div>

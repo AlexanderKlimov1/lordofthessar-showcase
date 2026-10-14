@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Действия живых игроков по ходам (field-backlog, пункт 13): строка на партию, игрока, ход и
+        действие — сколько раз. По ним видно, какая рутина растёт вместе с империей.
+    -->
+    <changeSet id="122-turn-action" author="sddnw">
+        <createTable tableName="turn_action">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="action" type="varchar(120)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="times" type="int">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="turn_action" indexName="ix_turn_action_game">
+            <column name="game_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

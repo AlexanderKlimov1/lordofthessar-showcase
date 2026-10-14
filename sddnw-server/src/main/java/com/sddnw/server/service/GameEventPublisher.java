@@ -68,6 +68,18 @@ public class GameEventPublisher {
         });
     }
 
+    /**
+     * Какая фаза конца хода идёт сейчас — field-backlog, пункт 100: ожидание с видимой работой
+     * терпимее. Уходит СРАЗУ, а не после фиксации: это не состояние партии, которое можно
+     * прочитать, а рассказ о работе, которая идёт. Только своим подписчикам — через мост между
+     * экземплярами каждая фаза каждого хода стоила бы записи в канал базы, а этап, пришедший
+     * позже самой фазы, никому не нужен. Подпись — имя класса фазы: слова к нему клиент берёт из
+     * справочника «Как устроено» ({@code RulesBookService}), на языке читателя.
+     */
+    public void turnPhase(GameEntity game, String phase) {
+        events.publish(new GameEventDto("TURN_PHASE", game.getId(), game.getTurn(), null, phase, null));
+    }
+
     /** Игрок закончил ход: остальным видно, кого ещё ждут. */
     public void playerReady(GameEntity game, PlayerEntity player) {
         publish(new GameEventDto(
@@ -83,6 +95,14 @@ public class GameEventPublisher {
     public void gameStarted(GameEntity game) {
         publish(new GameEventDto(
                 "GAME_STARTED", game.getId(), game.getTurn(), null, "Партия началась", null));
+    }
+
+    /**
+     * Короткий знак (пункт 183): получатели перечитывают последние знаки сами — текста в событии
+     * нет, его переводит словарь читателя.
+     */
+    public void signal(GameEntity game, PlayerEntity from) {
+        publish(new GameEventDto("SIGNAL", game.getId(), game.getTurn(), from.getId(), null, null));
     }
 
     /** В партию вошёл игрок: лобби у остальных обновляется само. */

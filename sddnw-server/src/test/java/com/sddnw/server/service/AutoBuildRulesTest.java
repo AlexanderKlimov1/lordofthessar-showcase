@@ -39,7 +39,7 @@ class AutoBuildRulesTest {
         return new ColonyProjectDto(code, code, code,
                 building == null ? null : building.cost(),
                 building == null ? 0 : building.upkeep(),
-                Boolean.FALSE, null, Boolean.FALSE);
+                Boolean.FALSE, null, Boolean.FALSE, null, null);
     }
 
     @Test

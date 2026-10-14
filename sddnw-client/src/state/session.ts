@@ -1,10 +1,13 @@
 import { gameApi, setAccountToken } from '../api/client';
 import { setLocale, type Locale } from '../i18n';
 import { TEXT_SCALES, applyTextScale, type TextScale } from '../ui/textScale';
+import { setSoundLevel, soundChosenThisVisit, soundLevel, toSoundLevel } from '../audio/soundSettings';
 import { applyHotkeys, type Hotkeys } from '../ui/hotkeys';
+import { applyMotion, type MotionPreference } from '../ui/motion';
 import type { AccountSession, PlayerCredentials } from '../api/types';
 // Только тип: на выполнение импорт не влияет, поэтому взаимной ссылки модулей не возникает.
 import type { OverlayPanel } from './gameStore';
+import { applyGlyphs } from '../ui/glyphs';
 
 /**
  * Ссылка на партию в браузерном хранилище.
@@ -118,11 +121,12 @@ export const clearView = (): void => window.localStorage.removeItem(VIEW_KEY);
 /** Экран, открытый поверх главного меню; `null` — открыто само меню. */
 export type MenuScreen =
   | 'balance' | 'costs' | 'accounts' | 'milkyway' | 'saves' | 'newgame'
-  | 'orionometer' | 'preferences' | 'templates' | null;
+  | 'orionometer' | 'preferences' | 'soundlab' | 'problems' | 'founders' | 'requests' | 'spectate' | 'weekly'
+  | 'openBalance' | null;
 
 const MENU_SCREENS: MenuScreen[] =
-  ['balance', 'costs', 'accounts', 'milkyway', 'saves', 'newgame', 'orionometer', 'templates',
-   'preferences'];
+  ['balance', 'costs', 'accounts', 'milkyway', 'saves', 'newgame', 'orionometer',
+   'preferences', 'soundlab', 'problems', 'founders', 'requests', 'spectate', 'weekly', 'openBalance'];
 
 export const readMenuScreen = (): MenuScreen => {
   const raw = window.localStorage.getItem(MENU_KEY);
@@ -179,6 +183,17 @@ export interface StoredTutorial {
   step: number;
   /** Игрок свернул карточку: подсказки идут дальше, но молча. */
   hidden?: boolean;
+  /**
+   * Это партия обучения, а не гостевая (field-backlog, пункт 124): выходы из выбора —
+   * автострой, разведка сама, наука по разделу — называются только в обучении.
+   */
+  tutorial?: boolean;
+  /**
+   * Сколько шагов сделано ДО карты — field-backlog, пункт 53: раса, знамя с именами и вход в
+   * партию. Это не подарок, а правда — они действительно сделаны, — и карточка на десять отметок
+   * с уже стоящими заполняется охотнее, чем на семь пустых. Пусто у записей до пункта — ноль.
+   */
+  given?: number;
 }
 
 export const readTutorial = (): StoredTutorial | null => {
@@ -267,11 +282,31 @@ const applyAccountHotkeys = (session: AccountSession): void => {
   applyHotkeys(session.account.hotkeys ?? {});
 };
 
+/**
+ * Громкость из записи. В отличие от языка и размера, пустая запись здесь НЕ оставляет того,
+ * что в браузере, а выключает звук: пусто значит «не трогал», а не трогавший звука не слышит.
+ * Иначе за машиной, где играл кто-то с музыкой, она заиграла бы и у вошедшего следом.
+ */
+const applyAccountSound = (session: AccountSession): void => {
+  // Музыку выбрали в заставке вечера, а запись о звуке молчит: выбор достаётся записи.
+  if (session.account.musicVolume === undefined && soundChosenThisVisit()) {
+    rememberSound();
+    return;
+  }
+  setSoundLevel('music', toSoundLevel(session.account.musicVolume));
+  setSoundLevel('sfx', toSoundLevel(session.account.sfxVolume));
+};
+
 export const writeAccount = (session: AccountSession): void => {
   storeAccount(session);
   applyAccountLocale(session);
   applyAccountTextScale(session);
   applyAccountHotkeys(session);
+  applyAccountSound(session);
+  // Меньше движения (пункт 170): запись решает, как и размер текста; пусто — как в системе.
+  applyMotion(session.account.reduceMotion);
+  // Знаки знамён у хозяев на карте (пункт 202): пусто — выключены.
+  applyGlyphs(session.account.bannerGlyphs);
 };
 
 /**
@@ -305,6 +340,48 @@ export const rememberTextScale = (value: TextScale): void => {
   }
   storeAccount({ ...session, account: { ...session.account, textScale: value } });
   void gameApi.saveTextScale(value).catch(() => undefined);
+};
+
+/** Запоминает, рисовать ли знаки знамён на карте, — field-backlog, пункт 202; как `rememberMotion`. */
+export const rememberGlyphs = (value: boolean): void => {
+  applyGlyphs(value);
+  const session = readAccount();
+  if (!session) {
+    return;
+  }
+  storeAccount({ ...session, account: { ...session.account, bannerGlyphs: value } });
+  void gameApi.saveGlyphs(value).catch(() => undefined);
+};
+
+/**
+ * Запоминает, убирать ли движение, — field-backlog, пункт 170. Устроено как
+ * {@link rememberTextScale}, но применяется и без входа: настройка доступности нужна и гостю
+ * на экране входа, а браузер помнит её до первого входа.
+ */
+export const rememberMotion = (value: MotionPreference): void => {
+  applyMotion(value);
+  const session = readAccount();
+  if (!session) {
+    return;
+  }
+  storeAccount({ ...session, account: { ...session.account, reduceMotion: value } });
+  void gameApi.saveMotion(value).catch(() => undefined);
+};
+
+/**
+ * Запоминает громкость музыки и эффектов в учётной записи — устроена так же, как
+ * {@link rememberTextScale}: копия записи правится тут же, отказ сервера гасится молча.
+ * Уходят обе ступени: переключатели стоят рядом, и настройка у них одна.
+ */
+export const rememberSound = (): void => {
+  const session = readAccount();
+  if (!session) {
+    return;
+  }
+  const musicVolume = soundLevel('music');
+  const sfxVolume = soundLevel('sfx');
+  storeAccount({ ...session, account: { ...session.account, musicVolume, sfxVolume } });
+  void gameApi.saveSound(musicVolume, sfxVolume).catch(() => undefined);
 };
 
 /**
@@ -358,6 +435,7 @@ export const restoreAccount = (): AccountSession | null => {
     applyAccountLocale(session);
     applyAccountTextScale(session);
     applyAccountHotkeys(session);
+    applyAccountSound(session);
   }
   return session;
 };
@@ -385,5 +463,23 @@ export const takeGuestPlay = (): boolean => {
     return marked;
   } catch {
     return false;
+  }
+};
+
+/**
+ * «Следующая партия» со сцены конца — field-backlog, пункт 33: меню после выхода из партии
+ * открывается сразу на окне новой игры, а гостю — сразу на выборе расы (его партию
+ * настраивает сервер). Кнопка, которая вела бы в меню, где нужно нажать ещё раз, — лишний
+ * шаг ровно в миг, когда игрок решает, играть ли снова.
+ */
+export const nextGameFromEnding = (guest: boolean): void => {
+  if (guest) {
+    markGuestPlay();
+    return;
+  }
+  try {
+    writeMenuScreen('newgame');
+  } catch {
+    // без метки игрок попадёт в меню — прежний путь, а не поломка
   }
 };

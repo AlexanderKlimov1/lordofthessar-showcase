@@ -20,13 +20,30 @@
       "POLLUTION_HALVINGS": "How many times the dirty production is halved before the clean-up is charged: MOO II divides it by 2 with a Pollution Processor, by 4 with an Atmosphere Renewer and by 8 with both, so the halvings of all buildings add up",
       "POLLUTION_TOLERANCE_PERCENT": "Percent added to how much industry the planet tolerates without pollution (Nano Disassemblers double it)",
       "POLLUTION_NONE": "No pollution at all, whatever the industry (Core Waste Dump; the Tolerant race gets the same)",
-      "GROUND_DEFENCE_PERCENT": "Percent added to the strength of the colony's defenders in ground combat (barracks); defence only"
+      "GROUND_DEFENCE_PERCENT": "Percent added to the strength of the colony's defenders in ground combat (barracks); defence only",
+      "MORALE_PERCENT": "Percent added to the colony morale (Holo Simulator, Elysium Dome); morale is a percent to everything the colonists give — food, production, research and tax",
+      "BARRACKS": "The colony keeps a garrison (both barracks): a Dictatorship or Feudal colony without one loses a fifth of its morale, an Imperium colony with one gains a fifth",
+      "CAPITOL": "The seat of the empire (Capitol): one per empire, on the home world from the start; without it every colony loses morale by the government's rule and no new leaders come",
+      "ALIEN_MANAGEMENT": "The colony of two races keeps its morale, and the subjects become citizens in two turns each (Alien Management Center)"
     },
     "pollution_buildings": "Of the four clean-up buildings only the cost of the Pollution Processor is taken from the original (80 PP, StrategyWiki, Chemistry); their upkeep and the cost of the other three are a reconstruction on the scale of this catalogue, with the Core Waste Dump the dearest to keep — the original calls its maintenance very high.",
     "scope": "Only buildings whose effect this model expresses. Military installations, shipyards and ship modules wait for their subsystems.",
     "rules": "A building may also act by a rule rather than by a number: star-base is the colony shipyard, and without it a colony builds only the two smallest hulls."
   },
   "buildings": [
+    {
+      "code": "capitol",
+      "name": { "en": "Capitol", "ru": "Столица" },
+      "description": {
+        "en": "The seat of the empire. Lost with its colony, it takes a share of the morale of every colony with it, and no new leaders come until a Capitol is built anew. The home world has it from the start; an empire without one may build it on any colony.",
+        "ru": "Престол империи. Потерянная вместе с колонией, она уносит долю морали всех колоний, и новые лидеры не приходят, пока столицу не отстроят. Родной мир получает её с начала партии; империя без столицы строит её на любой колонии."
+      },
+      "cost": 200,
+      "upkeep": 0,
+      "effects": [
+        { "type": "CAPITOL", "amount": 1 }
+      ]
+    },
     {
       "code": "star-base",
       "name": { "en": "Star Base", "ru": "Звёздная база" },
@@ -108,7 +125,9 @@
       "cost": 400,
       "upkeep": 4,
       "required_tech": "planetary-flux-shield",
-      "effects": []
+      "effects": [
+        { "type": "RADIATION_SHIELD", "amount": 1 }
+      ]
     },
     {
       "code": "planetary-barrier-shield",
@@ -120,7 +139,9 @@
       "cost": 900,
       "upkeep": 6,
       "required_tech": "planetary-barrier-shield",
-      "effects": []
+      "effects": [
+        { "type": "RADIATION_SHIELD", "amount": 1 }
+      ]
     },
     {
       "code": "artemis-system-net",
@@ -138,8 +159,8 @@
       "code": "marine-barracks",
       "name": { "en": "Marine Barracks", "ru": "Казармы морской пехоты" },
       "description": {
-        "en": "Trained soldiers defend the colony instead of colonists with rifles: the defence is half again as strong. Built from the first turn, with no technology at all; the home world gets it at once.",
-        "ru": "Колонию защищают обученные бойцы, а не жители с винтовками: оборона в полтора раза крепче. Строится с первого хода, без всяких технологий; родной мир получает её сразу."
+        "en": "Trained soldiers defend the colony instead of colonists with rifles: the defence is half again as strong. Built from the first turn, with no technology at all; the home world gets it at once. A Dictatorship or Feudal colony without barracks loses a fifth of its morale.",
+        "ru": "Колонию защищают обученные бойцы, а не жители с винтовками: оборона в полтора раза крепче. Строится с первого хода, без всяких технологий; родной мир получает её сразу. Колония диктатуры или феодализма без казарм теряет пятую часть морали."
       },
       "cost": 60,
       "upkeep": 1,
@@ -147,6 +168,10 @@
         {
           "type": "GROUND_DEFENCE_PERCENT",
           "amount": 50
+        },
+        {
+          "type": "BARRACKS",
+          "amount": 1
         }
       ]
     },
@@ -164,6 +189,10 @@
         {
           "type": "GROUND_DEFENCE_PERCENT",
           "amount": 100
+        },
+        {
+          "type": "BARRACKS",
+          "amount": 1
         }
       ]
     },
@@ -279,6 +308,90 @@
       "effects": [
         { "type": "PRODUCTION_FLAT", "amount": 10 },
         { "type": "PRODUCTION_PER_WORKER", "amount": 2 }
+      ]
+    },
+    {
+      "code": "robotic-factory",
+      "name": { "en": "Robotic Factory", "ru": "Роботизированный завод" },
+      "description": {
+        "en": "Needs no workers: gives 5 production on ultra poor planets, 8 on poor, 10 on average, 15 on rich and 20 on ultra rich. Unlike other factories, this production pollutes.",
+        "ru": "Работает без рабочих: даёт 5 единиц производства на сверхбедной планете, 8 на бедной, 10 на обычной, 15 на богатой и 20 на сверхбогатой. В отличие от прочих заводов, это производство пачкает планету."
+      },
+      "cost": 200,
+      "upkeep": 3,
+      "required_tech": "robotic-factory",
+      "effects": [
+        { "type": "ROBOTIC_FACTORY", "amount": 1 }
+      ]
+    },
+    {
+      "code": "planetary-radiation-shield",
+      "name": { "en": "Planetary Radiation Shield", "ru": "Планетарный радиационный щит" },
+      "description": {
+        "en": "Shields the surface from solar and cosmic radiation: a radiated world becomes barren, with room for more colonists.",
+        "ru": "Закрывает поверхность от солнечного и космического излучения: облучённый мир становится бесплодным, и места для жителей на нём становится больше."
+      },
+      "cost": 80,
+      "upkeep": 1,
+      "required_tech": "radiation-shield",
+      "effects": [
+        { "type": "RADIATION_SHIELD", "amount": 1 }
+      ]
+    },
+    {
+      "code": "food-replicators",
+      "name": { "en": "Food Replicators", "ru": "Пищевые репликаторы" },
+      "description": {
+        "en": "Whatever food the colony lacks after deliveries it makes from its own production, one for one.",
+        "ru": "Еду, которой колонии не хватает после подвоза, она делает из своего производства, единица за единицу."
+      },
+      "cost": 200,
+      "upkeep": 4,
+      "required_tech": "food-replicators",
+      "effects": [
+        { "type": "FOOD_REPLICATOR", "amount": 1 }
+      ]
+    },
+    {
+      "code": "warp-interdictor",
+      "name": { "en": "Warp Interdictor", "ru": "Варп-перехватчик" },
+      "description": {
+        "en": "An enemy fleet flying into this system covers the last 3 parsecs at 1 parsec a turn, and star gates do not lead here.",
+        "ru": "Чужой флот, летящий в эту систему, последние 3 парсека идёт по одному парсеку за ход, и звёздные врата сюда не ведут."
+      },
+      "cost": 300,
+      "upkeep": 3,
+      "required_tech": "warp-interdictor",
+      "effects": [
+        { "type": "WARP_INTERDICTOR", "amount": 3 }
+      ]
+    },
+    {
+      "code": "space-academy",
+      "name": { "en": "Space Academy", "ru": "Космическая академия" },
+      "description": {
+        "en": "Trains ship crews: ships built here start as Regulars, and ships stationed in the system gain 1 experience a turn.",
+        "ru": "Учит экипажи кораблей: корабли, построенные здесь, начинают обученными, а стоящие в системе получают по очку опыта за ход."
+      },
+      "cost": 100,
+      "upkeep": 2,
+      "required_tech": "space-academy",
+      "effects": [
+        { "type": "SPACE_ACADEMY", "amount": 1 }
+      ]
+    },
+    {
+      "code": "gravity-generator",
+      "name": { "en": "Gravity Generator", "ru": "Гравитационный генератор" },
+      "description": {
+        "en": "Removes the production penalty of a planet whose gravity the colonists are not used to.",
+        "ru": "Снимает штраф производства на планете, тяжесть которой непривычна жителям."
+      },
+      "cost": 120,
+      "upkeep": 2,
+      "required_tech": "gravity-generator",
+      "effects": [
+        { "type": "GRAVITY_NORMAL", "amount": 1 }
       ]
     },
     {
@@ -464,6 +577,48 @@
       "required_tech": "core-waste-dump",
       "effects": [
         { "type": "POLLUTION_NONE", "amount": 1 }
+      ]
+    },
+    {
+      "code": "holo-simulator",
+      "name": { "en": "Holo Simulator", "ru": "Голосимулятор" },
+      "description": {
+        "en": "Leisure for the colonists: morale rises by a fifth, and with it the food, production, research and tax of every colonist.",
+        "ru": "Досуг для жителей: мораль растёт на пятую часть, а с ней еда, производство, наука и налог каждого жителя."
+      },
+      "cost": 120,
+      "upkeep": 1,
+      "required_tech": "holo-simulator",
+      "effects": [
+        { "type": "MORALE_PERCENT", "amount": 20 }
+      ]
+    },
+    {
+      "code": "pleasure-dome",
+      "name": { "en": "Elysium Dome", "ru": "Купол Элизия" },
+      "description": {
+        "en": "The finest entertainment in the galaxy: morale rises by three tenths.",
+        "ru": "Лучшие развлечения галактики: мораль растёт на три десятых."
+      },
+      "cost": 250,
+      "upkeep": 3,
+      "required_tech": "pleasure-dome",
+      "effects": [
+        { "type": "MORALE_PERCENT", "amount": 30 }
+      ]
+    },
+    {
+      "code": "alien-management-center",
+      "name": { "en": "Alien Management Center", "ru": "Центр управления чужими" },
+      "description": {
+        "en": "Two races live side by side without strife: the colony keeps its morale, and the subjects become citizens in two turns each, whatever the government.",
+        "ru": "Две расы живут бок о бок без раздора: колония не теряет морали, а подданные становятся своими за два хода на жителя при любом строе."
+      },
+      "cost": 60,
+      "upkeep": 1,
+      "required_tech": "alien-management-center",
+      "effects": [
+        { "type": "ALIEN_MANAGEMENT", "amount": 1 }
       ]
     }
   ]

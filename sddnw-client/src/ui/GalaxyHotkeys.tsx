@@ -4,6 +4,10 @@ import { hotkeys, matches, type HotkeyAction } from './hotkeys';
 import { toggleGameMenu } from './GameMenu';
 import { canEndTurn } from './SidePanel';
 import { modalOpen } from './useModalEscape';
+import { toggleFullscreen } from './fullscreen';
+import { idleFleets } from './turnAhead';
+import { gameEvents } from '../events/gameEvents';
+import { playTurnSound } from '../audio/uiSfx';
 
 /**
  * Горячие клавиши карты галактики — п. 11.1.
@@ -62,7 +66,40 @@ export function GalaxyHotkeys({ endingTurn, onEndTurn }: {
         return;
       }
       // Открытое окно забирает клавиатуру себе — см. описание компонента.
-      if (modalOpen() || typing(event.target)) {
+      if (typing(event.target)) {
+        return;
+      }
+      /*
+        Прицел флота (пункт 171): окно флота модальное, но цель выбирают на карте — стрелки и
+        Enter принадлежат прицелу, пока он взведён. Прочие клавиши окну не мешают.
+      */
+      const aiming = useGameStore.getState().targetingFleetId !== null;
+      const aimKey = ARROWS[event.code] !== undefined || event.code === 'Enter' || event.code === 'NumpadEnter';
+      if (modalOpen() && !(aiming && aimKey)) {
+        return;
+      }
+
+      /*
+        КАРТА С КЛАВИАТУРЫ — field-backlog, пункт 171: стрелки ведут выбор от звезды к звезде,
+        Enter открывает систему (в прицеле — назначает цель флоту), пробел выбирает свой флот у
+        выбранной звезды. Клавиши закреплены, как Esc: это навигация, а не команды раскладки.
+        Enter и пробел на кнопке принадлежат кнопке — фокус там значит, что жмут её.
+      */
+      const step = ARROWS[event.code];
+      if (step) {
+        gameEvents.emit('map:step', step);
+        event.preventDefault();
+        return;
+      }
+      const onControl = (event.target as HTMLElement | null)?.closest?.('button, a, [role="button"]');
+      if ((event.code === 'Enter' || event.code === 'NumpadEnter') && !onControl) {
+        gameEvents.emit('map:activate', undefined);
+        event.preventDefault();
+        return;
+      }
+      if (event.code === 'Space' && !onControl) {
+        gameEvents.emit('map:fleet-here', undefined);
+        event.preventDefault();
         return;
       }
 
@@ -87,6 +124,14 @@ export function GalaxyHotkeys({ endingTurn, onEndTurn }: {
 }
 
 /** Что делает каждое действие. Новое действие заводится здесь и в `ui/hotkeys.ts`. */
+/** Стрелки карты — направление шага выбора (ось Y экрана смотрит вниз). */
+const ARROWS: Record<string, { dx: number; dy: number }> = {
+  ArrowUp: { dx: 0, dy: -1 },
+  ArrowDown: { dx: 0, dy: 1 },
+  ArrowLeft: { dx: -1, dy: 0 },
+  ArrowRight: { dx: 1, dy: 0 },
+};
+
 const ACTIONS: Record<HotkeyAction, (turn: TurnAction) => void> = {
   turn: endTurn,
   research: () => useGameStore.getState().setOverlay('research'),
@@ -100,6 +145,8 @@ const ACTIONS: Record<HotkeyAction, (turn: TurnAction) => void> = {
   // клавиша его переключает, как и нажатие на пункт.
   game: toggleGameMenu,
   homeworld: openHomeworld,
+  fullscreen: toggleFullscreen,
+  idle: nextIdle,
 };
 
 interface TurnAction {
@@ -131,6 +178,8 @@ function typing(target: EventTarget | null): boolean {
 function endTurn({ endingTurn, onEndTurn }: TurnAction): void {
   const { game, waitingFor } = useGameStore.getState();
   if (canEndTurn(game, waitingFor, endingTurn)) {
+    // Клавиша звучит так же, как кнопка хода: действие одно.
+    playTurnSound();
     onEndTurn();
   }
 }
@@ -146,6 +195,42 @@ function endTurn({ endingTurn, onEndTurn }: TurnAction): void {
  * нечего — клавиша молчит. Подставлять вместо него другую колонию нельзя: «родной мир»
  * перестало бы быть правдой, а о потере игрок узнавал бы из подписи чужого экрана.
  */
+/** Номер последнего показанного в круге «без приказа»: следующее нажатие берёт следующее. */
+let idleCursor = -1;
+
+/**
+ * Следующее, что стоит без дела, — field-backlog, пункт 205 (найдено сверкой ожиданий
+ * жанра, `docs/genre-expectations.md`): в 4X ждут клавишу «следующий без приказа».
+ *
+ * Круг один: сперва флоты без приказа (то же правило, что строка итогов хода —
+ * {@link idleFleets}), за ними колонии на товарах с пустой очередью — у них тоже нет дела.
+ * Флот открывается окном с прицелом, как нажатием по нему на карте, и карта встаёт на его
+ * звезду; колония — сразу окном стройки. Круг идёт по НОМЕРУ, а не по флоту: после приказа
+ * флот из списка уходит, и следующий занимает его место. Пусто — клавиша молчит: о том, что
+ * всё при деле, говорить нечего.
+ */
+function nextIdle(): void {
+  const { map, fleet, credentials, setOpenedColony } = useGameStore.getState();
+  const playerId = credentials?.playerId;
+  const fleets = idleFleets(map, fleet, playerId);
+  const colonies = (map?.systems ?? [])
+    .flatMap((system) => system.planets)
+    .filter((planet) => planet.ownerPlayerId === playerId && planet.colony
+      && planet.colony.projectCode === 'TRADE_GOODS' && planet.colony.queue.length === 0);
+  const total = fleets.length + colonies.length;
+  if (total === 0) {
+    return;
+  }
+  idleCursor = (idleCursor + 1) % total;
+  if (idleCursor < fleets.length) {
+    const group = fleets[idleCursor];
+    gameEvents.emit('map:focus-system', { systemId: group.starSystemId });
+    gameEvents.emit('fleet:selected', { fleetId: group.id });
+    return;
+  }
+  setOpenedColony(colonies[idleCursor - fleets.length].id, true);
+}
+
 function openHomeworld(): void {
   const { map, credentials, setOpenedColony } = useGameStore.getState();
   const home = map?.systems

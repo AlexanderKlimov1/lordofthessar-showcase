@@ -157,6 +157,8 @@ public class ExpeditionService {
         fleetService.discharge(fleet, row, 1);
 
         activity.record(player.getGame().getId(), player.getId(), EmpireActivityService.COLONIZED);
+        activity.moment(player.getGame().getId(), player, null, MilestoneService.COLONY_FOUNDED,
+                new MessageKey("milestone.colonyFounded", target.getName()));
         log.info("Игрок {} основал колонию на {} колониальным кораблём",
                 player.getName(), target.getName());
         return target;
@@ -224,12 +226,19 @@ public class ExpeditionService {
         // соседского десанта и у боя флотов (п. 15).
         diplomacyService.requireAttackAllowed(player.getId(), target.getOwnerPlayerId());
 
-        FleetShipEntity row = requireRole(player, fleet, ShipRole.TRANSPORT,
-                "fleet.noTransports");
-        Integer troops = Math.max(1, row.getColonists());
-        Integer transports = row.getShips();
+        // Садятся ВСЕ транспорты флота, а не одна строка (03.10.2026): у флота бывает два
+        // проекта транспорта — старый и вытеснивший его, — и прежде высаживалась лишь первая
+        // строка, тогда как ИИ считал перевес по десанту всего флота и проигрывал.
+        List<FleetShipEntity> rows = rowsOfRole(player, fleet, ShipRole.TRANSPORT);
+        if (rows.isEmpty()) {
+            throw new ConflictException("fleet.noTransports");
+        }
+        Integer troops = Math.max(1, rows.stream().mapToInt(FleetShipEntity::getColonists).sum());
+        Integer transports = rows.stream().mapToInt(FleetShipEntity::getShips).sum();
 
-        fleetService.discharge(fleet, row, transports);
+        for (FleetShipEntity row : rows) {
+            fleetService.discharge(fleet, row, row.getShips());
+        }
         // Десант ведёт офицер того флота, что его привёз: «Коммандос» и «Начальник
         // охраны» приписаны к флоту, а не к империи (п. 6).
         LeaderBonusService.Bonuses officers = leaderBonuses.of(player.getId());
@@ -295,6 +304,10 @@ public class ExpeditionService {
         target.setProjectCode(ColonyProject.TRADE_GOODS);
         target.setProjectPoints(0);
         target.setHomeworld(Boolean.FALSE);
+        // Подчинённая колония теряет столицу, как и захваченная, — п. 10.1.
+        planetBuildingRepository.findAllByPlanetId(target.getId()).stream()
+                .filter(row -> CapitolRules.CODE.equals(row.getBuildingCode()))
+                .forEach(planetBuildingRepository::delete);
         planetRepository.save(target);
 
         playerEvents.record(gameId, victim.getId(), turn, "MIND_CONTROL",
@@ -312,6 +325,8 @@ public class ExpeditionService {
         // десанта в нём нет вовсе, и мерить им высадки значило бы считать то, чего не было.
         activity.record(gameId, player.getId(), EmpireActivityService.CAPTURE);
         activity.record(gameId, victim.getId(), EmpireActivityService.COLONY_LOST);
+        activity.moment(gameId, player, turn, MilestoneService.COLONY_TAKEN,
+                new MessageKey("turn.ai.mindControlled", target.getName()));
         log.info("Игрок {} подчинил колонию {} ({} жителей) телепатией",
                 player.getName(), target.getName(), target.getPopulation());
         return target;
@@ -428,15 +443,25 @@ public class ExpeditionService {
      */
     private FleetShipEntity requireRole(PlayerEntity player, FleetEntity fleet,
                                         ShipRole role, String absent) {
+        return rowsOfRole(player, fleet, role).stream()
+                .findFirst()
+                .orElseThrow(() -> new ConflictException(absent));
+    }
+
+    /**
+     * Строки флота с кораблями этой роли — в порядке ПРОЕКТОВ (GameOrder.fleetShips), а не
+     * выборки: та идёт по случайному UUID строки, и «первый транспорт» в двух прогонах одной
+     * партии был разным.
+     */
+    private List<FleetShipEntity> rowsOfRole(PlayerEntity player, FleetEntity fleet, ShipRole role) {
         Map<UUID, ShipDesignEntity> designs = shipDesignService.allDesignsOf(player);
-        List<FleetShipEntity> rows = fleetService.shipsOf(fleet.getId());
-        return rows.stream()
+        return fleetService.shipsOf(fleet.getId()).stream()
                 .filter(row -> row.getShips() > 0)
                 .filter(row -> {
                     ShipDesignEntity design = designs.get(row.getDesignId());
                     return design != null && design.getRole() == role;
                 })
-                .findFirst()
-                .orElseThrow(() -> new ConflictException(absent));
+                .sorted(GameOrder.fleetShips(designs))
+                .toList();
     }
 }

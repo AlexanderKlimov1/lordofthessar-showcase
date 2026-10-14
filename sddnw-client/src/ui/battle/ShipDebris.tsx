@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CELL, fieldShipSize } from './battleVisuals';
+import { playExplosion } from '../../audio/battleSfx';
 
 /**
  * Гибель корабля — п. 8: огненный шар, ударная волна и обломки корпуса.
@@ -62,6 +63,15 @@ export function ShipDebris({
       };
     });
   });
+
+  // Звук гибели — один раз, как и в выстреле: строгий режим зовёт эффект дважды.
+  const sounded = useRef(false);
+  useEffect(() => {
+    if (!sounded.current) {
+      sounded.current = true;
+      playExplosion(x, hullSize);
+    }
+  }, [x, hullSize]);
 
   useEffect(() => {
     const timer = window.setTimeout(onDone, LIFETIME_MS + 120);

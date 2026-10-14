@@ -154,6 +154,16 @@ public class BalanceController {
         balanceRunService.forget(id);
     }
 
+    /**
+     * Баланс рас в открытую — field-backlog, пункты 70 и 101: итоги законченных прогонов, без
+     * управления. Только администратору, модератору и основателю (решение хозяина проекта 08.10.2026).
+     */
+    @GetMapping("/open")
+    public com.sddnw.server.dto.OpenBalanceDto open(@AccountToken String accountToken) {
+        accountService.requireInsider(accountToken);
+        return balanceRunService.openSummary();
+    }
+
     /** Один прогон целиком — со снимком цен и приговорами. */
     @GetMapping("/runs/{runId}")
     public BalanceRunDto run(@PathVariable UUID runId, @AccountToken String accountToken) {

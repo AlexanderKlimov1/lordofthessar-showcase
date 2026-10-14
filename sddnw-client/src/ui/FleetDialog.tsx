@@ -3,10 +3,11 @@ import { gameApi } from '../api/client';
 import type { FleetGroup } from '../api/types';
 import { useGameStore } from '../state/gameStore';
 import { useModalEscape } from './useModalEscape';
-import { fleetReach } from './fleet/fleetShips';
+import { fleetReach, gatesFor, travelTurns } from './fleet/fleetShips';
 import { tf, useT } from '../i18n';
 import { Figure } from './Figure';
 import { ACCENTS, figureLabelClass } from './accent';
+import { ActionError } from './feedback/ActionError';
 
 /**
  * Отбор кораблей для отданного приказа — п. 8: последний шаг отправки флота.
@@ -73,17 +74,31 @@ export function FleetDialog({
   // дополнительными баками уходит дальше, и окно не должно отказывать ему в том, что карта
   // уже показала достижимым.
   const reach = fleetReach(empireFleet, fleet);
-  const reachable = reach.reachableSystemIds.includes(targetSystemId);
+  /*
+    Дальность уходящих — по ОТОБРАННЫМ кораблям (field-backlog, пункт 206): сервер меряет её по
+    тому, что улетает (`FleetService.requireInRange`), и флот с баками, отправленный без них,
+    дальних звёзд не достанет. Прежде окно мерило весь флот и доводило до отказа. Дальностей
+    всего две — с баками и без, — поэтому и списков достижимого два.
+  */
+  const leaving = fleet.composition.filter((ship) => (picked[ship.designId] ?? 0) > 0);
+  const leavingFar = leaving.length > 0 && leaving.every((ship) => (ship.rangePercent ?? 0) > 0);
+  const reachList = inFlight || leaving.length === 0
+    ? reach.reachableSystemIds
+    : (leavingFar ? empireFleet?.reachableFarSystemIds : empireFleet?.reachableSystemIds) ?? [];
+  const reachable = reachList.includes(targetSystemId);
+  // Туда, где флот стоит или куда уже летит, приказ не нужен — сервер ответил бы отказом
+  // (`fleet.alreadyThere`, `fleet.alreadyHeading`); кнопка гаснет и говорит почему (пункт 76).
+  const pointless = inFlight ? targetSystemId === fleet.targetSystemId : targetSystemId === fleet.starSystemId;
   const { t } = useT();
   const targetName = target?.explored ? (target.name ?? '') : t('fleetOrder.unexplored');
 
-  // Срок в пути — те же правила, что на сервере (FlightRules): расстояние в парсеках,
-  // делённое на скорость самого медленного корабля, и не меньше хода.
-  const parsecs =
-    target && origin && map
-      ? Math.hypot(target.x - origin.x, target.y - origin.y)
-      : 0;
-  const turns = Math.max(1, Math.ceil(parsecs / Math.max(1, fleet.speed)));
+  // Срок в пути — те же правила, что на сервере (FlightRules), одним помощником с подсказкой
+  // неразведанной звезды.
+  const parsecs = target && origin && map ? Math.hypot(target.x - origin.x, target.y - origin.y) : 0;
+  const playerId = credentials?.playerId;
+  const turns = target && origin && map
+    ? travelTurns(origin, target, fleet.speed, gatesFor(empireFleet, playerId, origin, target))
+    : 1;
 
   const pick = (designId: string, ships: number, limit: number) =>
     setPicked((current) => ({ ...current, [designId]: Math.max(0, Math.min(limit, ships)) }));
@@ -225,7 +240,7 @@ export function FleetDialog({
           </span>
         </div>
 
-        {error ? <p className="mt-2 text-11 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mt-2 text-11" message={error} /> : null}
 
         <div className="mt-4 flex items-center justify-between border-t border-space-700 pt-2 text-xs">
           <button type="button" className="link" onClick={onClose}>
@@ -234,7 +249,8 @@ export function FleetDialog({
           <button
             type="button"
             className="link text-accent disabled:cursor-not-allowed disabled:text-ink-off"
-            disabled={busy || chosen === 0 || !reachable}
+            disabled={busy || chosen === 0 || !reachable || pointless}
+            title={pointless ? t(inFlight ? 'fleetOrder.alreadyHeading' : 'fleetOrder.alreadyThere') : undefined}
             onClick={send}
           >
             ▸ {busy

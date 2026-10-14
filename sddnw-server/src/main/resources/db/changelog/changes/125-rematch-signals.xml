@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        «Сыграть снова тем же составом» (field-backlog, пункт 149): у оконченной партии — ссылка на
+        новую, заведённую кем-то из участников; остальные входят в неё из сцены конца.
+    -->
+    <changeSet id="125-game-rematch" author="sddnw">
+        <addColumn tableName="game">
+            <column name="rematch_game_id" type="uuid"/>
+        </addColumn>
+    </changeSet>
+
+    <!--
+        Короткие знаки вместо чата (field-backlog, пункт 183): готовая реплика одному игроку или всем,
+        хранится КОДОМ и переводится словарём читателя. Без свободного текста — нечего модерировать.
+    -->
+    <changeSet id="125-game-signal" author="sddnw">
+        <createTable tableName="game_signal">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_game_signal_game"
+                             references="game(id)" deleteCascade="true"/>
+            </column>
+            <column name="from_player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="to_player_id" type="uuid"/>
+            <column name="code" type="varchar(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="game_signal" indexName="ix_game_signal_game">
+            <column name="game_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

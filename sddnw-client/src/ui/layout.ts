@@ -50,7 +50,24 @@ export const TURN_BUTTON_LABEL_FONT_SIZE = rem(20);
  * экрана, а в оригинале окно галактики примыкает к соседним панелям вплотную.
  */
 export const SIDE_PANEL_WIDTH_PX = 384;
-export const SIDE_PANEL_WIDTH = rem(SIDE_PANEL_WIDTH_PX);
+
+/**
+ * Самая узкая панель — на узком окне (field-backlog, пункт 60). На планшете в книжной
+ * ориентации (768 точек) панель в 384 забирала ПОЛОВИНУ экрана, и карте оставалась колонка;
+ * поэтому панель ужимается до трети ширины окна (`SIDE_PANEL_SHARE`), но не уже этого числа:
+ * уже — и крупные надписи состояния перестают помещаться в строку. На широком экране (от
+ * 1280 точек) ничего не меняется — треть там шире самой панели.
+ */
+const SIDE_PANEL_MIN_PX = 320;
+const SIDE_PANEL_SHARE = 0.3;
+
+/**
+ * Ширина панели для разметки: CSS считает её сам при смене размера окна. Треть окна
+ * множится на масштаб текста — иначе крупный текст на широком экране ужимал бы панель,
+ * которой он и так тесен.
+ */
+export const SIDE_PANEL_WIDTH = `min(${rem(SIDE_PANEL_WIDTH_PX)}, max(${rem(SIDE_PANEL_MIN_PX)}, `
+  + `calc(${SIDE_PANEL_SHARE * 100}vw * var(--sddnw-text-scale))))`;
 
 /**
  * Та же ширина, но В ПИКСЕЛЯХ И ПО НЫНЕШНЕМУ МАСШТАБУ — для карты галактики.
@@ -59,7 +76,11 @@ export const SIDE_PANEL_WIDTH = rem(SIDE_PANEL_WIDTH_PX);
  * приходится досчитывать самим. Функция, а не число: масштаб меняется в игре, и
  * запомненное при загрузке значение оставило бы карту под панелью.
  */
-export const sidePanelWidthPx = (): number => SIDE_PANEL_WIDTH_PX * textScaleFactor();
+export const sidePanelWidthPx = (): number => {
+  const scale = textScaleFactor();
+  return Math.min(SIDE_PANEL_WIDTH_PX * scale,
+    Math.max(SIDE_PANEL_MIN_PX * scale, SIDE_PANEL_SHARE * window.innerWidth * scale));
+};
 
 /**
  * Атрибут, которым в разметке подписаны панели поверх карты: сцена снимает с них границы

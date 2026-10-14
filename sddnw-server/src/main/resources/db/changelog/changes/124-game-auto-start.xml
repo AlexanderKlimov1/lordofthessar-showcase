@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        «Сыграть с людьми» (field-backlog, пункт 65): партия подбора стартует сама, когда за столом
+        хотя бы двое людей и вышел срок ожидания. Пусто — обычная партия, её стартует создатель.
+    -->
+    <changeSet id="124-game-auto-start" author="sddnw">
+        <addColumn tableName="game">
+            <column name="auto_start_at" type="timestamp with time zone"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

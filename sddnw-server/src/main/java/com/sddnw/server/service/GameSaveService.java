@@ -14,6 +14,7 @@ import com.sddnw.server.domain.PopulationJobs;
 import com.sddnw.server.domain.entity.EmpireHistoryEntity;
 import com.sddnw.server.domain.entity.PlayerTechnologyEntity;
 import com.sddnw.server.domain.entity.StarSystemEntity;
+import com.sddnw.server.domain.enums.BannerColor;
 import com.sddnw.server.domain.enums.GameStatus;
 import com.sddnw.server.domain.enums.PlayerType;
 import com.sddnw.server.domain.save.GameSnapshot;
@@ -25,12 +26,16 @@ import com.sddnw.server.domain.save.DiplomacyRelationSnapshot;
 import com.sddnw.server.domain.save.FleetShipSnapshot;
 import com.sddnw.server.domain.save.ShipDesignComponentSnapshot;
 import com.sddnw.server.domain.save.ShipDesignSnapshot;
+import com.sddnw.server.domain.enums.ShipMission;
 import com.sddnw.server.domain.enums.ShipRole;
 import com.sddnw.server.domain.save.FleetSnapshot;
 import com.sddnw.server.domain.save.PopulationTransferSnapshot;
 import com.sddnw.server.domain.save.EmpireHistorySnapshot;
 import com.sddnw.server.domain.save.PlayerTechnologySnapshot;
 import com.sddnw.server.domain.save.SpySnapshot;
+import com.sddnw.server.domain.save.PlanetIntelSnapshot;
+import com.sddnw.server.domain.entity.PlanetIntelEntity;
+import com.sddnw.server.domain.entity.PlayerExploredSystemEntity;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import com.sddnw.server.domain.entity.DiplomacyRelationEntity;
@@ -106,6 +111,15 @@ public class GameSaveService {
     private final EmpireHistoryRepository empireHistoryRepository;
     private final PlanetBuildingRepository planetBuildingRepository;
     private final SpyRepository spyRepository;
+    private final com.sddnw.server.repository.PlayerExploredSystemRepository exploredRepository;
+    private final com.sddnw.server.repository.PlanetIntelRepository intelRepository;
+    private final com.sddnw.server.repository.ObservedTechRepository observedRepository;
+    private final com.sddnw.server.repository.MonsterIntelRepository monsterIntelRepository;
+    private final com.sddnw.server.repository.GameMilestoneRepository milestoneRepository;
+    /** Предложения, ждущие ответа человека (field-backlog, пункт 182). */
+    private final com.sddnw.server.repository.DiplomacyProposalRepository proposalRepository;
+    /** Лидеры — в слепок (трек техдолга, пункт 28). */
+    private final com.sddnw.server.repository.PlayerLeaderRepository leaderRepository;
     private final DiplomacyRelationRepository relationRepository;
     private final FleetRepository fleetRepository;
     private final FleetShipRepository fleetShipRepository;
@@ -116,6 +130,10 @@ public class GameSaveService {
     private final PlayerRoster playerRoster;
     private final ObjectMapper objectMapper;
 
+    /** Копии наборов справочников партий — пункт 42; полем, чтобы не растить конструктор дальше. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.sddnw.server.repository.GameModRepository gameModRepository;
+
     public GameSaveService(GameSaveRepository gameSaveRepository,
                            GameRepository gameRepository,
                            PlayerRepository playerRepository,
@@ -124,6 +142,12 @@ public class GameSaveService {
                            EmpireHistoryRepository empireHistoryRepository,
                            PlanetBuildingRepository planetBuildingRepository,
                            SpyRepository spyRepository,
+                           com.sddnw.server.repository.PlayerExploredSystemRepository exploredRepository,
+                           com.sddnw.server.repository.PlanetIntelRepository intelRepository,
+                           com.sddnw.server.repository.ObservedTechRepository observedRepository,
+                           com.sddnw.server.repository.MonsterIntelRepository monsterIntelRepository,
+                           com.sddnw.server.repository.GameMilestoneRepository milestoneRepository,
+                           com.sddnw.server.repository.DiplomacyProposalRepository proposalRepository,
                            DiplomacyRelationRepository relationRepository,
                            FleetRepository fleetRepository,
                            FleetShipRepository fleetShipRepository,
@@ -132,7 +156,9 @@ public class GameSaveService {
                            ShipDesignService shipDesignService,
                            PopulationTransferRepository transferRepository,
                            PlayerRoster playerRoster,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           com.sddnw.server.repository.PlayerLeaderRepository leaderRepository) {
+        this.leaderRepository = leaderRepository;
         this.gameSaveRepository = gameSaveRepository;
         this.gameRepository = gameRepository;
         this.playerRepository = playerRepository;
@@ -141,6 +167,12 @@ public class GameSaveService {
         this.empireHistoryRepository = empireHistoryRepository;
         this.planetBuildingRepository = planetBuildingRepository;
         this.spyRepository = spyRepository;
+        this.exploredRepository = exploredRepository;
+        this.intelRepository = intelRepository;
+        this.observedRepository = observedRepository;
+        this.monsterIntelRepository = monsterIntelRepository;
+        this.milestoneRepository = milestoneRepository;
+        this.proposalRepository = proposalRepository;
         this.relationRepository = relationRepository;
         this.fleetRepository = fleetRepository;
         this.fleetShipRepository = fleetShipRepository;
@@ -229,7 +261,11 @@ public class GameSaveService {
      * падает на записи — «no transaction is in progress». Проверено: с {@code REQUIRED}
      * автосохранение не появлялось ни разу, а в журнале оставалось ровно это.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    // Снимок одного мгновения (REPEATABLE_READ): слепок пишется в фоне, за ответом игроку
+    // (`GameService.autoSaves`), и следующий ход может зафиксироваться посреди чтения галактики —
+    // без снимка в слепок легли бы половина одного хода и половина другого.
+    @Transactional(propagation = Propagation.REQUIRES_NEW,
+            isolation = org.springframework.transaction.annotation.Isolation.REPEATABLE_READ)
     public GameSaveDto autoSave(GameEntity game, Integer completedTurn) {
         gameSaveRepository.deleteAll(gameSaveRepository.findByGameIdAndAutoIsTrue(game.getId()));
         return write(game, completedTurn, Boolean.TRUE);
@@ -299,7 +335,89 @@ public class GameSaveService {
         if (Boolean.TRUE.equals(save.getAuto()) && !loadableBy(save.getHumanAccounts(), accountId)) {
             throw new ForbiddenException("save.notYours");
         }
-        GameSnapshot snapshot = deserialize(save.getState());
+        GameEntity game = restore(deserialize(save.getState()), Boolean.FALSE, accountId);
+        log.info("Загружено сохранение {}: партия {} продолжается с хода {}",
+                saveId, game.getName(), game.getTurn());
+        return game;
+    }
+
+    /** Формат файла выгруженной партии — пункт 160: узнаётся при подъёме, чужой файл не годится. */
+    public static final String FILE_FORMAT = "lord-of-thessar-save";
+    public static final Integer FILE_VERSION = 1;
+
+    /** Автосохранение партии — пункт 160: «партия сохранена на ходу N» в меню «Игра». */
+    @Transactional(readOnly = true)
+    public java.util.Optional<GameSaveDto> autosaveOf(UUID gameId, UUID accountId) {
+        return gameSaveRepository.findByGameIdAndAutoIsTrue(gameId).stream()
+                .findFirst()
+                .map(save -> toDto(save, accountId));
+    }
+
+    /**
+     * Слепок файлом — field-backlog, пункт 160 (решение хозяина проекта 07.10.2026): ответ на
+     * «а если сервер закроется». Отдаётся тому, кто вправе этот слепок поднять, — то же правило,
+     * что у загрузки; сам слепок лежит в файле как есть, а заголовок называет формат и версию.
+     */
+    @Transactional(readOnly = true)
+    public com.fasterxml.jackson.databind.node.ObjectNode exportFile(UUID saveId, UUID accountId) {
+        GameSaveEntity save = gameSaveRepository.findById(saveId)
+                .orElseThrow(() -> new NotFoundException("save.notFound", saveId));
+        if (Boolean.TRUE.equals(save.getAuto()) && !loadableBy(save.getHumanAccounts(), accountId)) {
+            throw new ForbiddenException("save.notYours");
+        }
+        com.fasterxml.jackson.databind.node.ObjectNode file = objectMapper.createObjectNode();
+        file.put("format", FILE_FORMAT);
+        file.put("version", FILE_VERSION);
+        file.put("name", save.getName());
+        file.put("turn", save.getTurn());
+        file.put("savedAt", save.getSavedAt().toString());
+        try {
+            file.set("state", objectMapper.readTree(save.getState()));
+        } catch (JsonProcessingException e) {
+            throw new ConflictException("save.corrupted");
+        }
+        return file;
+    }
+
+    /**
+     * Партия из файла — пункт 160: только ОДИНОЧНАЯ (в слепке ровно один человек), и поднимает
+     * её тот, кто принёс файл, — его империей. Партия помечена {@code imported}: файл мог быть
+     * поправлен руками, и её итог не идёт в историю и сравнения. В список сохранений файл не
+     * ложится — тот лежит общей кучей, а файл принадлежит одному игроку.
+     */
+    @Transactional
+    public GameEntity importFile(String content, UUID accountId) {
+        GameSnapshot snapshot;
+        try {
+            com.fasterxml.jackson.databind.JsonNode file = objectMapper.readTree(content);
+            if (file == null || !FILE_FORMAT.equals(file.path("format").asText())
+                    || !file.hasNonNull("state")) {
+                throw new ConflictException("save.fileUnknown");
+            }
+            snapshot = objectMapper.treeToValue(file.get("state"), GameSnapshot.class);
+        } catch (JsonProcessingException | IllegalArgumentException e) {
+            throw new ConflictException("save.fileUnknown");
+        }
+        if (snapshot == null || snapshot.players() == null || snapshot.systems() == null) {
+            throw new ConflictException("save.fileUnknown");
+        }
+        long humans = snapshot.players().stream()
+                .filter(player -> player.playerType() == PlayerType.HUMAN)
+                .count();
+        if (humans != 1) {
+            throw new ConflictException("save.fileSingleOnly");
+        }
+        GameEntity game = restore(snapshot, Boolean.TRUE, accountId);
+        log.info("Поднята партия {} из файла: продолжается с хода {}", game.getName(), game.getTurn());
+        return game;
+    }
+
+    /**
+     * Поднимает партию из слепка новой игрой. Партия из файла ({@code imported}) отдаёт своего
+     * единственного человека тому, кто файл принёс: на другом сервере или другой записи прежнего
+     * хозяина нет.
+     */
+    private GameEntity restore(GameSnapshot snapshot, Boolean imported, UUID accountId) {
 
         GameEntity game = new GameEntity();
         game.setName(snapshot.name());
@@ -322,12 +440,38 @@ public class GameSaveService {
         game.setCouncil(snapshot.council() == null || Boolean.TRUE.equals(snapshot.council()));
         game.setCouncilRefused(Boolean.TRUE.equals(snapshot.councilRefused()));
         game.setAiActive(snapshot.aiActive() == null || Boolean.TRUE.equals(snapshot.aiActive()));
+        game.setAdminWatched(Boolean.TRUE.equals(snapshot.adminWatched()));
+        game.setImported(Boolean.TRUE.equals(imported) || Boolean.TRUE.equals(snapshot.imported()));
+        game.setTutorial(Boolean.TRUE.equals(snapshot.tutorial()));
+        game.setSpectators(Boolean.TRUE.equals(snapshot.spectators()));
+        game.setGalaxyFeature(snapshot.galaxyFeature());
+        game.setWeeklyWeek(snapshot.weeklyWeek());
+        game.setAiSkill(snapshot.aiSkill());
+        game.setMightTurn(snapshot.mightTurn());
+        game.setPeacefulAi(Boolean.TRUE.equals(snapshot.peacefulAi()));
+        game.setPlayedOn(Boolean.TRUE.equals(snapshot.playedOn()));
         game.setCreatedAt(OffsetDateTime.now());
         game.setStartedAt(OffsetDateTime.now());
         // Поднятая партия начинает ход заново: срок, истёкший в слепке, отнял бы у
         // вернувшихся ход, которого они не видели (backlog-promo, пункт 11).
         game.setTurnStartedAt(game.getStartedAt());
+        // Набор справочников (пункт 42): поднятая партия играет теми же правилами, одиночной.
+        if (snapshot.mod() != null) {
+            game.setModded(Boolean.TRUE);
+            game.setMaxHumanPlayers(1);
+            game.setInviteOnly(Boolean.TRUE);
+        }
         gameRepository.saveAndFlush(game);
+        if (snapshot.mod() != null) {
+            com.sddnw.server.domain.entity.GameModEntity copy = new com.sddnw.server.domain.entity.GameModEntity();
+            copy.setGameId(game.getId());
+            copy.setName(snapshot.mod().name());
+            copy.setBuildings(snapshot.mod().buildings());
+            copy.setShips(snapshot.mod().ships());
+            copy.setTechnologies(snapshot.mod().technologies());
+            copy.setLeaders(snapshot.mod().leaders());
+            gameModRepository.save(copy);
+        }
 
         // Игроков и системы сохраняем своими репозиториями, а не через коллекции игры:
         // сохранение уже существующей игры идёт через merge, а он раздаёт идентификаторы
@@ -341,6 +485,9 @@ public class GameSaveService {
             if (player.getPlayerType() == PlayerType.AI && player.getAiPersonality() == null) {
                 playerRoster.giveCharacter(player, game, player.getSlot());
             }
+            if (Boolean.TRUE.equals(imported) && player.getPlayerType() == PlayerType.HUMAN) {
+                player.setAccountId(accountId);
+            }
             players.add(player);
         }
         playerRepository.saveAllAndFlush(players);
@@ -350,6 +497,14 @@ public class GameSaveService {
         Map<Integer, UUID> playerIdBySlot = new HashMap<>();
         for (PlayerEntity player : players) {
             playerIdBySlot.put(player.getSlot(), player.getId());
+        }
+        // Наставник ученика (пункт 184) хранится местом: идентификаторы игроков у поднятой партии новые.
+        for (PlayerSnapshot snapshotPlayer : snapshot.players()) {
+            if (snapshotPlayer.mentorSlot() != null) {
+                UUID mentor = playerIdBySlot.get(snapshotPlayer.mentorSlot());
+                players.stream().filter(player -> player.getSlot().equals(snapshotPlayer.slot()))
+                        .findFirst().ifPresent(player -> player.setMentorPlayerId(mentor));
+            }
         }
 
         List<StarSystemEntity> systems = new ArrayList<>(snapshot.systems().size());
@@ -362,9 +517,11 @@ public class GameSaveService {
 
         restoreBuildings(snapshot, systems);
         restoreSpies(snapshot, playerIdBySlot);
+        restoreFog(snapshot, playerIdBySlot, systems);
         restoreRelations(snapshot, playerIdBySlot);
         List<ShipDesignEntity> designs = restoreShipDesigns(snapshot, game, players, playerIdBySlot);
-        restoreFleets(snapshot, playerIdBySlot, systems, designs);
+        Map<Integer, UUID> fleetIdByIndex = restoreFleets(snapshot, playerIdBySlot, systems, designs);
+        restoreLeaders(snapshot, playerIdBySlot, systems, fleetIdByIndex);
         restoreTransfers(snapshot, playerIdBySlot, systems);
         linkHomeSystems(players, snapshot, systems);
         playerRepository.saveAllAndFlush(players);
@@ -380,10 +537,143 @@ public class GameSaveService {
             game.setWardenholdSinceTurn(snapshot.wardenholdSinceTurn());
         }
         gameRepository.saveAndFlush(game);
-
-        log.info("Загружено сохранение {}: партия {} продолжается с хода {}",
-                saveId, game.getName(), game.getTurn());
         return game;
+    }
+
+    /**
+     * Туман войны — п. 15: разведанные системы и память о чужих колониях. Слепки, снятые
+     * до него, их не содержат — тогда игрок знает лишь свои системы, как и прежде.
+     */
+    private void restoreFog(GameSnapshot snapshot, Map<Integer, UUID> playerIdBySlot,
+                            List<StarSystemEntity> systems) {
+        List<PlayerExploredSystemEntity> explored = new ArrayList<>();
+        List<PlanetIntelEntity> intel = new ArrayList<>();
+        UUID gameId = systems.isEmpty() ? null : systems.get(0).getGame().getId();
+        for (PlayerSnapshot player : snapshot.players()) {
+            UUID playerId = playerIdBySlot.get(player.slot());
+            if (playerId == null) {
+                continue;
+            }
+            for (Integer index : player.exploredSystems() == null ? List.<Integer>of() : player.exploredSystems()) {
+                if (index == null || index < 0 || index >= systems.size()) {
+                    continue;
+                }
+                PlayerExploredSystemEntity row = new PlayerExploredSystemEntity();
+                row.setPlayerId(playerId);
+                row.setStarSystemId(systems.get(index).getId());
+                row.setExploredTurn(snapshot.completedTurn());
+                explored.add(row);
+            }
+            for (PlanetIntelSnapshot source : player.intel() == null ? List.<PlanetIntelSnapshot>of() : player.intel()) {
+                UUID planet = planetAt(systems, source.systemIndex(), source.planetIndex());
+                UUID owner = playerIdBySlot.get(source.ownerSlot());
+                if (planet == null || owner == null || gameId == null) {
+                    continue;
+                }
+                PlanetIntelEntity row = new PlanetIntelEntity();
+                row.setGameId(gameId);
+                row.setPlayerId(playerId);
+                row.setPlanetId(planet);
+                row.setOwnerPlayerId(owner);
+                row.setPopulation(source.population() == null ? 0 : source.population());
+                row.setDefences(source.defences() == null ? "" : source.defences());
+                row.setSeenTurn(source.seenTurn() == null ? 0 : source.seenTurn());
+                intel.add(row);
+            }
+        }
+        exploredRepository.saveAll(explored);
+        intelRepository.saveAll(intel);
+
+        List<com.sddnw.server.domain.entity.ObservedTechEntity> observed = new ArrayList<>();
+        List<com.sddnw.server.domain.entity.MonsterIntelEntity> monsters = new ArrayList<>();
+        for (PlayerSnapshot player : snapshot.players()) {
+            UUID playerId = playerIdBySlot.get(player.slot());
+            if (playerId == null || gameId == null) {
+                continue;
+            }
+            for (com.sddnw.server.domain.save.ObservedTechSnapshot source
+                    : player.observedTechs() == null ? List.<com.sddnw.server.domain.save.ObservedTechSnapshot>of()
+                    : player.observedTechs()) {
+                UUID other = playerIdBySlot.get(source.otherSlot());
+                if (other == null) {
+                    continue;
+                }
+                com.sddnw.server.domain.entity.ObservedTechEntity row = new com.sddnw.server.domain.entity.ObservedTechEntity();
+                row.setGameId(gameId);
+                row.setPlayerId(playerId);
+                row.setOtherPlayerId(other);
+                row.setTechCode(source.techCode());
+                row.setObservedTurn(source.observedTurn() == null ? 0 : source.observedTurn());
+                observed.add(row);
+            }
+            for (com.sddnw.server.domain.save.MonsterIntelSnapshot source
+                    : player.monsters() == null ? List.<com.sddnw.server.domain.save.MonsterIntelSnapshot>of()
+                    : player.monsters()) {
+                if (source.systemIndex() == null || source.systemIndex() < 0 || source.systemIndex() >= systems.size()) {
+                    continue;
+                }
+                com.sddnw.server.domain.entity.MonsterIntelEntity row = new com.sddnw.server.domain.entity.MonsterIntelEntity();
+                row.setGameId(gameId);
+                row.setPlayerId(playerId);
+                row.setStarSystemId(systems.get(source.systemIndex()).getId());
+                row.setMonster(source.monster());
+                row.setStrength(source.strength() == null ? 0 : source.strength());
+                row.setSeenTurn(source.seenTurn() == null ? 0 : source.seenTurn());
+                monsters.add(row);
+            }
+        }
+        observedRepository.saveAll(observed);
+        monsterIntelRepository.saveAll(monsters);
+
+        // Предложения, ждущие ответа человека (пункт 182); у старых слепков их нет.
+        List<com.sddnw.server.domain.entity.DiplomacyProposalEntity> proposals = new ArrayList<>();
+        for (PlayerSnapshot player : snapshot.players()) {
+            UUID from = playerIdBySlot.get(player.slot());
+            if (from == null || gameId == null || player.proposals() == null) {
+                continue;
+            }
+            for (com.sddnw.server.domain.save.ProposalSnapshot source : player.proposals()) {
+                UUID to = playerIdBySlot.get(source.toSlot());
+                if (to == null) {
+                    continue;
+                }
+                com.sddnw.server.domain.entity.DiplomacyProposalEntity row =
+                        new com.sddnw.server.domain.entity.DiplomacyProposalEntity();
+                row.setGameId(gameId);
+                row.setFromPlayerId(from);
+                row.setToPlayerId(to);
+                row.setAction(source.action());
+                row.setTreaty(source.treaty());
+                row.setOfferedTech(source.offeredTech());
+                row.setRequestedTech(source.requestedTech());
+                row.setTurn(source.turn());
+                row.setAccepted(source.accepted());
+                proposals.add(row);
+            }
+        }
+        proposalRepository.saveAll(proposals);
+
+        // Летопись главных моментов (пункт 34): поднятая партия рассказывает себя дальше, а не
+        // с середины. У слепков, снятых до летописи, её нет — партия начинает её с этого хода.
+        List<com.sddnw.server.domain.entity.GameMilestoneEntity> milestones = new ArrayList<>();
+        for (PlayerSnapshot player : snapshot.players()) {
+            UUID playerId = playerIdBySlot.get(player.slot());
+            if (playerId == null || gameId == null || player.milestones() == null) {
+                continue;
+            }
+            for (com.sddnw.server.domain.save.MilestoneSnapshot source : player.milestones()) {
+                com.sddnw.server.domain.entity.GameMilestoneEntity row = new com.sddnw.server.domain.entity.GameMilestoneEntity();
+                row.setGameId(gameId);
+                row.setPlayerId(playerId);
+                row.setTurn(source.turn() == null ? 0 : source.turn());
+                row.setKind(source.kind());
+                row.setMessageKey(source.key());
+                row.setArgs(source.args() == null ? List.of() : source.args());
+                row.setPeak(source.peak() == null ? Boolean.TRUE : source.peak());
+                milestones.add(row);
+            }
+        }
+        milestoneRepository.saveAll(milestones);
     }
 
     /**
@@ -431,11 +721,15 @@ public class GameSaveService {
         }
 
         List<ShipDesignEntity> restored = new ArrayList<>(snapshot.shipDesigns().size());
+        // Источник каждого восстановленного проекта — парой, а не номером: проект без
+        // владельца пропускается, и сверка по номеру отдавала его состав СЛЕДУЮЩЕМУ проекту.
+        List<ShipDesignSnapshot> sources = new ArrayList<>(snapshot.shipDesigns().size());
         for (ShipDesignSnapshot source : snapshot.shipDesigns()) {
             UUID ownerId = playerIdBySlot.get(source.ownerSlot());
             if (ownerId == null) {
                 continue;
             }
+            sources.add(source);
             ShipDesignEntity design = new ShipDesignEntity();
             design.setGameId(game.getId());
             design.setOwnerPlayerId(ownerId);
@@ -449,13 +743,17 @@ public class GameSaveService {
             design.setRole(source.role() == null
                     ? ShipRole.WARSHIP
                     : ShipRole.valueOf(source.role()));
+            design.setAuto(Boolean.TRUE.equals(source.auto()));
+            design.setMission(source.mission() == null ? null : ShipMission.valueOf(source.mission()));
+            design.setTrophy(Boolean.TRUE.equals(source.trophy()));
+            design.setBuilt(source.built() == null ? 0 : source.built());
             restored.add(design);
         }
         shipDesignRepository.saveAllAndFlush(restored);
 
         List<ShipDesignComponentEntity> components = new ArrayList<>();
         for (int index = 0; index < restored.size(); index++) {
-            ShipDesignSnapshot source = snapshot.shipDesigns().get(index);
+            ShipDesignSnapshot source = sources.get(index);
             if (source.components() == null) {
                 continue;
             }
@@ -465,6 +763,7 @@ public class GameSaveService {
                 component.setDesignId(restored.get(index).getId());
                 component.setComponentCode(part.componentCode());
                 component.setCount(part.count() == null ? 1 : part.count());
+                component.setModifications(part.modifications());
                 component.setSortOrder(order++);
                 components.add(component);
             }
@@ -479,15 +778,17 @@ public class GameSaveService {
      * Встречи флотов в слепок не идут: встреча живёт один ход и ждёт решения игрока.
      * Загруженная партия начинается с начала хода, и флоты в ней встретятся заново.
      */
-    private void restoreFleets(GameSnapshot snapshot, Map<Integer, UUID> playerIdBySlot,
-                               List<StarSystemEntity> systems, List<ShipDesignEntity> designs) {
+    private Map<Integer, UUID> restoreFleets(GameSnapshot snapshot, Map<Integer, UUID> playerIdBySlot,
+                                             List<StarSystemEntity> systems, List<ShipDesignEntity> designs) {
         // Слепки, снятые до флотов, их не содержат.
         if (snapshot.fleets() == null) {
-            return;
+            return Map.of();
         }
         List<FleetEntity> fleets = new ArrayList<>();
         List<FleetSnapshot> sources = new ArrayList<>();
-        for (FleetSnapshot source : snapshot.fleets()) {
+        List<Integer> indexes = new ArrayList<>();
+        for (int at = 0; at < snapshot.fleets().size(); at++) {
+            FleetSnapshot source = snapshot.fleets().get(at);
             UUID ownerId = playerIdBySlot.get(source.ownerSlot());
             if (ownerId == null || source.systemIndex() >= systems.size()) {
                 continue;
@@ -498,6 +799,9 @@ public class GameSaveService {
             fleet.setStarSystemId(systems.get(source.systemIndex()).getId());
             fleet.setShips(source.ships());
             fleet.setCreatedTurn(source.createdTurn() == null ? 0 : source.createdTurn());
+            fleet.setName(source.name());
+            fleet.setBattlesWon(source.battlesWon() == null ? 0 : source.battlesWon());
+            fleet.setBattlesLost(source.battlesLost() == null ? 0 : source.battlesLost());
             // Флот, застигнутый сохранением в пути, продолжает лететь: маршрут в слепке
             // назван номерами систем, потому что звёзды при загрузке заводятся заново.
             // У слепков, снятых до того, как перелёт стал занимать ходы, маршрута нет.
@@ -510,9 +814,16 @@ public class GameSaveService {
             }
             fleets.add(fleet);
             sources.add(source);
+            indexes.add(at);
         }
         fleetRepository.saveAllAndFlush(fleets);
         restoreComposition(fleets, sources, designs);
+        // Номер в списке слепка → новый флот: по нему лидеры находят свои флоты (пункт 28).
+        Map<Integer, UUID> byIndex = new HashMap<>();
+        for (int i = 0; i < fleets.size(); i++) {
+            byIndex.put(indexes.get(i), fleets.get(i).getId());
+        }
+        return byIndex;
     }
 
     /**
@@ -545,8 +856,10 @@ public class GameSaveService {
                 if (part.designIndex() == null || part.designIndex() >= designs.size()) {
                     continue;
                 }
-                rows.add(fleetShip(fleet.getId(), designs.get(part.designIndex()).getId(), part.ships(),
-                        part.colonists() == null ? 0 : part.colonists()));
+                FleetShipEntity restored = fleetShip(fleet.getId(), designs.get(part.designIndex()).getId(),
+                        part.ships(), part.colonists() == null ? 0 : part.colonists());
+                restored.setExperience(part.experience());
+                rows.add(restored);
             }
         }
         fleetShipRepository.saveAll(rows);
@@ -650,6 +963,78 @@ public class GameSaveService {
         Map<UUID, List<EmpireHistorySnapshot>> historyByPlayerId = historySnapshots(game);
         Map<UUID, List<SpySnapshot>> spiesByPlayerId = spySnapshots(players, slotByPlayerId);
         Map<UUID, List<PlanetBuildingSnapshot>> buildingsByPlanetId = buildingSnapshots(systems);
+        // Туман войны — п. 15: что игрок разведал и что помнит о чужих колониях. Без этого
+        // поднятая партия открывала бы игроку одни свои системы, а чужие колонии исчезали
+        // бы с его карты до нового визита.
+        Map<UUID, List<Integer>> exploredByPlayerId = new HashMap<>();
+        for (PlayerExploredSystemEntity row : exploredRepository.findAllByPlayerIdIn(slotByPlayerId.keySet())) {
+            Integer index = indexBySystemId.get(row.getStarSystemId());
+            if (index != null) {
+                exploredByPlayerId.computeIfAbsent(row.getPlayerId(), key -> new ArrayList<>()).add(index);
+            }
+        }
+        exploredByPlayerId.values().forEach(list -> list.sort(Integer::compareTo));
+        Map<UUID, int[]> placeOfPlanet = new HashMap<>();
+        for (StarSystemEntity system : systems) {
+            List<PlanetEntity> planets = system.getPlanets();
+            for (int index = 0; index < planets.size(); index++) {
+                placeOfPlanet.put(planets.get(index).getId(), new int[]{indexBySystemId.get(system.getId()), index});
+            }
+        }
+        Map<UUID, List<PlanetIntelSnapshot>> intelByPlayerId = new HashMap<>();
+        for (PlanetIntelEntity row : intelRepository.findAllByGameIdOrderByPlayerIdAscPlanetIdAsc(game.getId())) {
+            int[] place = placeOfPlanet.get(row.getPlanetId());
+            Integer owner = slotByPlayerId.get(row.getOwnerPlayerId());
+            if (place == null || owner == null) {
+                continue;
+            }
+            intelByPlayerId.computeIfAbsent(row.getPlayerId(), key -> new ArrayList<>())
+                    .add(new PlanetIntelSnapshot(place[0], place[1], owner, row.getPopulation(),
+                            row.getDefences(), row.getSeenTurn()));
+        }
+        Map<UUID, List<com.sddnw.server.domain.save.ObservedTechSnapshot>> observedByPlayerId = new HashMap<>();
+        for (com.sddnw.server.domain.entity.ObservedTechEntity row : observedRepository.findAllByGameId(game.getId())) {
+            Integer other = slotByPlayerId.get(row.getOtherPlayerId());
+            if (other != null) {
+                observedByPlayerId.computeIfAbsent(row.getPlayerId(), key -> new ArrayList<>())
+                        .add(new com.sddnw.server.domain.save.ObservedTechSnapshot(other, row.getTechCode(),
+                                row.getObservedTurn()));
+            }
+        }
+        observedByPlayerId.values().forEach(list -> list.sort(java.util.Comparator
+                .comparing(com.sddnw.server.domain.save.ObservedTechSnapshot::otherSlot)
+                .thenComparing(com.sddnw.server.domain.save.ObservedTechSnapshot::techCode)));
+        Map<UUID, List<com.sddnw.server.domain.save.MonsterIntelSnapshot>> monstersByPlayerId = new HashMap<>();
+        for (com.sddnw.server.domain.entity.MonsterIntelEntity row : monsterIntelRepository.findAllByGameId(game.getId())) {
+            Integer index = indexBySystemId.get(row.getStarSystemId());
+            if (index != null) {
+                monstersByPlayerId.computeIfAbsent(row.getPlayerId(), key -> new ArrayList<>())
+                        .add(new com.sddnw.server.domain.save.MonsterIntelSnapshot(index, row.getMonster(),
+                                row.getStrength(), row.getSeenTurn()));
+            }
+        }
+        monstersByPlayerId.values().forEach(list -> list.sort(java.util.Comparator
+                .comparing(com.sddnw.server.domain.save.MonsterIntelSnapshot::systemIndex)));
+        Map<UUID, List<com.sddnw.server.domain.save.MilestoneSnapshot>> milestonesByPlayerId = new HashMap<>();
+        for (com.sddnw.server.domain.entity.GameMilestoneEntity row
+                : milestoneRepository.findAllByGameIdOrderByTurnAscPlayerIdAscKindAsc(game.getId())) {
+            milestonesByPlayerId.computeIfAbsent(row.getPlayerId(), key -> new ArrayList<>())
+                    .add(new com.sddnw.server.domain.save.MilestoneSnapshot(row.getTurn(), row.getKind(),
+                            row.getMessageKey(), row.getArgs(), row.isPeak()));
+        }
+        Map<UUID, List<com.sddnw.server.domain.save.ProposalSnapshot>> proposalsByPlayerId = new HashMap<>();
+        for (com.sddnw.server.domain.entity.DiplomacyProposalEntity row
+                : proposalRepository.findAllByGameIdOrderByTurnAscActionAsc(game.getId())) {
+            Integer to = slotByPlayerId.get(row.getToPlayerId());
+            if (to != null) {
+                proposalsByPlayerId.computeIfAbsent(row.getFromPlayerId(), key -> new ArrayList<>())
+                        .add(new com.sddnw.server.domain.save.ProposalSnapshot(to, row.getAction(), row.getTreaty(),
+                                row.getOfferedTech(), row.getRequestedTech(), row.getTurn(), row.getAccepted()));
+            }
+        }
+        // Порядок в слепке — по месту планеты: идентификаторы строк в другой партии другие.
+        intelByPlayerId.values().forEach(list -> list.sort(java.util.Comparator
+                .comparing(PlanetIntelSnapshot::systemIndex).thenComparing(PlanetIntelSnapshot::planetIndex)));
         List<PlayerSnapshot> playerSnapshots = players.stream()
                 .map(player -> new PlayerSnapshot(
                         player.getSlot(),
@@ -674,7 +1059,20 @@ public class GameSaveService {
                         player.getAiObjective(),
                         historyByPlayerId.getOrDefault(player.getId(), List.of()),
                         player.getAccountId(),
-                        player.getResearchLastCategoryCode()))
+                        player.getResearchLastCategoryCode(),
+                        exploredByPlayerId.getOrDefault(player.getId(), List.of()),
+                        intelByPlayerId.getOrDefault(player.getId(), List.of()),
+                        observedByPlayerId.getOrDefault(player.getId(), List.of()),
+                        monstersByPlayerId.getOrDefault(player.getId(), List.of()),
+                        milestonesByPlayerId.getOrDefault(player.getId(), List.of()),
+                        player.getConcededTurn(),
+                        player.getLastActionAt(),
+                        player.getNote(),
+                        proposalsByPlayerId.getOrDefault(player.getId(), List.of()),
+                        player.getDryExplorations(),
+                        player.getChapter(),
+                        player.getMentorPlayerId() == null ? null : slotByPlayerId.get(player.getMentorPlayerId()),
+                        player.getAiSkill()))
                 .toList();
 
         List<StarSystemSnapshot> systemSnapshots = systems.stream()
@@ -690,6 +1088,10 @@ public class GameSaveService {
                         planetSnapshots(system, slotByPlayerId, buildingsByPlanetId)))
                 .toList();
 
+        // Номер флота в списке флотов слепка — по нему лидер находит свой флот (пункт 28).
+        Map<UUID, Integer> fleetIndexById = new HashMap<>();
+        List<FleetSnapshot> fleetList = fleetSnapshots(game.getId(), slotByPlayerId, indexBySystemId,
+                designIndexes, fleetIndexById);
         return new GameSnapshot(
                 game.getName(),
                 game.getGalaxySize(),
@@ -707,7 +1109,7 @@ public class GameSaveService {
                 game.getCouncil(),
                 game.getCouncilRefused(),
                 relationSnapshots(players, slotByPlayerId),
-                fleetSnapshots(game.getId(), slotByPlayerId, indexBySystemId, designIndexes),
+                fleetList,
                 shipDesignSnapshots(designs, slotByPlayerId),
                 transferSnapshots(game.getId(), slotByPlayerId, systems, indexBySystemId),
                 game.getAiActive(),
@@ -716,7 +1118,87 @@ public class GameSaveService {
                         ? null : slotByPlayerId.get(game.getWardenholdHolderPlayerId()),
                 game.getWardenholdSinceTurn(),
                 game.getMightVictory(),
-                game.getTurnSeconds());
+                game.getTurnSeconds(),
+                game.getAdminWatched(),
+                leaderSnapshots(players, slotByPlayerId, indexBySystemId, fleetIndexById),
+                game.getImported(),
+                game.getTutorial(),
+                game.getSpectators(),
+                game.getGalaxyFeature(),
+                game.getWeeklyWeek(),
+                game.getPlayedOn(),
+                game.getAiSkill(),
+                game.getMightTurn(),
+                game.getPeacefulAi(),
+                Boolean.TRUE.equals(game.getModded())
+                        ? gameModRepository.findById(game.getId())
+                                .map(mod -> new com.sddnw.server.domain.save.GameModSnapshot(mod.getName(),
+                                        mod.getBuildings(), mod.getShips(), mod.getTechnologies(), mod.getLeaders()))
+                                .orElse(null)
+                        : null);
+    }
+
+    /** Лидеры партии — трек техдолга, пункт 28: ушедшие (DISMISSED) не нужны никому. */
+    private List<com.sddnw.server.domain.save.LeaderSnapshot> leaderSnapshots(
+            List<PlayerEntity> players, Map<UUID, Integer> slotByPlayerId,
+            Map<UUID, Integer> indexBySystemId, Map<UUID, Integer> fleetIndexById) {
+        List<com.sddnw.server.domain.save.LeaderSnapshot> list = new ArrayList<>();
+        for (com.sddnw.server.domain.entity.PlayerLeaderEntity row
+                : leaderRepository.findAllByPlayerIdIn(players.stream().map(PlayerEntity::getId).toList())) {
+            Integer slot = slotByPlayerId.get(row.getPlayerId());
+            if (slot == null || row.getState() == com.sddnw.server.domain.enums.LeaderState.DISMISSED) {
+                continue;
+            }
+            list.add(new com.sddnw.server.domain.save.LeaderSnapshot(slot, row.getLeaderCode(),
+                    row.getKind().name(), row.getState().name(), row.getExperience(), row.getOfferedTurn(),
+                    row.getHiredTurn(), row.getHireCost(), row.getSalary(),
+                    row.getStarSystemId() == null ? null : indexBySystemId.get(row.getStarSystemId()),
+                    row.getFleetId() == null ? null : fleetIndexById.get(row.getFleetId()),
+                    row.getArrivesTurn(), row.getBattlesWon(), row.getBattlesLost(),
+                    row.getTermStartTurn(), row.getTermStartPopulation()));
+        }
+        // Порядок — по месту и коду: идентификаторы строк в другой партии другие (GameOrder).
+        list.sort(java.util.Comparator.comparing(com.sddnw.server.domain.save.LeaderSnapshot::ownerSlot)
+                .thenComparing(com.sddnw.server.domain.save.LeaderSnapshot::code));
+        return list;
+    }
+
+    /** Лидеры поднятой партии — трек техдолга, пункт 28. */
+    private void restoreLeaders(GameSnapshot snapshot, Map<Integer, UUID> playerIdBySlot,
+                                List<StarSystemEntity> systems, Map<Integer, UUID> fleetIdByIndex) {
+        if (snapshot.leaders() == null) {
+            return;
+        }
+        List<com.sddnw.server.domain.entity.PlayerLeaderEntity> rows = new ArrayList<>();
+        for (com.sddnw.server.domain.save.LeaderSnapshot source : snapshot.leaders()) {
+            UUID playerId = playerIdBySlot.get(source.ownerSlot());
+            if (playerId == null) {
+                continue;
+            }
+            com.sddnw.server.domain.entity.PlayerLeaderEntity row = new com.sddnw.server.domain.entity.PlayerLeaderEntity();
+            row.setPlayerId(playerId);
+            row.setLeaderCode(source.code());
+            row.setKind(com.sddnw.server.domain.enums.LeaderKind.valueOf(source.kind()));
+            row.setState(com.sddnw.server.domain.enums.LeaderState.valueOf(source.state()));
+            row.setExperience(source.experience() == null ? 0 : source.experience());
+            row.setOfferedTurn(source.offeredTurn());
+            row.setHiredTurn(source.hiredTurn());
+            row.setHireCost(source.hireCost() == null ? 0 : source.hireCost());
+            row.setSalary(source.salary() == null ? 0 : source.salary());
+            if (source.systemIndex() != null && source.systemIndex() < systems.size()) {
+                row.setStarSystemId(systems.get(source.systemIndex()).getId());
+            }
+            if (source.fleetIndex() != null) {
+                row.setFleetId(fleetIdByIndex.get(source.fleetIndex()));
+            }
+            row.setArrivesTurn(source.arrivesTurn());
+            row.setBattlesWon(source.battlesWon() == null ? 0 : source.battlesWon());
+            row.setBattlesLost(source.battlesLost() == null ? 0 : source.battlesLost());
+            row.setTermStartTurn(source.termStartTurn());
+            row.setTermStartPopulation(source.termStartPopulation());
+            rows.add(row);
+        }
+        leaderRepository.saveAll(rows);
     }
 
     /** Рейсы с жителями — п. 4.1.1: планеты названы номерами системы и орбиты. */
@@ -754,7 +1236,8 @@ public class GameSaveService {
     private List<FleetSnapshot> fleetSnapshots(UUID gameId,
                                                Map<UUID, Integer> slotByPlayerId,
                                                Map<UUID, Integer> indexBySystemId,
-                                               Map<UUID, Integer> designIndexes) {
+                                               Map<UUID, Integer> designIndexes,
+                                               Map<UUID, Integer> fleetIndexById) {
         List<FleetEntity> fleets = fleetRepository.findAllByGameId(gameId);
         Map<UUID, List<FleetShipEntity>> composition = new HashMap<>();
         if (!fleets.isEmpty()) {
@@ -775,14 +1258,17 @@ public class GameSaveService {
             for (FleetShipEntity row : composition.getOrDefault(fleet.getId(), List.of())) {
                 Integer designIndex = designIndexes.get(row.getDesignId());
                 if (designIndex != null) {
-                    ships.add(new FleetShipSnapshot(designIndex, row.getShips(), row.getColonists()));
+                    ships.add(new FleetShipSnapshot(designIndex, row.getShips(), row.getColonists(),
+                            row.getExperience()));
                 }
             }
             Integer targetIndex = fleet.getTargetSystemId() == null
                     ? null
                     : indexBySystemId.get(fleet.getTargetSystemId());
+            fleetIndexById.put(fleet.getId(), snapshots.size());
             snapshots.add(new FleetSnapshot(slot, index, fleet.getShips(), fleet.getCreatedTurn(), ships,
-                    targetIndex, fleet.getDepartureTurn(), fleet.getArrivalTurn()));
+                    targetIndex, fleet.getDepartureTurn(), fleet.getArrivalTurn(),
+                    fleet.getName(), fleet.getBattlesWon(), fleet.getBattlesLost()));
         }
         return snapshots;
     }
@@ -805,7 +1291,8 @@ public class GameSaveService {
         for (ShipDesignEntity design : designs) {
             List<ShipDesignComponentSnapshot> components = parts.getOrDefault(design.getId(), List.of())
                     .stream()
-                    .map(part -> new ShipDesignComponentSnapshot(part.getComponentCode(), part.getCount()))
+                    .map(part -> new ShipDesignComponentSnapshot(part.getComponentCode(), part.getCount(),
+                            part.getModifications()))
                     .toList();
             snapshots.add(new ShipDesignSnapshot(
                     slotByPlayerId.get(design.getOwnerPlayerId()),
@@ -815,7 +1302,10 @@ public class GameSaveService {
                     design.getCreatedTurn(),
                     design.getObsolete(),
                     design.getRole().name(),
-                    components));
+                    components,
+                    design.getAuto(),
+                    design.getMission() == null ? null : design.getMission().name(),
+                    design.getTrophy(), design.getBuilt()));
         }
         return snapshots;
     }
@@ -934,9 +1424,14 @@ public class GameSaveService {
                         planet.getBuildQueue(),
                         planet.getRepeatBuild(),
                         planet.getAutoBuild(),
+                        planet.getAutoJobs(),
                         planet.getSoldTurn(),
                         planet.getFind(),
-                        planet.getFindClaimed()))
+                        planet.getFindClaimed(),
+                        planet.getTerraformCount(),
+                        planet.getAndroidFarmers(),
+                        planet.getAndroidWorkers(),
+                        planet.getAndroidScientists()))
                 .toList();
     }
 
@@ -958,13 +1453,20 @@ public class GameSaveService {
         // выдаётся заново при восстановлении партии.
         player.setAiPersonality(snapshot.aiPersonality());
         player.setAiObjective(snapshot.aiObjective());
-        player.setColor(snapshot.color());
+        player.setAiSkill(snapshot.aiSkill());
+        // Слепок, снятый до новой палитры знамён (пункт 168), несёт прежний оттенок.
+        player.setColor(BannerColor.current(snapshot.color()));
         // Пропуск выдаётся новый: старый остался у игроков исходной партии. А вот ХОЗЯИН
         // места переезжает как есть — в этом весь смысл автосохранения: вернувшийся садится
         // за свою же империю, а не за первую попавшуюся (п. 3, миграция 077). В слепках,
         // снятых до записи хозяина, его нет, и место остаётся ничьим.
         player.setAccessToken(UUID.randomUUID().toString().replace("-", ""));
         player.setAccountId(snapshot.accountId());
+        player.setConcededTurn(snapshot.concededTurn());
+        player.setDryExplorations(snapshot.dryExplorations() == null ? 0 : snapshot.dryExplorations());
+        player.setChapter(snapshot.chapter() == null ? 1 : snapshot.chapter());
+        player.setLastActionAt(snapshot.lastActionAt());
+        player.setNote(snapshot.note());
         player.setJoinedAt(OffsetDateTime.now());
         player.setResearchCategoryCode(snapshot.researchCategoryCode());
         player.setResearchLevelOrder(snapshot.researchLevelOrder());
@@ -1016,7 +1518,12 @@ public class GameSaveService {
             // придёт null, а сеттер прочтёт его как «выключено».
             planet.setRepeatBuild(snapshotPlanet.repeatBuild());
             planet.setAutoBuild(snapshotPlanet.autoBuild());
+            planet.setAutoJobs(snapshotPlanet.autoJobs());
             planet.setSoldTurn(snapshotPlanet.soldTurn());
+            planet.setTerraformCount(snapshotPlanet.terraformCount());
+            planet.setAndroidFarmers(snapshotPlanet.androidFarmers());
+            planet.setAndroidWorkers(snapshotPlanet.androidWorkers());
+            planet.setAndroidScientists(snapshotPlanet.androidScientists());
             planet.setProjectPoints(snapshotPlanet.projectPoints() == null ? 0 : snapshotPlanet.projectPoints());
             // Слепки, снятые до появления колониальных баз, о них не знают.
             planet.setColonyBaseReady(Boolean.TRUE.equals(snapshotPlanet.colonyBaseReady()));

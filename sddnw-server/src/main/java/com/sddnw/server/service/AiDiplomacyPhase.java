@@ -19,9 +19,11 @@ import org.springframework.stereotype.Service;
 public class AiDiplomacyPhase implements TurnPhase {
 
     private final AiDiplomacyService aiDiplomacyService;
+    private final DiplomacyService diplomacyService;
 
-    public AiDiplomacyPhase(AiDiplomacyService aiDiplomacyService) {
+    public AiDiplomacyPhase(AiDiplomacyService aiDiplomacyService, DiplomacyService diplomacyService) {
         this.aiDiplomacyService = aiDiplomacyService;
+        this.diplomacyService = diplomacyService;
     }
 
     @Override
@@ -36,6 +38,13 @@ public class AiDiplomacyPhase implements TurnPhase {
 
     @Override
     public void apply(TurnContext context) {
+        /*
+          Сперва итог предложений людям (field-backlog, пункт 182) — и в любой партии, даже без
+          действующего ИИ: это ответ человека, а не решение соседа. Своей фазой это не сделано
+          нарочно: порядок у фаз целый, и вторая фаза с тем же номером шла бы в порядке бинов. А
+          итог ДО новых предложений ИИ: то, что предложено на этом ходу, ждёт ответа до следующего.
+        */
+        diplomacyService.resolveProposals(context);
         // Партия без действующего ИИ (трек техдолга, пункт 17): соседи молчат.
         if (!Boolean.TRUE.equals(context.game().getAiActive())) {
             return;

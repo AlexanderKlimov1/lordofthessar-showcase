@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      Знамёна различимы и при дальтонизме — field-backlog, пункты 168 и 173.
+
+      Палитра знамён сменилась (BannerColor), а цвет империи хранится у игрока строкой.
+      Партии, идущие сейчас, переводятся на новые оттенки здесь: иначе их империи остались бы
+      со старыми, неотличимыми друг от друга цветами, а занятость знамён сверялась бы с
+      цветами, которых в палитре уже нет. Слепки сохранений переводит загрузка
+      (BannerColor.current). Игроку об этом сказано объявлением (notices.json).
+    -->
+    <changeSet id="102-banner-palette" author="sddnw">
+        <update tableName="player">
+            <column name="color" value="#fa260f"/>
+            <where>lower(color) = '#ff5f5f'</where>
+        </update>
+        <update tableName="player">
+            <column name="color" value="#fff822"/>
+            <where>lower(color) = '#ffd447'</where>
+        </update>
+        <update tableName="player">
+            <column name="color" value="#53df82"/>
+            <where>lower(color) = '#57d977'</where>
+        </update>
+        <update tableName="player">
+            <column name="color" value="#d7dce0"/>
+            <where>lower(color) = '#c9d1dc'</where>
+        </update>
+        <update tableName="player">
+            <column name="color" value="#5fa3fc"/>
+            <where>lower(color) = '#4fa3ff'</where>
+        </update>
+        <update tableName="player">
+            <column name="color" value="#9f7756"/>
+            <where>lower(color) = '#b07a4a'</where>
+        </update>
+        <update tableName="player">
+            <column name="color" value="#973afe"/>
+            <where>lower(color) = '#b56cff'</where>
+        </update>
+        <update tableName="player">
+            <column name="color" value="#fd9d0d"/>
+            <where>lower(color) = '#ff9a3c'</where>
+        </update>
+    </changeSet>
+</databaseChangeLog>

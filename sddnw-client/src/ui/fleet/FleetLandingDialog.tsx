@@ -8,6 +8,9 @@ import { storyOfInvasion } from '../story/storyEvents';
 import { tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { climateName, planetSizeName } from '../planetLabels';
+import { ActionError } from '../feedback/ActionError';
+import { bondRefusal, useBoundEmpires } from '../diplomacy/useBoundEmpires';
 
 /**
  * Высадка с флота — п. 4.1, п. 8 и п. 12.
@@ -68,6 +71,8 @@ export function FleetLandingDialog({
 
   const pushStories = useGameStore((state) => state.pushStories);
   const players = useGameStore((state) => state.players);
+  // Союзники и соседи по пакту (field-backlog, пункт 206): нападать на них нельзя по договору.
+  const bound = useBoundEmpires();
   const self = useGameStore(selectSelf);
 
   const act = (what: 'colonize' | 'outpost' | 'invade' | 'mind-control', planet: Planet) => {
@@ -109,6 +114,8 @@ export function FleetLandingDialog({
 
         <div className="space-y-1">
           {system.planets.map((planet) => {
+            const guarded = Boolean(system.monster);
+            const treaty = planet.ownerPlayerId ? bound.get(planet.ownerPlayerId) : undefined;
             const free = !planet.ownerPlayerId && planet.population <= 0;
             const mineEmpty = planet.ownerPlayerId === ownerPlayerId && planet.population <= 0;
             const enemy = Boolean(planet.ownerPlayerId)
@@ -122,7 +129,7 @@ export function FleetLandingDialog({
               >
                 <span className="w-40 truncate text-ink">{planet.name}</span>
                 <span className="w-44 truncate text-ink-faint">
-                  {planet.sizeLabel} · {planet.climateLabel}
+                  {planetSizeName(planet.size, planet.sizeLabel)} · {climateName(planet.climate, planet.climateLabel)}
                 </span>
                 <span className={'w-28 whitespace-nowrap ' + figureLabelClass('note')}>
                   {planet.population > 0
@@ -130,23 +137,30 @@ export function FleetLandingDialog({
                     : free ? t('landing.free') : t('landing.taken')}
                 </span>
                 <span className="ml-auto flex gap-2">
+                  {/* Под сторожем не селятся (`planet.guardedSettle`) — пункт 76. */}
                   {carries('COLONY') && (free || mineEmpty) && planet.colonizable ? (
-                    <Action disabled={busy} onClick={() => act('colonize', planet)}>
+                    <Action disabled={busy || guarded} title={guarded ? t('planets.blocked.guarded') : undefined}
+                            onClick={() => act('colonize', planet)}>
                       {t('landing.settle')}
                     </Action>
                   ) : null}
                   {carries('OUTPOST') && free ? (
-                    <Action disabled={busy} onClick={() => act('outpost', planet)}>
+                    <Action disabled={busy || guarded} title={guarded ? t('planets.blocked.guarded') : undefined}
+                            onClick={() => act('outpost', planet)}>
                       {t('landing.outpost')}
                     </Action>
                   ) : null}
                   {carries('TRANSPORT') && enemy ? (
-                    <Action disabled={busy} onClick={() => act('invade', planet)}>
+                    <Action disabled={busy || treaty !== undefined}
+                            title={bondRefusal(treaty) ? t(bondRefusal(treaty)!) : undefined}
+                            onClick={() => act('invade', planet)}>
                       {t('landing.invade', { n: troops })}
                     </Action>
                   ) : null}
                   {telepathic && bigShip && enemy ? (
-                    <Action disabled={busy} onClick={() => act('mind-control', planet)}>
+                    <Action disabled={busy || treaty !== undefined}
+                            title={bondRefusal(treaty) ? t(bondRefusal(treaty)!) : undefined}
+                            onClick={() => act('mind-control', planet)}>
                       {t('landing.mindControl')}
                     </Action>
                   ) : null}
@@ -158,7 +172,7 @@ export function FleetLandingDialog({
 
         <p className="mt-2 text-11 leading-tight">
           {error ? (
-            <span className="text-danger">{error}</span>
+            <ActionError as="span" message={error} />
           ) : (
             <span className="text-ink-faint">
               {t(offer ? 'landing.offer.note' : 'landing.note')}
@@ -178,10 +192,13 @@ export function FleetLandingDialog({
 
 function Action({
   disabled,
+  title,
   onClick,
   children,
 }: {
   disabled: boolean;
+  /** Почему погашено — пункт 76. */
+  title?: string;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -189,6 +206,7 @@ function Action({
     <button
       type="button"
       disabled={disabled}
+      title={title}
       onClick={onClick}
       className="border border-space-600 bg-space-800 px-2 py-0.5 text-11 uppercase tracking-wider text-ink disabled:opacity-40"
     >

@@ -60,11 +60,21 @@ class MightVictoryRulesTest {
     @Test
     @DisplayName("Срок — трёхсотый ход, напоминания — за 50, 10 и 1 ход")
     void dueAndReminders() {
-        assertThat(MightVictoryRules.due(299)).isFalse();
-        assertThat(MightVictoryRules.due(300)).isTrue();
-        assertThat(MightVictoryRules.remind(250)).isTrue();
-        assertThat(MightVictoryRules.remind(290)).isTrue();
-        assertThat(MightVictoryRules.remind(299)).isTrue();
-        assertThat(MightVictoryRules.remind(280)).isFalse();
+        assertThat(MightVictoryRules.due(299, MightVictoryRules.TURN_LIMIT)).isFalse();
+        assertThat(MightVictoryRules.due(300, MightVictoryRules.TURN_LIMIT)).isTrue();
+        assertThat(MightVictoryRules.remind(250, MightVictoryRules.TURN_LIMIT)).isTrue();
+        assertThat(MightVictoryRules.remind(290, MightVictoryRules.TURN_LIMIT)).isTrue();
+        assertThat(MightVictoryRules.remind(299, MightVictoryRules.TURN_LIMIT)).isTrue();
+        assertThat(MightVictoryRules.remind(280, MightVictoryRules.TURN_LIMIT)).isFalse();
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("Партия под вечер: итог на сотом ходу; досрочный — не раньше трети срока")
+    void eveningLimitAndEarlyFrom() {
+        assertThat(MightVictoryRules.due(99, 100)).isFalse();
+        assertThat(MightVictoryRules.due(100, 100)).isTrue();
+        assertThat(MightVictoryRules.remind(90, 100)).isTrue();
+        assertThat(MightVictoryRules.earlyFrom(300)).isEqualTo(100);
+        assertThat(MightVictoryRules.ALLOWED_TURNS).containsExactly(100, 200, 300);
     }
 }

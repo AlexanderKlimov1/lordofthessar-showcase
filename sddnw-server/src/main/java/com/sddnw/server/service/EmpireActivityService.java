@@ -94,10 +94,41 @@ public class EmpireActivityService {
 
     public static final String OUTPOST = "OUTPOST";
 
-    private final EmpireActivityRepository repository;
+    /**
+     * Империи досталось доброе или дурное случайное событие — field-backlog, пункт 36: сколько
+     * бед и удач приходится на империю за партию и как это зависит от её места.
+     */
+    public static final String EVENT_GOOD = "EVENT_GOOD";
+    public static final String EVENT_BAD = "EVENT_BAD";
 
-    public EmpireActivityService(EmpireActivityRepository repository) {
+    /**
+     * Первые встречи с механиками — field-backlog, пункт 93: знакомство, находка, совет и
+     * абордаж прежде не считались вовсе, а без них «где в партии тянется пустота» не видно.
+     */
+    public static final String CONTACT = "CONTACT";
+    public static final String FIND = "FIND";
+    public static final String COUNCIL = "COUNCIL";
+    public static final String BOARDING = "BOARDING";
+
+    private final EmpireActivityRepository repository;
+    private final MilestoneService milestones;
+    private final com.sddnw.server.repository.GameRepository games;
+
+    public EmpireActivityService(EmpireActivityRepository repository, MilestoneService milestones,
+                                 com.sddnw.server.repository.GameRepository games) {
         this.repository = repository;
+        this.milestones = milestones;
+        this.games = games;
+    }
+
+    /**
+     * Главный момент партии — в летопись (field-backlog, пункт 34). Стоит здесь, рядом со
+     * счётчиком, потому что счётчики уже стоят ровно там, где событие происходит (на этом
+     * они четырежды учились, см. правила проекта), — и летопись попадает туда же.
+     */
+    public void moment(UUID gameId, com.sddnw.server.domain.entity.PlayerEntity player, Integer turn,
+                       String kind, MessageKey message) {
+        milestones.note(gameId, player, turn, kind, message);
     }
 
     /**
@@ -123,6 +154,10 @@ public class EmpireActivityService {
                     fresh.setPlayerId(playerId);
                     fresh.setCode(code);
                     fresh.setTimes(0);
+                    // Ход первой встречи (пункт 93). Внутри хода партия уже в контексте Hibernate,
+                    // и поиск по ключу запроса не делает; вне хода — один запрос на ПЕРВОЕ событие.
+                    fresh.setFirstTurn(games.findById(gameId)
+                            .map(com.sddnw.server.domain.entity.GameEntity::getTurn).orElse(null));
                     return fresh;
                 });
         row.setTimes(row.getTimes() + 1);

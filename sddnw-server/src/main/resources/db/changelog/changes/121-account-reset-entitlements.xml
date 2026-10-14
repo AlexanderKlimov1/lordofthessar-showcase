@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Сброс пароля и смена почты (backlog-promo, пункт 45) и права учётной записи (пункт 41):
+        ранний доступ, позже подписка — строка на право, с источником, сроком и платежом.
+    -->
+    <changeSet id="121-account-reset-entitlements" author="sddnw">
+        <addColumn tableName="account">
+            <column name="reset_token" type="varchar(64)"/>
+            <column name="reset_expires_at" type="timestamp with time zone"/>
+            <column name="pending_email" type="varchar(254)"/>
+        </addColumn>
+        <createIndex tableName="account" indexName="ix_account_reset_token">
+            <column name="reset_token"/>
+        </createIndex>
+        <createTable tableName="account_entitlement">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="kind" type="varchar(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="starts_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ends_at" type="timestamp with time zone"/>
+            <column name="payment_id" type="varchar(128)"/>
+            <column name="revoked_at" type="timestamp with time zone"/>
+            <column name="note" type="varchar(256)"/>
+        </createTable>
+        <createIndex tableName="account_entitlement" indexName="ix_account_entitlement_account">
+            <column name="account_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

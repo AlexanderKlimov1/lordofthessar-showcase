@@ -40,13 +40,14 @@ class RaceTraitCatalogTest {
     @DisplayName("Файл разбирается: оба бюджета и все группы конструктора")
     void readsDesign() {
         // ЧИСЛА ЗДЕСЬ НЕ ВПИСЫВАЮТСЯ, и это не лень. Бюджет двигается балансировкой —
-        // 10 в MOO II, потом 15, потом 20, теперь 30 (журнал, п. 3.107), — и проверка,
-        // знающая сегодняшнее число наизусть, падает на первой же честной правке, не найдя
-        // при этом ни одной поломки. Держаться надо за ПРАВИЛО: оба бюджета прочитаны, оба
-        // положительны, а вернуть слабостями больше, чем можно потратить, нельзя никогда.
+        // 10 в MOO II, потом 15, 20, 30 (журнал, п. 3.107), а с 07.10.2026 снова 10 и 10, как
+        // в MOO II 1.50, — и проверка, знающая сегодняшнее число наизусть, падает на первой же
+        // честной правке, не найдя ни одной поломки. Держаться надо за ПРАВИЛО: оба бюджета
+        // прочитаны, оба положительны, а вернуть слабостями больше, чем можно потратить, нельзя
+        // никогда (поровну — можно: так в оригинале).
         assertThat(catalog.picksBudget()).isPositive();
         assertThat(catalog.antiPicksBudget()).isPositive();
-        assertThat(catalog.antiPicksBudget()).isLessThan(catalog.picksBudget());
+        assertThat(catalog.antiPicksBudget()).isLessThanOrEqualTo(catalog.picksBudget());
         assertThat(catalog.groups()).extracting("code")
                 .containsExactlyInAnyOrder("government",
                         "growth", "food", "industry", "science", "money",
@@ -353,15 +354,15 @@ class RaceTraitCatalogTest {
                 .isInstanceOf(ConflictException.class)
                 .hasMessageContaining("race.overAntiBudget");
 
-        // А раса, продающая слабости у самого потолка, законна — так устроены Силикоиды,
-        // самая «продающая» раса игры.
-        List<String> silicoids = catalog.raceTraits("SILICOIDS");
-        assertThat(catalog.validate(silicoids)).hasSize(silicoids.size());
-        assertThat(-silicoids.stream()
+        // А раса, продающая слабости до самого потолка и не дальше, законна: последняя из
+        // набранных слабостей и перевела счёт за потолок — без неё он не превышен. Готовые расы
+        // для этого не годятся: бюджет спрашивается только игроку, а готовая раса — портрет.
+        List<String> atCeiling = selling.subList(0, selling.size() - 1);
+        assertThat(catalog.validate(atCeiling)).hasSize(atCeiling.size());
+        assertThat(-atCeiling.stream()
                 .mapToInt(code -> catalog.require(code).picks())
-                .filter(picks -> picks < 0)
                 .sum())
-                .as("слабости Силикоидов")
+                .as("слабости у потолка")
                 .isPositive()
                 .isLessThanOrEqualTo(catalog.antiPicksBudget());
     }

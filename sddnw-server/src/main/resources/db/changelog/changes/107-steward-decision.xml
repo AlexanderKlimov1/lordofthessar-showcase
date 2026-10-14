@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Что ИИ сделал за вас — field-backlog, пункт 112: решения, которые ИИ принял за ушедшего
+        человека (встречи флотов, стройка, отправленные флоты, наука), копятся, пока вернувшийся
+        их не прочтёт. Отчёт хода у игрока один, а отлучка длится ходами. Ключом словаря с
+        подстановками — переводятся при чтении.
+    -->
+    <changeSet id="107-steward-decision" author="sddnw">
+        <createTable tableName="steward_decision">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_steward_decision_player"
+                             references="player(id)" deleteCascade="true"/>
+            </column>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="message_key" type="varchar(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="args" type="varchar(1024)"/>
+        </createTable>
+        <createIndex tableName="steward_decision" indexName="ix_steward_decision_player">
+            <column name="player_id"/>
+            <column name="turn"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

@@ -89,6 +89,19 @@ export interface GameState {
    * достаёт свежую планету из открытой системы.
    */
   openedColonyId: string | null;
+  /**
+   * Колониальный корабль, который ждёт выбора планеты (12.10.2026, решение хозяина проекта):
+   * после «Колонизировать планету» экран системы заселяет щелчком по свободной планете — тем
+   * же путём, что готовая колониальная база. Закрытие системы снимает ожидание.
+   */
+  settlerFleetId: string | null;
+  setSettlerFleet: (fleetId: string | null) => void;
+  /**
+   * Колонию открыли ради её стройки — щелчком по текущей стройке в списке колоний
+   * (07.10.2026): экран колонии встаёт сразу с окном стройки, а закрытие окна возвращает
+   * туда, откуда пришли, а не на экран колонии, которого игрок не звал.
+   */
+  colonyBuildDirect: boolean;
 
   /**
    * Исследования игрока — экран «Наука». Состояние серверное: цель, вложенные в неё
@@ -202,7 +215,7 @@ export interface GameState {
   setSelectedSystem: (system: StarSystem | null) => void;
   setHoveredSystem: (system: StarSystem | null) => void;
   setOpenedSystem: (system: StarSystem | null) => void;
-  setOpenedColony: (planetId: string | null) => void;
+  setOpenedColony: (planetId: string | null, build?: boolean) => void;
   /** Выбрать флот, которому ищут систему назначения, или снять прицел — п. 8. */
   setAudience: (audiencePlayerId: string | null) => void;
   setTargetingFleet: (targetingFleetId: string | null) => void;
@@ -280,6 +293,8 @@ const initialSessionState = {
   hoveredSystem: null as StarSystem | null,
   openedSystem: null as StarSystem | null,
   openedColonyId: null as string | null,
+  settlerFleetId: null as string | null,
+  colonyBuildDirect: false,
   audiencePlayerId: null as string | null,
   targetingFleetId: null as string | null,
   flightFleet: null as FlightFleet | null,
@@ -411,12 +426,14 @@ export const useGameStore = create<GameState>((set, get) => ({
     // Закрытие системы уносит и открытую в ней колонию: её экран лежит поверх системного.
     set(openedSystem
       ? { openedSystem, overlay: 'none' as OverlayPanel }
-      : { openedSystem, openedColonyId: null });
+      : { openedSystem, openedColonyId: null, settlerFleetId: null });
     persistView(get());
   },
 
-  setOpenedColony: (openedColonyId) => {
-    set({ openedColonyId });
+  setSettlerFleet: (settlerFleetId) => set({ settlerFleetId }),
+
+  setOpenedColony: (openedColonyId, build) => {
+    set({ openedColonyId, colonyBuildDirect: openedColonyId !== null && build === true });
     persistView(get());
   },
 

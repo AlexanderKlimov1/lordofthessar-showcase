@@ -60,6 +60,35 @@ public record PlayerSnapshot(
         AiObjective aiObjective,
         List<EmpireHistorySnapshot> history,
         java.util.UUID accountId,
-        String researchLastCategoryCode
+        String researchLastCategoryCode,
+        /**
+         * Разведанные системы — номерами в списке систем (п. 15); {@code null} у слепков,
+         * снятых до тумана войны, и тогда партия поднимается с разведанным по владению.
+         */
+        List<Integer> exploredSystems,
+        /** Память о чужих колониях (п. 15, туман войны); {@code null} у старых слепков. */
+        List<PlanetIntelSnapshot> intel,
+        /** Увиденные технологии соперников (п. 15); {@code null} у старых слепков. */
+        List<ObservedTechSnapshot> observedTechs,
+        /** Память о сторожах систем (п. 11.1, п. 15); {@code null} у старых слепков. */
+        List<MonsterIntelSnapshot> monsters,
+        /** Летопись главных моментов (field-backlog, пункт 34); {@code null} у старых слепков. */
+        List<MilestoneSnapshot> milestones,
+        /** Ход признанного поражения (пункт 81); {@code null} — не признавал или старый слепок. */
+        Integer concededTurn,
+        /** Последнее действие в партии (пункт 108); {@code null} у старых слепков. */
+        java.time.OffsetDateTime lastActionAt,
+        /** Записка к партии (пункт 110); {@code null} — не писал или старый слепок. */
+        String note,
+        /** Предложения этого игрока, ждущие ответа человека (пункт 182); {@code null} у старых слепков. */
+        List<ProposalSnapshot> proposals,
+        /** Таймер жалости разведки (backlog-promo, пункт 36); {@code null} у старых слепков — ноль. */
+        Integer dryExplorations,
+        /** Глава партии (пункт 54); {@code null} у старых слепков — первая. */
+        Integer chapter,
+        /** Место наставника, которому ученик показал империю (пункт 184); {@code null} — никому. */
+        Integer mentorSlot,
+        /** Уровень игры империи ИИ (пункт 9); {@code null} — обычный или старый слепок. */
+        String aiSkill
 ) {
 }

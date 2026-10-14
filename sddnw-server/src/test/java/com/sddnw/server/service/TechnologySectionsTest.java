@@ -95,8 +95,9 @@ class TechnologySectionsTest {
     @Test
     @DisplayName("Что не встало ни зданием, ни частью корабля, — общее достижение")
     void therestAreGeneralAchievements() {
-        assertEquals(TechnologySection.GENERAL.name(), sectionOf("space-academy"),
-                "космическая академия ничего не строит и ничем не стреляет");
+        // Космическая академия с 13.10.2026 — здание колонии; общее достижение — ксенопсихология.
+        assertEquals(TechnologySection.GENERAL.name(), sectionOf("xeno-psychology"),
+                "ксенопсихология ничего не строит и ничем не стреляет");
     }
 
     @Test

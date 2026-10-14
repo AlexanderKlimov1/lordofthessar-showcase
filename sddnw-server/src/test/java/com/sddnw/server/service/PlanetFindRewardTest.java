@@ -37,8 +37,15 @@ class PlanetFindRewardTest {
     private final ResearchService researchService = Mockito.mock(ResearchService.class);
     private final PlanetRepository planetRepository = Mockito.mock(PlanetRepository.class);
     private final PlayerEventService playerEvents = Mockito.mock(PlayerEventService.class);
-    private final PlanetFindReward reward =
-            new PlanetFindReward(researchService, planetRepository, playerEvents);
+    private final ResearchCatalog researchCatalog = Mockito.mock(ResearchCatalog.class);
+    private final com.sddnw.server.repository.ArtifactChoiceRepository choices =
+            Mockito.mock(com.sddnw.server.repository.ArtifactChoiceRepository.class);
+    private final PresenceService presence = new PresenceService();
+    private final PlanetFindReward reward = new PlanetFindReward(researchService, researchCatalog, planetRepository,
+            playerEvents, choices, Mockito.mock(com.sddnw.server.repository.StarSystemRepository.class), presence,
+            Mockito.mock(GameAccess.class));
+    private final ResearchCatalog.TechnologyPlace colonyShip = new ResearchCatalog.TechnologyPlace("power", 2, 50,
+            new com.sddnw.server.dto.ResearchOptionDto("colony-ship", "Colony Ship", "", Boolean.TRUE, null, null));
 
     private final GameEntity game = new GameEntity();
     private final PlayerEntity player = new PlayerEntity();
@@ -60,7 +67,12 @@ class PlanetFindRewardTest {
         system.setId(UUID.randomUUID());
         system.setName("Gliese 581");
         system.setPlanets(new ArrayList<>(List.of(planet)));
-        when(researchService.grantGift(any(), anyInt(), any(RandomGenerator.class), any()))
+        // Игрок — ИИ: тот берёт наследие сразу; выбор человека проверяется отдельно.
+        player.setPlayerType(com.sddnw.server.domain.enums.PlayerType.AI);
+        second.setPlayerType(com.sddnw.server.domain.enums.PlayerType.AI);
+        when(researchService.giftCandidates(any(), any(RandomGenerator.class), anyInt()))
+                .thenReturn(List.of(colonyShip));
+        when(researchService.grantPlace(any(), any(), anyInt()))
                 .thenReturn(List.of(new AcquiredTechnologyDto("power", 2, "colony-ship",
                         "Colony Ship", 17)));
     }
@@ -72,8 +84,7 @@ class PlanetFindRewardTest {
 
         reward.claim(game, player, system);
 
-        verify(researchService, atLeastOnce())
-                .grantGift(eq(player), anyInt(), any(RandomGenerator.class), any());
+        verify(researchService, atLeastOnce()).grantPlace(eq(player), eq(colonyShip), anyInt());
         verify(playerEvents).record(eq(game.getId()), eq(player.getId()), eq(game.getTurn()),
                 eq("EXPLORATION"), any(MessageKey.class), eq(system.getId()), any());
         assertThat(planet.getFindClaimed()).isTrue();
@@ -86,8 +97,7 @@ class PlanetFindRewardTest {
 
         reward.claim(game, player, system);
 
-        verify(researchService, Mockito.never())
-                .grantGift(any(), anyInt(), any(RandomGenerator.class), any());
+        verify(researchService, Mockito.never()).grantPlace(any(), any(), anyInt());
         assertThat(planet.getFindClaimed()).isFalse();
     }
 
@@ -100,8 +110,7 @@ class PlanetFindRewardTest {
 
         reward.claim(game, second, system);
 
-        verify(researchService, Mockito.never())
-                .grantGift(any(), anyInt(), any(RandomGenerator.class), any());
+        verify(researchService, Mockito.never()).grantPlace(any(), any(), anyInt());
         Mockito.verifyNoInteractions(playerEvents);
     }
 
@@ -109,7 +118,7 @@ class PlanetFindRewardTest {
     @DisplayName("Империя с изученным деревом артефакты всё равно разбирает, но молча")
     void emptyTreeStillClaims() {
         planet.setFind(PlanetFind.ARTIFACTS);
-        when(researchService.grantGift(any(), anyInt(), any(RandomGenerator.class), any()))
+        when(researchService.giftCandidates(any(), any(RandomGenerator.class), anyInt()))
                 .thenReturn(List.of());
 
         reward.claim(game, player, system);
@@ -117,6 +126,43 @@ class PlanetFindRewardTest {
         assertThat(planet.getFindClaimed()).isTrue();
         // Событие, которого игрок не увидел, для игры не случилось: сообщать не о чем.
         Mockito.verifyNoInteractions(playerEvents);
+    }
+
+    @Test
+    @DisplayName("Человеку наследие предлагается на выбор, а не выдаётся жребием — БП 34")
+    void humanChooses() {
+        planet.setFind(PlanetFind.ARTIFACTS);
+        player.setPlayerType(com.sddnw.server.domain.enums.PlayerType.HUMAN);
+
+        reward.claim(game, player, system);
+
+        verify(choices).save(any(com.sddnw.server.domain.entity.ArtifactChoiceEntity.class));
+        verify(researchService, Mockito.never()).grantPlace(any(), any(), anyInt());
+        assertThat(planet.getFindClaimed()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Пять пустых разведок подряд — и следующая система с годной планетой приносит находку — БП 36")
+    void pityTimerPlacesFind() {
+        planet.setMaxPopulation(8);
+        player.setDryExplorations(PlanetFindReward.PITY_SYSTEMS);
+
+        reward.explored(game, player, system);
+
+        assertThat(planet.getFind()).isNotNull();
+        assertThat(player.getDryExplorations()).isZero();
+    }
+
+    @Test
+    @DisplayName("Пустая разведка копит счёт таймера жалости — БП 36")
+    void dryExplorationCounts() {
+        planet.setMaxPopulation(8);
+        player.setDryExplorations(1);
+
+        reward.explored(game, player, system);
+
+        assertThat(planet.getFind()).isNull();
+        assertThat(player.getDryExplorations()).isEqualTo(2);
     }
 
     @Test

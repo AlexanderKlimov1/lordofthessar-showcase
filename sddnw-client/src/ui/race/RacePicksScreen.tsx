@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { gameApi } from '../../api/client';
 import { useGameStore } from '../../state/gameStore';
 import { useModalEscape } from '../useModalEscape';
 import { RaceGroup } from './RaceGroup';
 import { PLACED_GROUPS, RACE_COLUMNS } from './raceColumns';
-import { returnedPicks, spentPicks, toggleInGroup } from './racePicks';
-import { tf, useT } from '../../i18n';
+import { priceDrift, returnedPicks, spentPicks, toggleInGroup, type PriceDrift } from './racePicks';
+import { t, tf, useT } from '../../i18n';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
 
@@ -34,10 +35,23 @@ import { figureLabelClass } from '../accent';
 export function RacePicksScreen({
   raceName,
   traits: initialTraits,
+  basedOn,
   confirmLabel,
+  saved,
   onAccept,
   onBack,
 }: {
+  /**
+   * Своя раса из записи — пункт 176: цены сторон и свободные очки на миг сохранения. По ним
+   * подешевевшие стороны горят зелёным, подорожавшие красным, а счётчик очков — зелёным, если
+   * балансировка расе прибавила свободных очков, и красным, если убавила.
+   */
+  saved?: { prices: Record<string, number>; free: number; templateId?: string };
+  /**
+   * От какой готовой расы начата сборка — field-backlog, пункт 123; пусто — с чистого листа.
+   * Готовая раса может стоить больше бюджета, и тогда экран говорит словами, сколько снять.
+   */
+  basedOn?: string;
   /** Название расы: в оригинале оно стоит в рамке над столбцами. */
   raceName: string;
   traits: string[];
@@ -48,7 +62,50 @@ export function RacePicksScreen({
 }) {
   const design = useGameStore((state) => state.raceDesign);
   const [traits, setTraits] = useState<string[]>(initialTraits);
+  const [drift, setDrift] = useState<PriceDrift | null>(null);
   const { t } = useT();
+  /** Ответ на «сохранить в свои расы» — строкой у полосы. */
+  const [savedNote, setSavedNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const saveOwn = () => {
+    setSavedNote(null);
+    gameApi.saveRaceTemplate({ id: saved?.templateId, name: raceName.trim() || t('race.picks.unnamed'), traits })
+      .then(() => setSavedNote({ ok: true, text: t('race.saved.done') }))
+      .catch((cause: Error) => setSavedNote({ ok: false, text: cause.message }));
+  };
+
+  /*
+    Сборка не пропадает молча — field-backlog, пункт 97. Справочник рас клиент берёт при
+    входе, а балансировка правит цены на лету: собранная раньше раса (экран помнит последнюю
+    сборку сеанса) может оказаться дороже бюджета, а сторона — пропасть. Поэтому экран
+    перечитывает справочник при открытии и, если для ЭТОЙ сборки что-то сдвинулось, говорит
+    словами, что именно; исчезнувшую сторону снимает, но называет. Решает игрок.
+  */
+  useEffect(() => {
+    let alive = true;
+    gameApi.reference
+      .raceTraits()
+      .then((fresh) => {
+        if (!alive) {
+          return;
+        }
+        const before = useGameStore.getState().raceDesign;
+        const found = priceDrift(before, fresh, initialTraits);
+        useGameStore.getState().setRaceDesign(fresh);
+        if (found) {
+          setDrift(found);
+          if (found.removed.length) {
+            const known = new Set(fresh.groups.flatMap((group) => group.options.map((option) => option.code)));
+            setTraits((chosen) => chosen.filter((code) => known.has(code)));
+          }
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+    // Только при открытии: сравнивается сборка, с которой экран открыли.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useModalEscape(true, onBack);
 
@@ -57,6 +114,10 @@ export function RacePicksScreen({
   const budget = design?.picks ?? 0;
   const antiBudget = design?.antiPicks ?? 0;
   const left = budget - spent;
+  // Своя раса из записи (пункт 176): свободных очков стало больше, чем при сохранении, — зелёный,
+  // меньше — красный. Тот же сдвиг виден и по сторонам, но итог — то, что игрок почувствует.
+  const freeMoved = saved === undefined || saved.free === left ? undefined
+    : left > saved.free ? 'good' as const : 'danger' as const;
   // Перебрать можно двумя способами, и они независимы: потратить больше бюджета или
   // вернуть слабостями больше потолка. Вторая раса укладывается в бюджет и всё равно
   // незаконна, поэтому «Ок» гасится по обоим числам, а не по одному остатку.
@@ -100,6 +161,7 @@ export function RacePicksScreen({
                       group={group!}
                       traits={traits}
                       headless={Boolean(column.heading)}
+                      savedPrices={saved?.prices}
                       onPick={pick(group!.code)}
                     />
                   ))}
@@ -110,6 +172,28 @@ export function RacePicksScreen({
           <p className="text-ink-faint">{t('race.picks.notLoaded')}</p>
         )}
 
+      {savedNote ? (
+        <p className={'mt-2 text-14 ' + (savedNote.ok ? 'text-good' : 'text-danger')}>
+          {savedNote.ok ? '✓ ' : '⚠ '}{savedNote.text}
+        </p>
+      ) : null}
+      {drift ? <DriftNote drift={drift} overspent={overspent} oversold={oversold} spent={spent} budget={budget} /> : null}
+      {/*
+        Своя раса от готовой — пункт 123 (и пункт 97: сборка должна удаваться). Готовые расы не
+        обязаны укладываться в бюджет, поэтому перерасход называется числом и не обрезается
+        молча: что снять, решает игрок.
+      */}
+      {basedOn && !drift ? (
+        <p className={'mt-2 text-14 ' + (overspent || oversold ? 'text-warn' : 'text-ink-soft')}>
+          {t('race.picks.basedOn', { name: basedOn })}{' '}
+          {overspent
+            ? t('race.picks.basedOn.overspent', { n: -left })
+            : oversold
+              ? t('race.picks.basedOn.oversold', { n: returned - antiBudget })
+              : t('race.picks.basedOn.fits')}
+        </p>
+      ) : null}
+
       {/*
         Нижняя полоса оригинала: CLEAR слева, счётчик очков по центру, ACCEPT справа.
         Возврат к именам — там же слева: в оригинале отсюда некуда возвращаться, раса
@@ -119,6 +203,10 @@ export function RacePicksScreen({
           <span className="flex items-center gap-3">
             <BarButton onClick={onBack}>{t('race.picks.back')}</BarButton>
             <BarButton onClick={() => setTraits([])}>{t('race.picks.clear')}</BarButton>
+            {/* Своя раса — в запись (пункты 26 и 176): только законная, как и вход в партию. */}
+            {overspent || oversold || traits.length === 0 ? null : (
+              <BarButton onClick={saveOwn}>{saved?.templateId ? t('race.saved.update') : t('race.saved.save')}</BarButton>
+            )}
           </span>
 
         <span className="absolute left-1/2 flex -translate-x-1/2 items-center gap-2">
@@ -128,8 +216,14 @@ export function RacePicksScreen({
               'border border-space-600 bg-space-950 px-3 py-0.5'
             }
           >
-            <Figure accent="value" tone={overspent ? 'danger' : undefined}>{left}</Figure>
+            <Figure accent="value" tone={overspent ? 'danger' : freeMoved}>{left}</Figure>
           </span>
+          {freeMoved && saved ? (
+            <span className={figureLabelClass('note') + (freeMoved === 'good' ? ' text-good' : ' text-danger')}
+                  title={t('race.saved.freeWas', { n: saved.free })}>
+              {freeMoved === 'good' ? '▲' : '▼'} {t('race.saved.wasShort', { n: saved.free })}
+            </span>
+          ) : null}
           <span className={figureLabelClass('value')}>{tf('race.picks.of', { n: <Figure accent="value">{budget}</Figure> })}</span>
           <span className={`ml-4 ${figureLabelClass('value')}`}>{t('race.picks.weaknesses')}</span>
           <span
@@ -170,5 +264,38 @@ function BarButton({ children, onClick }: { children: string; onClick: () => voi
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Что сдвинулось в собранной расе с прошлой сборки — пункт 97: цены сторон, бюджет, пропавшие
+ * стороны, — и что теперь делать, если раса вышла за бюджет. Словами и числами: «цена
+ * выросла: раса стоит 32 из 30» понятно, а погасшая кнопка «Ок» без объяснения — нет.
+ */
+function DriftNote({
+  drift,
+  overspent,
+  oversold,
+  spent,
+  budget,
+}: {
+  drift: PriceDrift;
+  overspent: boolean;
+  oversold: boolean;
+  spent: number;
+  budget: number;
+}) {
+  const parts = [
+    ...drift.prices.map((row) => t('race.drift.price', { name: row.name, from: row.from, to: row.to })),
+    ...drift.removed.map((name) => t('race.drift.removed', { name })),
+    ...(drift.budget ? [t('race.drift.budget', drift.budget)] : []),
+    ...(drift.antiBudget ? [t('race.drift.antiBudget', drift.antiBudget)] : []),
+  ];
+  return (
+    <div className="mt-[2%] border border-warn/60 bg-space-950 px-3 py-2 text-13 leading-relaxed text-ink">
+      <span className="text-warn">⚠ {t('race.drift.title')}</span> {parts.join('; ')}.
+      {overspent ? ' ' + t('race.drift.overspent', { spent, budget }) : ''}
+      {!overspent && oversold ? ' ' + t('race.drift.oversold') : ''}
+    </div>
   );
 }

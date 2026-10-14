@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- Отмена в пределах хода (field-backlog, пункт 74): что вернуть, если игрок передумал до конца хода. -->
+    <changeSet id="133-turn-undo" author="sddnw">
+        <createTable tableName="turn_undo">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_turn_undo_game"
+                             references="game(id)" deleteCascade="true"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="kind" type="varchar(16)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="payload" type="text">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="turn_undo" indexName="ix_turn_undo_player">
+            <column name="player_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- «Играть дальше» после победы (пункт 131): победа записана, новых не ищут. -->
+    <changeSet id="133-game-played-on" author="sddnw">
+        <addColumn tableName="game">
+            <column name="played_on" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!-- Свободный текст между людьми партии (пункт 16) и выключенные собеседники. -->
+    <changeSet id="133-chat" author="sddnw">
+        <addColumn tableName="game_signal">
+            <column name="text" type="varchar(400)"/>
+        </addColumn>
+        <addColumn tableName="player">
+            <column name="muted_players" type="varchar(512)"/>
+        </addColumn>
+    </changeSet>
+
+    <!-- Полосы промахов стрелка в тактическом бою (пункт 86). -->
+    <changeSet id="133-battle-miss-streak" author="sddnw">
+        <addColumn tableName="battle_ship">
+            <column name="miss_streak" type="int" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

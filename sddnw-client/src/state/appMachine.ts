@@ -1,4 +1,8 @@
+import { recordFault } from './faults';
 import { assign, fromCallback, fromPromise, setup } from 'xstate';
+import { bumpSignals } from './signals';
+import { takeChosenRaceTemplate } from './chosenRaceTemplate';
+import { takeChosenMod } from './chosenMod';
 import { gameApi, GameApiError } from '../api/client';
 import type { GameDetails } from '../api/types';
 import { noticeYourTurn } from '../ui/turnNotice';
@@ -12,11 +16,14 @@ import {
   clearView,
   readAccount,
   readActiveSession,
+  readMenuScreen,
   restoreAccount,
   writeActiveSession,
   writeTutorial,
   type StoredSession,
 } from './session';
+import { setTurnPhase } from './turnPhase';
+import { pendingInvite } from './invite';
 
 /**
  * Поток экранов клиента.
@@ -73,6 +80,20 @@ export interface AppContext {
   mightVictory: boolean;
   /** Срок хода в секундах — backlog-promo, пункт 11; пусто — без срока. */
   turnSeconds?: number;
+  /** Разрешить зрителей — field-backlog, пункт 59; по умолчанию нельзя. */
+  spectators: boolean;
+  /** Закрытая партия — пункт 67: только по приглашению; по умолчанию открытая. */
+  inviteOnly: boolean;
+  /** Ход итога по могуществу — пункт 24 («партия под вечер» — сотый). */
+  mightTurn: number;
+  /** Тихая галактика — пункт 186. */
+  peacefulAi: boolean;
+  /** Особенность галактики — пункт 94: RANDOM (умолчание окна), NONE или код. */
+  galaxyFeature: string;
+  /** Уровень сложности — пункт 9: умолчание окна — обычный. */
+  aiSkill: string;
+  /** Галактика недели — пункт 146: условия назначает сервер. */
+  weekly: boolean;
   /** Раса, собранная игроком в конструкторе — п. 7: держится между экранами. */
   raceName: string;
   raceTraits: string[];
@@ -108,6 +129,13 @@ export type AppEvent =
       wardenholdVictory?: boolean;
       mightVictory?: boolean;
       turnSeconds?: number;
+      spectators?: boolean;
+      inviteOnly?: boolean;
+      mightTurn?: number;
+      peacefulAi?: boolean;
+      galaxyFeature?: string;
+      aiSkill?: string;
+      weekly?: boolean;
     }
   | {
       type: 'JOIN_GAME';
@@ -120,12 +148,16 @@ export type AppEvent =
       banner?: string;
     }
   | { type: 'START_GAME' }
+  /** «Сыграть с людьми» — field-backlog, пункт 65: стол подбора вместо выбора партии. */
+  | { type: 'QUICK_MATCH'; playerName: string }
+  /** «Тем же составом» — пункт 149: новая партия по оконченной или вход в заведённую. */
+  | { type: 'REMATCH'; gameId: string }
   | { type: 'END_TURN' }
   /** Ход посчитан — пришло подпиской: считал его тот, кто закончил последним. */
   | { type: 'TURN_ADVANCED' }
   /** Состав партии изменился: кто-то вошёл, стартовал или закончил ход. */
   | { type: 'PLAYERS_CHANGED' }
-  | { type: 'LOAD_SAVE'; saveId: string }
+  | { type: 'LOAD_SAVE'; saveId: string; file?: string }
   | { type: 'REJOIN_GAME'; gameId: string }
   /** Игрок вошёл в игру — п. 3.1: экран входа отдал пропуск учётной записи. */
   | { type: 'AUTHORIZED' }
@@ -193,7 +225,12 @@ async function refreshAfterTurn(): Promise<void> {
   store.setEncounters(encounters);
   store.setWaitingFor([]);
   // Ход наступил, пока вкладка не на виду, — сказать об этом (backlog-promo, пункт 11).
-  noticeYourTurn(details.game.turn, details.game.name);
+  // В отпуске (пункт 177) не зовут: ИИ ведёт империю, и отпуск в том и состоит, что партия
+  // о себе не напоминает.
+  const me = details.players.find((player) => player.id === credentials.playerId);
+  if (!me?.vacationUntil) {
+    noticeYourTurn(details.game.turn, details.game.name);
+  }
 
   // Достроенная колониальная база ждёт, какую планету заселить — п. 4.1. Экран системы
   // открывается сам: иначе игроку пришлось бы искать по карте, где именно база готова.
@@ -264,6 +301,13 @@ export const appMachine = setup({
           wardenholdVictory: boolean;
           mightVictory: boolean;
           turnSeconds?: number;
+          spectators: boolean;
+          inviteOnly: boolean;
+          mightTurn: number;
+          peacefulAi: boolean;
+          galaxyFeature: string;
+          aiSkill: string;
+          weekly: boolean;
         };
       }) => {
         const joined = await gameApi.createGame({
@@ -288,6 +332,24 @@ export const appMachine = setup({
           mightVictory: input.tutorial ? false : input.mightVictory,
           // Срок хода нужен партии людей; обучению торопиться некуда.
           turnSeconds: input.tutorial ? undefined : input.turnSeconds,
+          // Зрители — с согласия создателя (пункт 59); у обучения смотреть не на что.
+          spectators: input.tutorial ? undefined : input.spectators || undefined,
+          // Закрытая партия (пункт 67): у обучения звать некого.
+          inviteOnly: input.tutorial ? undefined : input.inviteOnly || undefined,
+          // Партия под вечер (пункт 24) и тихая галактика (пункт 186) — не у обучения.
+          mightTurn: input.tutorial || input.mightTurn === 300 ? undefined : input.mightTurn,
+          peacefulAi: input.tutorial ? undefined : input.peacefulAi || undefined,
+          // Особенность галактики (пункт 94): обучение — без неё, оно учит обычной игре.
+          galaxyFeature: input.tutorial ? undefined : input.galaxyFeature,
+          // Уровень сложности (пункт 9): обучение берёт свой (новичок назначает сервер).
+          aiSkill: input.tutorial ? undefined : input.aiSkill,
+          weekly: input.weekly || undefined,
+          // Учебная партия в звания не идёт (пункт 41).
+          tutorial: input.tutorial || undefined,
+          // Раса из кабинета (пункт 99): взятая по чужой ссылке засчитывается автору.
+          raceTemplateId: takeChosenRaceTemplate(),
+          // Свой набор справочников основателя (пункт 42) — не у обучения и не у недели.
+          modId: input.tutorial || input.weekly ? undefined : takeChosenMod(),
         });
         useGameStore.getState().setLobby(joined.game, joined.players, joined.credentials);
         writeActiveSession(sessionOf(joined, joined.credentials));
@@ -302,11 +364,31 @@ export const appMachine = setup({
           партией). Подсказки те же и так же закрываются — кнопкой «закончить обучение».
         */
         if (input.tutorial || input.guest) {
-          writeTutorial({ gameId: joined.game.id, step: 0 });
+          // Сделанное до карты (пункт 53): вход в партию — всегда, выбор расы и знамени с именами —
+          // если игрок их выбирал (знамя приходит только с экрана выбора; обучение и быстрый
+          // старт выбирают за него).
+          writeTutorial({
+            gameId: joined.game.id, step: 0, tutorial: Boolean(input.tutorial),
+            given: input.banner ? 3 : 1,
+          });
         }
         return joined;
       },
     ),
+
+    rematch: fromPromise(async ({ input }: { input: { gameId: string } }) => {
+      const joined = await gameApi.rematch(input.gameId);
+      useGameStore.getState().setLobby(joined.game, joined.players, joined.credentials);
+      writeActiveSession(sessionOf(joined, joined.credentials));
+      return joined;
+    }),
+
+    quickMatch: fromPromise(async ({ input }: { input: { playerName: string } }) => {
+      const joined = await gameApi.quickMatch(input.playerName);
+      useGameStore.getState().setLobby(joined.game, joined.players, joined.credentials);
+      writeActiveSession(sessionOf(joined, joined.credentials));
+      return joined;
+    }),
 
     joinGame: fromPromise(
       async ({
@@ -330,6 +412,7 @@ export const appMachine = setup({
           input.raceTraits,
           input.raceCode || undefined,
           input.banner || undefined,
+          takeChosenRaceTemplate(),
         );
         useGameStore.getState().setLobby(joined.game, joined.players, joined.credentials);
         writeActiveSession(sessionOf(joined, joined.credentials));
@@ -359,8 +442,11 @@ export const appMachine = setup({
      * Загрузка сохранения: сервер поднимает из слепка новую партию, клиент получает
      * её состояние и пропуск игрока — дальше всё как в только что начатой игре.
      */
-    loadSave: fromPromise(async ({ input }: { input: { saveId: string } }) => {
-      const joined = await gameApi.loadSave(input.saveId);
+    loadSave: fromPromise(async ({ input }: { input: { saveId: string; file?: string } }) => {
+      // Партия из файла (пункт 160) входит той же дорогой, что и из сохранения.
+      const joined = input.file !== undefined
+        ? await gameApi.importSave(input.file)
+        : await gameApi.loadSave(input.saveId);
       useGameStore.getState().setLobby(joined.game, joined.players, joined.credentials);
       writeActiveSession(sessionOf(joined, joined.credentials));
       return joined;
@@ -372,6 +458,36 @@ export const appMachine = setup({
      * Отдельный вход, а не загрузка сохранения: партия уже идёт, поднимать нечего, нужен
      * лишь пропуск своего места. Дальше всё как после загрузки — состояние партии и карта.
      */
+    /**
+     * Одно нажатие от значка до своего хода — field-backlog, пункт 194: открыв игру без
+     * партии в этом браузере (другая машина, новая вкладка после выхода), игрок попадает не
+     * в меню, а в свою последнюю идущую партию. «Последняя» — первая в «Ваших партиях»:
+     * сервер ставит идущие по последнему посчитанному ходу. Сданная (пункт 81) и не начатая
+     * в счёт не идут. Нечего открыть — пусто, и машина идёт в меню.
+     */
+    resumeLastGame: fromPromise(async (): Promise<GameDetails | null> => {
+      // Открытый поверх меню экран (пульт, мастерская, настройки) — это место, куда игрок
+      // вернулся нарочно: перезагрузив его, он ждёт его же, а не карту.
+      if (readMenuScreen() !== null) {
+        return null;
+      }
+      // Пришёл по приглашению (пункт 15) — в меню, где его ждёт окно приглашения, а не в
+      // свою прошлую партию.
+      if (pendingInvite() !== null) {
+        return null;
+      }
+      const mine = await gameApi.myGames().catch(() => []);
+      useGameStore.getState().setMyGames(mine);
+      const last = mine.find((game) => game.status === 'IN_PROGRESS' && game.yourConcededTurn === undefined);
+      if (!last) {
+        return null;
+      }
+      const joined = await gameApi.rejoinGame(last.id);
+      useGameStore.getState().setLobby(joined.game, joined.players, joined.credentials);
+      writeActiveSession(sessionOf(joined, joined.credentials));
+      return joined;
+    }),
+
     rejoinGame: fromPromise(async ({ input }: { input: { gameId: string } }) => {
       const joined = await gameApi.rejoinGame(input.gameId);
       useGameStore.getState().setLobby(joined.game, joined.players, joined.credentials);
@@ -410,7 +526,15 @@ export const appMachine = setup({
       }
 
       useGameStore.getState().setTurnReport(result.report ?? null);
-      await refreshAfterTurn();
+      /*
+        Новый ход — на экране СРАЗУ, по ответу конца хода (12.10.2026, замер хозяина проекта): в
+        нём уже номер хода, казна, состав партии и отчёт. Карта, наука, флот и встречи
+        дочитываются следом и кнопку хода не держат — прежде игрок ждал ещё 0,1–0,4 с, пока
+        придут все семь ответов. Сбой дочитывания — строка в списке сбоев: ход уже посчитан, и
+        следующее действие или событие партии перечитает состояние снова.
+      */
+      void refreshAfterTurn().catch((failure: unknown) =>
+        recordFault('request', `после хода: ${String(failure)}`));
       return result;
     }),
 
@@ -443,10 +567,19 @@ export const appMachine = setup({
       }
       return gameApi.subscribe(game.id, credentials.accessToken, (event) => {
         if (event.type === 'TURN_ADVANCED') {
+          setTurnPhase(null);
           sendBack({ type: 'TURN_ADVANCED' });
+        }
+        // Какая фаза конца хода идёт — пункт 100: только показ, переходов машины нет.
+        if (event.type === 'TURN_PHASE' && event.text) {
+          setTurnPhase({ turn: event.turn ?? 0, code: event.text });
         }
         if (event.type === 'PLAYER_READY' || event.type === 'PLAYER_JOINED') {
           sendBack({ type: 'PLAYERS_CHANGED' });
+        }
+        // Короткий знак (пункт 183): переходов нет — панель и строка над картой перечитают сами.
+        if (event.type === 'SIGNAL') {
+          bumpSignals();
         }
       });
     }),
@@ -534,15 +667,29 @@ export const appMachine = setup({
     }),
   },
   guards: {
-    hasSession: ({ context }) => context.session !== null,
+    // Пришёл по приглашению (пункт 15) — открытую партию не поднимаем: ждёт окно приглашения в
+    // меню, и иначе ссылка друга молча уводила бы в свою прошлую партию.
+    hasSession: ({ context }) => context.session !== null && pendingInvite() === null,
     /**
      * Партия стартует сама, минуя лобби: обучение (соперник один и он ИИ) и гостевая
      * партия (соперники только ИИ, людей к гостю не пускают).
      */
     skipsLobby: ({ context }) => context.tutorial || context.guest,
-    /** Не авторизован — п. 3.1: дальше экрана входа игрока не пускают. */
-    noAccount: () => readAccount() === null,
+    /**
+     * Не авторизован — п. 3.1: дальше экрана входа игрока не пускают.
+     *
+     * Ссылка из письма (`?confirm=`) тоже ведёт на экран входа, даже когда запись в браузере
+     * есть: подтверждение разбирает он. Так открывает письмо гость, который зарегистрировался,
+     * не выходя из записи (field-backlog, пункт 1), — без этого ссылка молча пропадала бы, а
+     * запись оставалась гостевой.
+     */
+    noAccount: () =>
+      readAccount() === null || new URLSearchParams(window.location.search).has('confirm'),
     isStartedGame: ({ event }) => isStarted((event as unknown as { output: GameDetails }).output),
+    resumedStartedGame: ({ event }) => {
+      const output = (event as unknown as { output: GameDetails | null }).output;
+      return output !== null && isStarted(output);
+    },
   },
 }).createMachine({
   id: 'sddnw',
@@ -577,10 +724,18 @@ export const appMachine = setup({
       проверка прогона «старт: добор ИИ до 8». Окно же число называет всегда.
     */
     totalPlayers: 4,
-    // Пути к победе включены по умолчанию — решение хозяина проекта (backlog-promo, п. 2).
+    // Пути к победе включены по умолчанию — решение хозяина проекта (backlog-promo, п. 2). Итог по
+    // могуществу — путь по выбору (09.10.2026): выключен, пока создатель партии его не включит.
     council: true,
     wardenholdVictory: true,
-    mightVictory: true,
+    mightVictory: false,
+    spectators: false,
+    inviteOnly: false,
+    mightTurn: 300,
+    peacefulAi: false,
+    galaxyFeature: 'RANDOM',
+    aiSkill: 'NORMAL',
+    weekly: false,
     raceName: '',
     raceTraits: [],
     raceCode: '',
@@ -599,7 +754,8 @@ export const appMachine = setup({
           { target: 'auth', guard: 'noAccount' },
           // Игрок обновил страницу, не выходя из партии, — возвращаем его в неё.
           { target: 'restoring', guard: 'hasSession' },
-          { target: 'menu' },
+          // Партии в этом браузере нет — сперва последняя партия записи (пункт 194).
+          { target: 'resuming' },
         ],
         onError: { target: 'offline', actions: ['storeError', 'publishError'] },
       },
@@ -617,7 +773,7 @@ export const appMachine = setup({
       on: {
         AUTHORIZED: [
           { target: 'restoring', guard: 'hasSession' },
-          { target: 'menu' },
+          { target: 'resuming' },
         ],
       },
     },
@@ -636,6 +792,21 @@ export const appMachine = setup({
           target: 'menu',
           actions: ['forgetSession', 'resetGame', 'storeError', 'publishError'],
         },
+      },
+    },
+
+    /**
+     * Своя последняя партия — field-backlog, пункт 194: вошедший без партии в браузере
+     * открывает её сразу, а не меню. Сбой — тихо в меню: это удобство, а не условие входа.
+     */
+    resuming: {
+      invoke: {
+        src: 'resumeLastGame',
+        onDone: [
+          { target: 'loadingMap', guard: 'resumedStartedGame' },
+          { target: 'menu' },
+        ],
+        onError: { target: 'menu', actions: 'resetGame' },
       },
     },
 
@@ -672,6 +843,13 @@ export const appMachine = setup({
             wardenholdVictory: ({ event }) => event.wardenholdVictory ?? true,
             mightVictory: ({ event }) => event.mightVictory ?? true,
             turnSeconds: ({ event }) => event.turnSeconds,
+            spectators: ({ event }) => event.spectators ?? false,
+            inviteOnly: ({ event }) => event.inviteOnly ?? false,
+            mightTurn: ({ event }) => event.mightTurn ?? 300,
+            peacefulAi: ({ event }) => event.peacefulAi ?? false,
+            galaxyFeature: ({ event }) => event.galaxyFeature ?? 'RANDOM',
+            aiSkill: ({ event }) => event.aiSkill ?? 'NORMAL',
+            weekly: ({ event }) => event.weekly ?? false,
           }),
         },
         JOIN_GAME: {
@@ -687,6 +865,34 @@ export const appMachine = setup({
         },
         LOAD_SAVE: 'loadingSave',
         REJOIN_GAME: 'rejoiningGame',
+        QUICK_MATCH: 'quickMatching',
+        REMATCH: 'rematching',
+      },
+    },
+
+    /** Тем же составом — пункт 149: в лобби новой партии. */
+    rematching: {
+      entry: ['clearError', 'hideError'],
+      invoke: {
+        src: 'rematch',
+        input: ({ event }) => ({
+          gameId: (event as Extract<AppEvent, { type: 'REMATCH' }>).gameId,
+        }),
+        onDone: { target: 'lobby' },
+        onError: { target: 'menu', actions: ['storeError', 'publishError'] },
+      },
+    },
+
+    /** Место за столом подбора — пункт 65: дальше лобби с отсчётом до автостарта. */
+    quickMatching: {
+      entry: ['clearError', 'hideError'],
+      invoke: {
+        src: 'quickMatch',
+        input: ({ event }) => ({
+          playerName: (event as Extract<AppEvent, { type: 'QUICK_MATCH' }>).playerName,
+        }),
+        onDone: { target: 'lobby' },
+        onError: { target: 'menu', actions: ['storeError', 'publishError'] },
       },
     },
 
@@ -713,6 +919,7 @@ export const appMachine = setup({
         src: 'loadSave',
         input: ({ event }) => ({
           saveId: (event as Extract<AppEvent, { type: 'LOAD_SAVE' }>).saveId,
+          file: (event as Extract<AppEvent, { type: 'LOAD_SAVE' }>).file,
         }),
         onDone: [
           { target: 'loadingMap', guard: 'isStartedGame' },
@@ -742,6 +949,13 @@ export const appMachine = setup({
           wardenholdVictory: context.wardenholdVictory,
           mightVictory: context.mightVictory,
           turnSeconds: context.turnSeconds,
+          spectators: context.spectators,
+          inviteOnly: context.inviteOnly,
+          mightTurn: context.mightTurn,
+          peacefulAi: context.peacefulAi,
+          galaxyFeature: context.galaxyFeature,
+          aiSkill: context.aiSkill,
+          weekly: context.weekly,
         }),
         onDone: { target: 'lobby' },
         onError: { target: 'menu', actions: ['storeError', 'publishError'] },
@@ -774,7 +988,12 @@ export const appMachine = setup({
         объяснил бы новичку то, чего в его партии нет.
       */
       always: { target: 'startingGame', guard: 'skipsLobby' },
-      invoke: { src: 'pollLobby' },
+      /*
+        Партию стартовал не этот игрок — создатель или часы стола подбора (пункт 65): опрос лобби
+        видит её идущей и ведёт на карту. Прежде лобби этого не замечало вовсе, и вошедший в чужую
+        партию оставался перед списком мест после её старта.
+      */
+      invoke: { src: 'pollLobby', onDone: { target: 'loadingMap', guard: 'resumedStartedGame' } },
       after: {
         3000: { target: 'lobby', reenter: true },
       },

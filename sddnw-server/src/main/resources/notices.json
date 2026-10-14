@@ -1,0 +1,726 @@
+{
+  "notes": "«Что нового» и объявления об изменениях — field-backlog, пункты 159 и 161: изменения, которые касаются игрока, не происходят молча. version — номер текущей версии игры: он стоит в главном меню и уходит с каждым сообщением о проблеме; поднимают его вместе с выкладкой, о которой есть что сказать игроку. Каждая запись — дата выкладки, версия, раздел (kind) и текст на двух языках. Разделы: loss — что потеряно или сдвинулось и что делать (пункт 161, обязательно при всякой потере данных или настроек), changed — изменилось в правилах, prices — сдвинулись цены сторон рас (и почему — из журнала цен balance-metrics-works.txt), new — новое, fixed — исправлено. Учётная запись видит запись один раз, при первом входе после её даты; записи, заведённые позже, её не видят — у них ничего не отняли. Весь список открывается по ссылке с номером версии в меню. Текст — правилом игры и словами игрока, а не «в коде поменяли».",
+  "version": "0.1.30",
+  "notices": [
+    {
+      "id": "2026-10-05-thessar",
+      "date": "2026-10-05T00:00:00+03:00",
+      "version": "0.1.0",
+      "kind": "changed",
+      "text": {
+        "en": "The game is now called Lord of Thessar, and the special star in the centre of the galaxy is Thessar. Games started earlier keep the star's old name — nothing in them is lost, they play on as before.",
+        "ru": "Игра теперь зовётся «Владыка Тессара», а особая звезда в центре галактики — Тессар. В партиях, начатых раньше, звезда сохранила прежнее имя — ничего в них не потеряно, они доигрываются как были."
+      }
+    },
+    {
+      "id": "2026-10-05-whats-new",
+      "date": "2026-10-05T22:30:00+03:00",
+      "version": "0.1.1",
+      "kind": "new",
+      "text": {
+        "en": "The version number now stands in the main menu, and this list opens from it. A problem you report gets an answer: when it is fixed, you will read here in which version.",
+        "ru": "Номер версии теперь стоит в главном меню, и по нему открывается этот список. Сообщение о проблеме получает ответ: когда её исправят, вы прочтёте здесь, в какой версии."
+      }
+    },
+    {
+      "id": "2026-10-05-plain-words",
+      "date": "2026-10-05T22:30:00+03:00",
+      "version": "0.1.1",
+      "kind": "fixed",
+      "text": {
+        "en": "The galaxy reference names planet sizes, climates and technologies in your language, and no longer mentions a technology the game does not have.",
+        "ru": "Справочник галактики называет размеры планет, климаты и технологии по-русски и больше не упоминает технологию, которой в игре нет."
+      }
+    },
+    {
+      "id": "2026-10-05-banners",
+      "date": "2026-10-05T23:30:00+03:00",
+      "version": "0.1.2",
+      "kind": "changed",
+      "text": {
+        "en": "The eight banners have new shades that stay distinct with any kind of colour blindness, and each carries its own sign — on the flag, before the star name and next to the fleet icon. Games already under way switched to the new shades on their own: your empire keeps its banner.",
+        "ru": "У восьми знамён новые оттенки — они различимы при любом виде дальтонизма, — и у каждого свой знак: на флаге, перед названием звезды и у значка флота. Идущие партии перешли на новые оттенки сами: знамя вашей империи осталось тем же."
+      }
+    },
+    {
+      "id": "2026-10-06-ending",
+      "date": "2026-10-06T08:00:00+03:00",
+      "version": "0.1.3",
+      "kind": "new",
+      "text": {
+        "en": "The end of a game is now a scene of its own: what you achieved and your best moment, how the game ended — in words and numbers — and the might of every empire over the whole game. Finished games stay in “Your games”, and their results open from there again.",
+        "ru": "Конец партии теперь — своя сцена: что у вас получилось и ваш лучший миг, чем кончилась партия — словами и числами — и мощь всех империй за всю партию. Оконченные партии остаются в «Ваших партиях», и их итоги открываются оттуда ещё раз."
+      }
+    },
+    {
+      "id": "2026-10-06-tablet",
+      "date": "2026-10-06T08:00:00+03:00",
+      "version": "0.1.3",
+      "kind": "new",
+      "text": {
+        "en": "The game can be played on a tablet: the first tap shows what the mouse shows on hover — a technology, a race, a planet — and the second one acts; the map zooms with two fingers. On a narrow screen the right panel takes less room.",
+        "ru": "В игру можно играть на планшете: первое касание показывает то, что мышь показывает наведением, — технологию, расу, планету, — а второе действует; карту приближают двумя пальцами. На узком экране правая панель занимает меньше места."
+      }
+    },
+    {
+      "id": "2026-10-06-chronicle",
+      "date": "2026-10-06T09:00:00+03:00",
+      "version": "0.1.4",
+      "kind": "new",
+      "text": {
+        "en": "Every game now keeps a chronicle of its great moments — first contact, the first battle won, colonies taken and lost, the Council — and the results of the game tell it. Games started earlier keep it from now on.",
+        "ru": "Каждая партия теперь ведёт летопись главных моментов — первое знакомство, первая победа в бою, взятые и потерянные колонии, совет, — и итоги партии её рассказывают. В партиях, начатых раньше, она ведётся с этого дня."
+      }
+    },
+    {
+      "id": "2026-10-06-concede",
+      "date": "2026-10-06T09:00:00+03:00",
+      "version": "0.1.4",
+      "kind": "new",
+      "text": {
+        "en": "A hopeless game can be ended with dignity: Game → “Concede defeat”. Against the AI the game ends and you see its results; with other people it goes on without you, and the AI leads your empire.",
+        "ru": "Безнадёжную партию можно закончить достойно: «Игра» → «Признать поражение». Против ИИ партия кончается, и вы видите её итоги; с другими людьми она идёт дальше без вас, а вашу империю ведёт ИИ."
+      }
+    },
+    {
+      "id": "2026-10-06-resume",
+      "date": "2026-10-06T10:00:00+03:00",
+      "version": "0.1.5",
+      "kind": "changed",
+      "text": {
+        "en": "Opening the game takes you straight to your last game in progress — on any computer, not only this one. The main menu is one click away: Game → Quit.",
+        "ru": "Игра открывается сразу на вашей последней идущей партии — на любом компьютере, а не только на этом. Главное меню — в одно нажатие: «Игра» → «Выход»."
+      }
+    },
+    {
+      "id": "2026-10-06-quick-start",
+      "date": "2026-10-06T10:00:00+03:00",
+      "version": "0.1.5",
+      "kind": "new",
+      "text": {
+        "en": "A guest game starts from one screen: “Play now” — the race, banner and names are chosen for you — or “Build your own”.",
+        "ru": "Гостевая партия начинается с одного экрана: «Играть сразу» — раса, знамя и имена выбраны за вас — или «Собрать свою»."
+      }
+    },
+    {
+      "id": "2026-10-06-return",
+      "date": "2026-10-06T11:00:00+03:00",
+      "version": "0.1.6",
+      "kind": "new",
+      "text": {
+        "en": "“Your games” now say whether your move is awaited, your place and the last great moment of each game; returning after more than a day, you get a one-screen summary of where you left off.",
+        "ru": "«Ваши партии» теперь говорят, ждут ли вашего хода, ваше место и последний главный момент каждой партии; вернувшись больше чем через сутки, вы видите сводку на один экран — на чём остановились."
+      }
+    },
+    {
+      "id": "2026-10-06-undo-turn",
+      "date": "2026-10-06T11:00:00+03:00",
+      "version": "0.1.6",
+      "kind": "new",
+      "text": {
+        "en": "In a game with other people a declared turn can be taken back while the rivals have not finished theirs: “take the turn back” under the turn button. Stars on the map and the small buttons of the build queue are easier to hit with a finger.",
+        "ru": "В партии с другими людьми объявленный ход можно забрать, пока соперники не закончили свой: «забрать ход» над кнопкой хода. По звёздам на карте и мелким кнопкам очереди стройки проще попасть пальцем."
+      }
+    },
+    {
+      "id": "2026-10-06-numbers",
+      "date": "2026-10-06T13:00:00+03:00",
+      "version": "0.1.7",
+      "kind": "new",
+      "text": {
+        "en": "Numbers explain themselves: each building in the build list shows in how many turns it pays back on this colony (the list can be sorted by it), and a click on the food, production or research of a colony shows what it is made of.",
+        "ru": "Числа объясняют себя: у здания в списке стройки — за сколько ходов оно окупится на этой колонии (по этому сроку список можно упорядочить), а нажатие на еду, производство или науку колонии показывает, из чего они сложились."
+      }
+    },
+    {
+      "id": "2026-10-06-hints",
+      "date": "2026-10-06T13:00:00+03:00",
+      "version": "0.1.7",
+      "kind": "new",
+      "text": {
+        "en": "Hints can be dismissed for good (“do not show again”), and a player who knows the genre can switch the newcomer hints off; both live in Preferences → Hints.",
+        "ru": "Подсказку можно отклонить насовсем («больше не показывать»), а знающий жанр может выключить подсказки новичку; и то и другое — в «Настройки» → «Подсказки»."
+      }
+    },
+    {
+      "id": "2026-10-06-first-time",
+      "date": "2026-10-06T14:00:00+03:00",
+      "version": "0.1.8",
+      "kind": "new",
+      "text": {
+        "en": "The first time you meet a mechanic — a battle, a monster, the Council, pollution, buying a project, a leader’s offer — the game explains its rule in one line. “Got it” hides it for good.",
+        "ru": "При первой встрече с механикой — боем, чудищем, советом, загрязнением, выкупом стройки, предложением лидера — игра объясняет её правило одной строкой. «Понятно» убирает её насовсем."
+      }
+    },
+    {
+      "id": "2026-10-06-takeover",
+      "date": "2026-10-06T14:00:00+03:00",
+      "version": "0.1.8",
+      "kind": "changed",
+      "text": {
+        "en": "In a game with other people, a minute before the AI takes over an idle empire the right panel warns you and offers “I am here”; if the AI already runs it, one click takes it back.",
+        "ru": "В партии с людьми за минуту до того, как ИИ возьмёт империю отошедшего игрока, правая панель предупреждает и предлагает «я здесь»; если ИИ уже ведёт её — забрать можно одним нажатием."
+      }
+    },
+    {
+      "id": "2026-10-06-windows",
+      "date": "2026-10-06T14:00:00+03:00",
+      "version": "0.1.8",
+      "kind": "new",
+      "text": {
+        "en": "Preferences → Windows: choose which windows open by themselves after a turn (explored system, research, scenes). Scouts on their own no longer open the system screen — their finds stay lines in the turn results.",
+        "ru": "«Настройки» → «Окна»: какие окна открываются сами после хода (разведанная система, наука, сцены). Разведчики на свободном поиске больше не открывают экран системы — их находки остаются строками итогов."
+      }
+    },
+    {
+      "id": "2026-10-06-forecast",
+      "date": "2026-10-06T14:30:00+03:00",
+      "version": "0.1.9",
+      "kind": "new",
+      "text": {
+        "en": "The fleet encounter window names the strength of both sides and the likely outcome — likely victory, unclear or likely defeat. The rival’s strength is shown only once you have seen the technologies on his ships; until then it is called unknown.",
+        "ru": "Окно встречи флотов называет силу сторон и вероятный исход — вероятная победа, исход неясен или вероятное поражение. Сила соперника видна, только когда технологии на его кораблях вами увидены; до тех пор она названа неизвестной."
+      }
+    },
+    {
+      "id": "2026-10-06-steward",
+      "date": "2026-10-06T14:30:00+03:00",
+      "version": "0.1.9",
+      "kind": "new",
+      "text": {
+        "en": "Back after the AI ran your empire, you see what it decided for you, turn by turn: what it built, where it sent fleets, which encounters it took and what it researched.",
+        "ru": "Вернувшись после того, как вашей империей распоряжался ИИ, вы видите, что он решил за вас, по ходам: что заложил, куда отправил флоты, какие встречи принял и что выбрал в науке."
+      }
+    },
+    {
+      "id": "2026-10-06-results",
+      "date": "2026-10-06T14:30:00+03:00",
+      "version": "0.1.9",
+      "kind": "changed",
+      "text": {
+        "en": "Turn results put losses right after threats, and events of one kind fold into a single line (“Buildings completed: 7”) that opens on a click.",
+        "ru": "В итогах хода потери идут сразу за угрозами, а однотипные события свёрнуты в одну строку («Достроено зданий: 7»), которая раскрывается нажатием."
+      }
+    },
+    {
+      "id": "2026-10-06-levers",
+      "date": "2026-10-06T15:15:00+03:00",
+      "version": "0.1.10",
+      "kind": "new",
+      "text": {
+        "en": "After a quick battle both sides see what the strength was made of — ships, salvo, durability, shield — and the loser gets one line on what to change when the rules name a cause: shields that stop his shots, a ship twice as strong, twice as many ships, missing barracks.",
+        "ru": "После быстрого боя обе стороны видят, из чего сложилась сила, — корабли, залп, прочность, щит, — а проигравший получает строку о том, что изменить, когда причину называют правила: щиты, гасящие его выстрелы, вдвое сильный корабль, вдвое больше кораблей, недостающие казармы."
+      }
+    },
+    {
+      "id": "2026-10-06-gains",
+      "date": "2026-10-06T15:15:00+03:00",
+      "version": "0.1.10",
+      "kind": "new",
+      "text": {
+        "en": "A finished building tells in the turn results what it gave the colony (production, research, income), the research screen names what a technology opens, and the turn results name turning points — becoming the strongest empire you know, or losing first place.",
+        "ru": "Достроенное здание пишет в итогах хода, что оно дало колонии (производство, наука, доход), экран науки называет, что откроет технология, а итоги хода называют переломы — вы стали сильнейшей империей среди знакомых или потеряли первое место."
+      }
+    },
+    {
+      "id": "2026-10-06-victory",
+      "date": "2026-10-06T16:30:00+03:00",
+      "version": "0.1.11",
+      "kind": "new",
+      "text": {
+        "en": "Info → Victory shows how far each path to victory is: Council votes against the two thirds needed, conquest, holding Thessar and your place by might. The turn results name the nearest milestone, and the right panel tells about Thessar from the first turn.",
+        "ru": "«Инфо» → «Победа» показывает, насколько близок каждый путь к победе: голоса совета против нужных двух третей, покорение, удержание Тессара и ваше место по могуществу. Итоги хода называют ближайшую веху, а правая панель с первого хода рассказывает о Тессаре."
+      }
+    },
+    {
+      "id": "2026-10-06-session",
+      "date": "2026-10-06T16:30:00+03:00",
+      "version": "0.1.11",
+      "kind": "new",
+      "text": {
+        "en": "Leaving a game shows what this session brought — turns, breakthroughs, buildings, ships, battles won, new contacts — and one line on what is left unfinished.",
+        "ru": "Выход из партии показывает, что принёс сеанс, — ходы, прорывы, здания, корабли, выигранные бои, знакомства — и одну строку о незаконченном."
+      }
+    },
+    {
+      "id": "2026-10-06-rules",
+      "date": "2026-10-06T17:30:00+03:00",
+      "version": "0.1.12",
+      "kind": "new",
+      "text": {
+        "en": "Info → How it works: what happens when you press Turn, phase by phase, and the rules — victory, Council, colonists, pollution, buying, battle, ground combat, trust, command points — with the numbers of this game. Info → Chronicle keeps everything notable in the game, turn by turn.",
+        "ru": "«Инфо» → «Как устроено»: что происходит, когда нажат ход, — по фазам, и правила — победа, совет, жители, загрязнение, выкуп, бой, наземный бой, доверие, командные очки — с числами этой игры. «Инфо» → «Хроника» хранит всё заметное в партии по ходам."
+      }
+    },
+    {
+      "id": "2026-10-06-motion",
+      "date": "2026-10-06T17:30:00+03:00",
+      "version": "0.1.12",
+      "kind": "new",
+      "text": {
+        "en": "Preferences → Motion: less motion turns off rotating galaxies, flicker and engine flames. Hovering an unexplored star tells what is known and how to find out the rest; the Turn button shows that the turn is being computed and whom it waits for.",
+        "ru": "Настройки → «Движение»: «меньше движения» останавливает вращение галактик, мерцание и огонь двигателей. Наведение на неразведанную звезду говорит, что о ней известно и как узнать остальное; кнопка хода показывает, что ход считается и кого ждут."
+      }
+    },
+    {
+      "id": "2026-10-06-story",
+      "date": "2026-10-06T18:10:00+03:00",
+      "version": "0.1.13",
+      "kind": "new",
+      "text": {
+        "en": "Envoys now speak in the character of their rulers and remember aloud the wars you declared and the treaties you broke. The end of a game begins with how it went — the strongest turns of your chronicle. While a long turn is computed, the Turn button names the phase that is running.",
+        "ru": "Послы теперь говорят в характере своих правителей и вслух припоминают объявленные вами войны и разорванные договоры. Сцена конца партии начинается с того, как это было, — сильнейших поворотов вашей хроники. Пока считается долгий ход, кнопка хода называет идущий этап."
+      }
+    },
+    {
+      "id": "2026-10-06-firsts",
+      "date": "2026-10-06T19:00:00+03:00",
+      "version": "0.1.14",
+      "kind": "new",
+      "text": {
+        "en": "The end of a game names the first places — population, production, research, fleet, technologies, colonies, battles — so everyone sees where they were best. Leaders keep a service record: battles of their fleet and the growth of the system they govern. A note to yourself about the game sits on the right panel. A ready race can be taken as the base of your own: \"change this race\" on the race screen.",
+        "ru": "Сцена конца партии называет первые места — по населению, производству, науке, флоту, технологиям, колониям, боям, — и каждый видит, в чём был лучшим. У лидеров появился послужной список: бои их флота и рост системы губернатора. Записка себе о партии — на правой панели. Готовую расу можно взять основой своей: «изменить эту расу» на экране выбора расы."
+      }
+    },
+    {
+      "id": "2026-10-06-history",
+      "date": "2026-10-06T19:30:00+03:00",
+      "version": "0.1.15",
+      "kind": "new",
+      "text": {
+        "en": "The main menu keeps your game history with personal records — counted from this version on. A victory names how hard it was; when a game ends, the whole galaxy is revealed. Fleets can be named and keep their battle record. The game can be installed as an app from the browser.",
+        "ru": "Главное меню хранит историю ваших партий с личными рекордами — начиная с этой версии. Победа называет, какой трудной была; когда партия кончилась, раскрывается вся галактика. Флоту можно дать имя, и он копит свой счёт боёв. Игру можно поставить из браузера как приложение."
+      }
+    },
+    {
+      "id": "2026-10-06-leaders-saved",
+      "date": "2026-10-06T20:00:00+03:00",
+      "version": "0.1.16",
+      "kind": "fixed",
+      "text": {
+        "en": "Leaders now survive saving and loading a game. Saves made earlier do not hold leaders: a game loaded from them starts without hired leaders, as before.",
+        "ru": "Лидеры теперь переживают сохранение и загрузку партии. В сохранениях, сделанных раньше, лидеров нет: поднятая из них партия начнётся без нанятых лидеров, как и прежде."
+      }
+    },
+    {
+      "id": "2026-10-06-path",
+      "date": "2026-10-06T20:00:00+03:00",
+      "version": "0.1.16",
+      "kind": "new",
+      "text": {
+        "en": "The end of a game shows the winner's path — when it settled and what it had by turns 50, 100 and 150 — and compares your might with your best game of the same setup; Info shows the same comparison and how far you are from your neighbours. A first game starts with three races to choose from: growth, science, war.",
+        "ru": "Сцена конца показывает путь победителя — когда расселился и что было к 50-му, 100-му и 150-му ходу — и сравнивает вашу мощь с лучшей вашей партией той же настройки; «Инфо» показывает то же сравнение и расстояние до соседей. Первая партия начинается с выбора из трёх рас: рост, наука, война."
+      }
+    },
+    {
+      "id": "2026-10-06-glyphs",
+      "date": "2026-10-06T21:30:00+03:00",
+      "version": "0.1.17",
+      "kind": "changed",
+      "text": {
+        "en": "Banner signs (▲ ● ■ ◆ ★ ✚ ▼ ✦) next to star names, fleets and colony flags are now off by default. If you told owners apart by them, switch them back on: Preferences → Special abilities.",
+        "ru": "Знаки знамён (▲ ● ■ ◆ ★ ✚ ▼ ✦) у названий звёзд, флотов и флажков колоний теперь по умолчанию выключены. Если вы различали по ним хозяев, включите их снова: «Настройки» → «Особые возможности»."
+      }
+    },
+    {
+      "id": "2026-10-06-battle-end",
+      "date": "2026-10-06T21:30:00+03:00",
+      "version": "0.1.17",
+      "kind": "fixed",
+      "text": {
+        "en": "A tactical battle no longer vanishes the moment it ends: the last volleys play out, and the closing window names what was lost and why, and how much strength a monster has left. The main menu and the sign-in screen offer to install the game where the browser can do it.",
+        "ru": "Тактический бой больше не исчезает в миг конца: последние залпы доигрываются, а окно итога называет, что погибло и от чего, и сколько сил осталось у чудища. Главное меню и экран входа предлагают установить игру там, где браузер это умеет."
+      }
+    },
+    {
+      "id": "2026-10-06-retreat",
+      "date": "2026-10-06T23:30:00+03:00",
+      "version": "0.1.17",
+      "kind": "changed",
+      "text": {
+        "en": "Retreat in a tactical battle is now an order to one ship: it turns back and jumps to hyperspace on its next turn, if it lives that long. A fleet that leaves no ship on the field flies back to your nearest colony. A ship with a wrecked drive cannot retreat — before, it was lost when its side withdrew.",
+        "ru": "Отход в тактическом бою теперь приказ одному кораблю: он разворачивается и уходит в гиперпространство на своём следующем ходу, если доживёт. Флот, не оставивший на поле ни одного корабля, улетает к ближайшей вашей колонии. Корабль с разбитым двигателем отойти не может — прежде он погибал при отходе своей стороны."
+      }
+    },
+    {
+      "id": "2026-10-07-fullscreen",
+      "date": "2026-10-07T08:10:00+03:00",
+      "version": "0.1.17",
+      "kind": "new",
+      "text": {
+        "en": "The game opens full screen: the Game menu item or the F9 key; the key can be changed in Preferences. Money is called gc everywhere now, without the odd \"credits\".",
+        "ru": "Игра разворачивается во весь экран: пункт меню «Игра» или клавиша F9, её можно переназначить в настройках. Деньги теперь везде зовутся gc, без случайных «кредитов»."
+      }
+    },
+    {
+      "id": "2026-10-07-declare",
+      "date": "2026-10-07T11:30:00+03:00",
+      "version": "0.1.17",
+      "kind": "new",
+      "text": {
+        "en": "When every other living empire together is three times weaker than yours, the Game menu lets you declare victory instead of playing out a settled game. The N key cycles through fleets without orders and colonies with nothing to build. After a game you may be asked how it was — once in three games, and \"not now\" is remembered. In a game started with \"Play now\" a weakened space monster now guards the system next to your home: your first scouts can win the fight.",
+        "ru": "Когда все прочие живые империи вместе слабее вашей втрое, в меню «Игра» можно объявить победу, не доигрывая решённую партию. Клавиша N обходит флоты без приказа и колонии без стройки. После партии вас могут спросить, как она прошла, — не чаще раза в три партии, и «не сейчас» запоминается. В партии «Играть сейчас» систему рядом с родной звездой теперь сторожит ослабленное чудище: первые разведчики могут его одолеть."
+      }
+    },
+    {
+      "id": "2026-10-07-sound",
+      "date": "2026-10-07T13:30:00+03:00",
+      "version": "0.1.17",
+      "kind": "changed",
+      "text": {
+        "en": "Music is out of the game for now: it will come back when it sounds right. The speaker icon in the corner now turns only the sound effects on and off — button clicks, the end of turn, battle sounds. Music and effects are set separately in Preferences, section Sound.",
+        "ru": "Музыки в игре пока нет: она вернётся, когда зазвучит как надо. Значок динамика в углу теперь включает и выключает только звуковые эффекты — нажатия кнопок, конец хода, звуки боя. Музыка и эффекты настраиваются раздельно: «Настройки», раздел «Звук»."
+      }
+    },
+    {
+      "id": "2026-10-07-invite",
+      "date": "2026-10-07T14:10:00+03:00",
+      "version": "0.1.17",
+      "kind": "new",
+      "text": {
+        "en": "Invite a friend: the Game menu and the lobby give a link to your table, and a friend can join as a guest, without registering — into a game that has not started yet, or into a running one, taking over an empire the AI leads. In a game with other people you can go on vacation for 1 to 14 days: the AI leads your empire and the game does not wait for you. The list of open games now shows the turn time before you join.",
+        "ru": "Пригласите друга: в меню «Игра» и в лобби есть ссылка за ваш стол, и друг входит гостем, без регистрации — в ещё не начатую партию или в идущую, за империю, которую вёл ИИ. В партии с другими людьми можно уйти в отпуск на 1–14 дней: империю ведёт ИИ, и партия вас не ждёт. В списке открытых партий срок хода виден до входа."
+      }
+    },
+    {
+      "id": "2026-10-07-account",
+      "date": "2026-10-07T15:40:00+03:00",
+      "version": "0.1.17",
+      "kind": "new",
+      "text": {
+        "en": "A forgotten password can now be reset: \"Forgot your password?\" on the sign-in screen sends a link by mail. In Preferences, section Account, you can change the password and the e-mail or delete the account. The Info screen's Reference lists what works differently from the classics of the genre, and the main menu has an About page with credits.",
+        "ru": "Забытый пароль теперь можно сбросить: «Забыли пароль?» на экране входа шлёт ссылку на почту. В «Настройках», раздел «Учётная запись», можно сменить пароль и почту или удалить запись. В «Инфо» → справочник — что здесь иначе, чем в классике жанра, а в главном меню — страница «Об игре» с титрами."
+      }
+    },
+    {
+      "id": "2026-10-07-people",
+      "date": "2026-10-07T16:10:00+03:00",
+      "version": "0.1.17",
+      "kind": "changed",
+      "text": {
+        "en": "In a game with other people, peace, treaties, tribute and technology exchange offered to a person are now decided by that person, not by trust: the offer waits for an answer until the end of the next turn and is carried out at the end of the turn; without an answer, trust decides as before. The main menu has \"Play with people\": a seat at the nearest table, which starts by itself once two people sit at it. In Preferences you can let the browser notify you when the turn has been calculated. On return after a long break the summary also names what your colonies are building and whom you are at war with.",
+        "ru": "В партии с другими людьми мир, договор, дань и обмен технологиями, предложенные человеку, теперь решает он сам, а не доверие: предложение ждёт ответа до конца следующего хода и исполняется в конце хода; без ответа, как и прежде, решает доверие. В главном меню — «Сыграть с людьми»: место за ближайшим столом, который стартует сам, как только за ним двое. В «Настройках» можно разрешить браузеру сообщать, что ход посчитан. Сводка после долгого перерыва называет теперь и стройку колоний, и войны."
+      }
+    },
+    {
+      "id": "2026-10-07-together",
+      "date": "2026-10-07T17:00:00+03:00",
+      "version": "0.1.17",
+      "kind": "new",
+      "text": {
+        "en": "In a game with other people, the Races screen has ready phrases — to everyone or to one player — and a phrase that arrives shows above the map. At the end of a game with other people you can start a new one with the same people in one click. Joining by invitation, you choose which AI empire to take. The right panel shows when the Council convenes and your share of the votes; the turn results open with \"The finish is close\" when somebody is a few turns from victory, put your successes in a section of their own and name the next goal after a finished building.",
+        "ru": "В партии с другими людьми на пульте «Расы» есть готовые реплики — всем или одному, — а пришедшая реплика видна над картой. В конце партии с другими людьми можно одним нажатием завести новую тем же составом. Входя по приглашению, вы сами выбираете, какую империю ИИ взять. Правая панель показывает, когда соберётся совет и какая у вас доля голосов; итоги хода открываются разделом «Финиш близко», когда до чьей-то победы считанные ходы, ставят ваши успехи отдельным разделом и после достроенного здания называют следующую цель."
+      }
+    },
+    {
+      "id": "2026-10-07-rewards",
+      "date": "2026-10-07T18:00:00+03:00",
+      "version": "0.1.17",
+      "kind": "new",
+      "text": {
+        "en": "Exploration rewards: a guest game has a find within the first flights of every empire; after five explored systems in a row with nothing, the next one with a free habitable planet brings a find; the legacy of a vanished civilisation lets you choose one technology of three. Finds, legacies and trophies are shown as scenes. A lost colony is named with what it takes to retake it; after a battle the results name technologies seen at the enemy that you lack. Preferences have a Profile with your banner and your races; the ship design screen has a design library that carries over to new games; open games show whether you have played together before.",
+        "ru": "Награды разведки: в гостевой партии находка ждёт каждую империю в пределах первых перелётов; после пяти пустых разведок подряд следующая система с годной свободной планетой приносит находку; наследие ушедших даёт выбрать одну технологию из трёх. Находки, наследие и трофеи показываются сценами. Потерянная колония называет, что нужно, чтобы её отбить; после боя итоги называют технологии, замеченные у врага, которых у вас нет. В «Настройках» — «Профиль» со знаменем и счётом по расам; в окне дизайна — библиотека проектов, которая переходит в новые партии; в списке открытых партий видно, играли ли вы уже вместе."
+      }
+    },
+    {
+      "id": "2026-10-07-profile",
+      "date": "2026-10-07T20:20:00+03:00",
+      "version": "0.1.17",
+      "kind": "changed",
+      "text": {
+        "en": "Preferences and build templates have moved into the Profile — in the main menu and in the Game menu. The profile also keeps your own races, ship designs and build orders, your player code and your default name. A race or design saved there shows what balancing changed since: cheaper traits in green, dearer in red, ship designs with changed parts in yellow.",
+        "ru": "Настройки и шаблоны стройки переехали в «Личный кабинет» — в главном меню и в меню «Игра». Там же свои расы, проекты кораблей и порядки стройки, игровой код и имя по умолчанию. Сохранённые раса и проект показывают, что с тех пор изменила балансировка: подешевевшие стороны — зелёным, подорожавшие — красным, проект с изменёнными частями — жёлтым."
+      }
+    },
+    {
+      "id": "2026-10-07-advisor",
+      "date": "2026-10-07T20:21:00+03:00",
+      "version": "0.1.17",
+      "kind": "new",
+      "text": {
+        "en": "An advisor names what the AI would pick in your place and why: on the research screen, in the build window and in the turn results. It is on in a guest game and off elsewhere — switch it in the Profile. The envoy, the Council and a theft play in full the first time, then become a line in the turn results with «show the scene». At the end of a game you can share a result card, and your race can be shared as a link.",
+        "ru": "Советник называет, что выбрал бы ИИ на вашем месте и почему: на экране науки, в окне стройки и в итогах хода. В гостевой партии он включён, в прочих выключен — переключается в «Личном кабинете». Посол, совет и кража показываются сценой целиком в первый раз, дальше — строкой итогов с «показать сцену». В конце партии итогом можно поделиться карточкой, а своей расой — ссылкой."
+      }
+    },
+    {
+      "id": "2026-10-07-warm",
+      "date": "2026-10-07T21:00:00+03:00",
+      "version": "0.1.17",
+      "kind": "changed",
+      "text": {
+        "en": "A new look: a warm palette, a bottom bar with icons, a right panel of cards that fold away with a click, a large Turn button with the turn number inside it; the sound icon now sits under Game. The colony shows its numbers as one row of icons with the governor next to the name, the colony list has the empire summary on top and can buy out several projects at once, and the sign-in screen has two large buttons.",
+        "ru": "Новый облик: тёплая палитра, нижняя полоса со значками, правая панель из карточек, которые сворачиваются щелчком, крупная кнопка хода с номером хода внутри; значок звука теперь под «Игрой». У колонии числа — одной строкой значков, губернатор — у названия; у списка колоний сводка империи наверху и выкуп сразу у нескольких; на экране входа — две крупные кнопки."
+      }
+    },
+    {
+      "id": "2026-10-07-menu",
+      "date": "2026-10-07T22:45:00+03:00",
+      "version": "0.1.17",
+      "kind": "changed",
+      "text": {
+        "en": "The main menu is tidier: all items are the same size, explanations appear as hints on hover. Sound and text size now live in Profile → Preferences (and Game → Settings during a game), your match history is in Profile → Match History, the \"Your games\" list is gone — use Load Game to return to a game — and \"Report a problem\" is in the bottom-right corner.",
+        "ru": "Главное меню стало проще: все пункты одного размера, пояснения всплывают подсказкой при наведении. Звук и размер текста живут в «Личном кабинете» → «Настройки» (а в партии — «Игра» → «Настройки»), история партий — в «Личном кабинете» → «История партий», списка «Ваши партии» больше нет — вернуться в партию можно через «Загрузить игру», а «Сообщить о проблеме» — в правом нижнем углу."
+      }
+    },
+    {
+      "id": "2026-10-07-prices-moo2",
+      "date": "2026-10-07T23:00:00+03:00",
+      "version": "0.1.18",
+      "kind": "prices",
+      "text": {
+        "en": "Race trait prices, the budget and the thirteen ready races are now exactly those of the original game (version 1.50): 10 picks to spend, at most 10 to win back with weaknesses, and every ready race costs exactly 10. A race of your own saved under the old prices may no longer fit — open it in Profile → My races: what got cheaper is green, what got dearer is red.",
+        "ru": "Цены сторон рас, бюджет и тринадцать готовых рас теперь ровно как в оригинальной игре (версия 1.50): 10 очков на покупку, не больше 10 возврата слабостями, и каждая готовая раса стоит ровно 10. Своя раса, сохранённая по прежним ценам, может больше не помещаться — откройте её в «Личном кабинете» → «Мои расы»: подешевевшее зелёное, подорожавшее красное."
+      }
+    },
+    {
+      "id": "2026-10-07-safe-and-keys",
+      "date": "2026-10-07T23:00:00+03:00",
+      "version": "0.1.18",
+      "kind": "new",
+      "text": {
+        "en": "The Game menu shows the turn your game was last saved on, and a single-player game can be downloaded as a file. The map now works from the keyboard: arrows go star by star, Enter opens the system or sets the fleet target, Space picks your fleet at the selected star. In the guest game the advisor can show its whole turn step by step. An empire stronger than its two nearest neighbours combined now faces them in alliance, with two more empires sending them money and war technology. Fixed: an earthquake could destroy a capitol.",
+        "ru": "В меню «Игра» видно, на каком ходу партия сохранена, а одиночную партию можно выгрузить файлом. Карта теперь управляется с клавиатуры: стрелки — от звезды к звезде, Enter — открыть систему или назначить цель флоту, пробел — свой флот у выбранной звезды. В гостевой партии советник может показать свой ход целиком, по шагам. Против империи, которая сильнее двух ближайших соседей вместе, они теперь объединяются в союз, а ещё двое помогают им деньгами и военными технологиями. Исправлено: землетрясение могло разрушить столицу."
+      }
+    },
+    {
+      "id": "2026-10-08-titles-and-calls",
+      "date": "2026-10-08T09:00:00+03:00",
+      "version": "0.1.19",
+      "kind": "new",
+      "text": {
+        "en": "Titles for hard things: victory with every race, by every road, without a war, Thessar taken from the Guardian, a prize by boarding — they are in your profile and in the game history. In a game with other people the game can now call you back with a browser notification even when the tab is closed, and with a letter; both are off until you turn them on in your profile. A race shared by your link shows how many people played it. The first settler at Thessar gets three Guardian technologies — now this is said on the map. In the guest game the guardian next to your home star is visible from the first turn, and good events come twice as often as bad ones.",
+        "ru": "Звания за трудное: победа каждой расой, каждым путём, без войны, Тессар взят у Стража, трофей абордажем — они в личном кабинете и в истории партий. В партии с людьми игра теперь может позвать обратно уведомлением браузера и при закрытой вкладке, и письмом; и то и другое выключено, пока вы не включите их в личном кабинете. Своя раса, которой вы поделились ссылкой, показывает, сколько людей ею сыграли. Первому поселенцу у Тессара — три технологии Стражей: теперь это сказано на карте. В гостевой партии сторож у родной звезды виден с первого хода, а удачи случаются вдвое чаще бед."
+      }
+    },
+    {
+      "id": "2026-10-08-spectators",
+      "date": "2026-10-08T12:00:00+03:00",
+      "version": "0.1.20",
+      "kind": "new",
+      "text": {
+        "en": "Games can now be watched from the outside: the creator ticks «Allow spectators» in the new game window, and anyone can find the game under «Watch games» in the main menu — the whole galaxy without fog of war, but five turns behind, so nobody at the table gains a scout. Your own battle can be recorded as a GIF to share: the «Record GIF» button in the corner of the battle field; the file is made right in your browser.",
+        "ru": "Партии теперь можно смотреть со стороны: создатель ставит «Разрешить зрителей» в окне новой игры, и партия появляется в главном меню в «Смотреть партии» — вся галактика без тумана войны, но на пять ходов позади, чтобы никто за столом не получил разведчика. Свой бой можно записать в GIF и поделиться им: кнопка «Записать GIF» в углу поля боя, файл собирается прямо в вашем браузере."
+      }
+    },
+    {
+      "id": "2026-10-08-chapters-weekly-mentor",
+      "date": "2026-10-08T13:00:00+03:00",
+      "version": "0.1.21",
+      "kind": "new",
+      "text": {
+        "en": "A game is now told in chapters — expansion, first neighbours, first war, the struggle for the Council, the finale: a new chapter is named in the turn summary and on the side panel. A new galaxy can bring a feature: poor, monster lairs, ruins everywhere, close neighbours or dark — by lot or by your choice in the new game window. Every week there is a galaxy of the week: the same stars for everyone, results by race. In a game with other people you can show your empire to a mentor, who leaves marks on your map. And allies who are the last ones standing win the conquest together.",
+        "ru": "Партия теперь идёт главами — расселение, первые соседи, первая война, борьба за совет, финал: новая глава называется в итогах хода и на правой панели. Новая галактика может принести особенность: бедная, логово чудищ, руины повсюду, тесные соседи или тёмная — жребием или вашим выбором в окне новой игры. Каждую неделю — галактика недели: одни звёзды на всех, итоги по расам. В партии с людьми можно показать свою империю наставнику, и он оставит метки на вашей карте. А союзники, оставшиеся в живых одни, берут покорение вместе."
+      }
+    },
+    {
+      "id": "2026-10-08-undo-and-talk",
+      "date": "2026-10-08T14:30:00+03:00",
+      "version": "0.1.22",
+      "kind": "new",
+      "text": {
+        "en": "A sale, a purchase and scrapped ships can now be undone until the end of the turn — see «Can be undone» on the side panel. After a victory by Thessar, the Council or might you can play on. New games can take hours per turn: «evening» (4 hours) and «by mail» (a day). Players at one table can write each other freely — with muting and reporting. The colour of a star now hints at its planets. A hit in battle no longer comes in long streaks of misses, and galactic events are marked as chance.",
+        "ru": "Продажу, выкуп и списание кораблей теперь можно отменить до конца хода — карточка «Можно отменить» на правой панели. После победы удержанием Тессара, советом или могуществом партию можно продолжить. Новые партии бывают медленными: «вечерняя» (ход в 4 часа) и «по переписке» (ход в сутки). Люди за одним столом могут писать друг другу свободно — с выключением собеседника и жалобой. Цвет звезды теперь подсказывает, какие у неё планеты. Попадание в бою больше не идёт длинными полосами промахов, а события галактики помечены как случай."
+      }
+    },
+    {
+      "id": "2026-10-08-difficulty",
+      "date": "2026-10-08T15:50:00+03:00",
+      "version": "0.1.23",
+      "kind": "new",
+      "text": {
+        "en": "Difficulty levels: beginner, easy, normal and hard — in the new game window. The AI gets no bonuses on any level; only the way it plays changes, and each level says exactly how. After a game the window may suggest a level for the next one.",
+        "ru": "Уровни сложности: новичок, лёгкий, обычный и сложный — в окне новой игры. Прибавок у ИИ нет ни на одном уровне, меняется только то, как он играет, и у каждого уровня это написано. После партии окно может предложить уровень для следующей."
+      }
+    },
+    {
+      "id": "2026-10-08-residents-choose",
+      "date": "2026-10-08T17:05:00+03:00",
+      "version": "0.1.24",
+      "kind": "new",
+      "text": {
+        "en": "A colony can place its residents itself: «residents choose» on the colony screen keeps just enough farmers and your share of workers and scientists. After a turn only one information window opens by itself — the rest wait in a «set aside» strip above the map.",
+        "ru": "Колония умеет расставлять жителей сама: «жители сами» на экране колонии держит ровно столько фермеров, сколько нужно, и вашу долю рабочих и учёных. После хода само открывается одно окно для сведения — остальные ждут полоской «отложено» над картой."
+      }
+    },
+    {
+      "id": "2026-10-08-founder",
+      "date": "2026-10-08T17:05:00+03:00",
+      "version": "0.1.24",
+      "kind": "changed",
+      "text": {
+        "en": "The founder pack is now called «founder»: whoever had «early access» keeps everything and is a founder. «Early access» is now a separate, cheaper option.",
+        "ru": "Пакет основателя теперь называется «основатель»: у кого был «ранний доступ», всё сохранено, и он основатель. «Ранний доступ» теперь — отдельный, более дешёвый вариант."
+      }
+    },
+    {
+      "id": "2026-10-08-rating",
+      "date": "2026-10-08T17:30:00+03:00",
+      "version": "0.1.25",
+      "kind": "new",
+      "text": {
+        "en": "After your third game the end scene compares you with other players of similar games — by share, not by place — and games with other people now build a rating, shown in your game history. «Play with people» seats you at the table most like you. A new game can be «by invitation only», and there are two new titles: victory on Hard and table host.",
+        "ru": "С третьей партии сцена конца сравнивает вас с другими игроками похожих партий — долей, а не местом, — а партии с другими людьми складываются в рейтинг, он в истории партий. «Сыграть с людьми» сажает за самый похожий на вас стол. Новую партию можно сделать «только по приглашению», а званий стало на два больше: победа на сложном уровне и хозяин стола."
+      }
+    },
+    {
+      "id": "2026-10-08-marks",
+      "date": "2026-10-08T18:00:00+03:00",
+      "version": "0.1.25",
+      "kind": "new",
+      "text": {
+        "en": "Marks next to names: ❖ — with us since early access, ✧ — companion: you and a friend you invited both get it once you play a game to the end together (up to three).",
+        "ru": "Знаки у имён: ❖ — с нами с раннего доступа, ✧ — спутник: его получаете и вы, и приглашённый друг, когда доиграете партию вместе (не больше трёх)."
+      }
+    },
+    {
+      "id": "2026-10-09-thessar25",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.26",
+      "kind": "changed",
+      "text": {
+        "en": "Holding Thessar now wins after 25 turns in a row instead of 20 — in games already under way too.",
+        "ru": "Удержание Тессара теперь побеждает после 25 ходов подряд вместо 20 — и в уже идущих партиях."
+      }
+    },
+    {
+      "id": "2026-10-09-might",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.26",
+      "kind": "changed",
+      "text": {
+        "en": "The verdict of might is now a path you choose in the new game window (off by default), and when it comes due the other players at the table are asked whether they accept it: one refusal and the game goes on.",
+        "ru": "Итог по могуществу теперь путь по выбору в окне новой игры (по умолчанию выключен), а на сроке другие игроки за столом отвечают, согласны ли с ним: один отказ — и партия идёт дальше."
+      }
+    },
+    {
+      "id": "2026-10-09-sound",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.26",
+      "kind": "new",
+      "text": {
+        "en": "Music and sound effects each have their own icon under the Game menu — a treble clef and a speaker — with a volume slider from 0 to 100 %. Your previous volume was carried over.",
+        "ru": "Музыка и звуковые эффекты — каждый своим значком под меню «Игра», скрипичным ключом и динамиком, с ползунком громкости от 0 до 100 %. Прежняя громкость перенесена."
+      }
+    },
+    {
+      "id": "2026-10-09-evening",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.27",
+      "kind": "new",
+      "text": {
+        "en": "A game for one evening: in the new game window one button sets a small galaxy, three empires and the verdict of might on turn 100. The verdict turn can be 100, 200 or 300.",
+        "ru": "Партия под вечер: в окне новой игры одна кнопка ставит малую галактику, три империи и итог по могуществу на сотом ходу. Ход итога можно выбрать — 100, 200 или 300."
+      }
+    },
+    {
+      "id": "2026-10-09-quiet",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.27",
+      "kind": "new",
+      "text": {
+        "en": "Quiet galaxy: a new kind of game where AI neighbours never start a war themselves, but defend and strike back.",
+        "ru": "Тихая галактика: новый вид партии, где соседи-ИИ сами войну не начинают, но защищаются и отвечают."
+      }
+    },
+    {
+      "id": "2026-10-09-early-verdict",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.27",
+      "kind": "changed",
+      "text": {
+        "en": "If one empire keeps at least twice the might of the second strongest for 20 turns in a row, the verdict of might comes early. The galaxy is told when such a lead begins, and the other players at the table are asked to accept the verdict.",
+        "ru": "Если одна империя 20 ходов подряд вдвое сильнее второй, итог по могуществу приходит досрочно. Галактике говорят, когда такой отрыв начался, а другие игроки за столом отвечают, согласны ли с итогом."
+      }
+    },
+    {
+      "id": "2026-10-09-lore",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.28",
+      "kind": "new",
+      "text": {
+        "en": "Every race now has its own story — where it comes from and what it wants with Thessar. Read it on the race selection screen and at the ambassador; ambassadors also speak in the voice of their ruler.",
+        "ru": "У каждой расы теперь своя история — откуда она и чего хочет от Тессара. Её видно на экране выбора расы и у посла; послы говорят голосом своего правителя."
+      }
+    },
+    {
+      "id": "2026-10-09-evening-calendar",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.28",
+      "kind": "new",
+      "text": {
+        "en": "Profile → Game evening: choose your days and time and download a calendar file that repeats every week. The game itself reminds you of nothing.",
+        "ru": "Кабинет → «Вечер партии»: выберите дни и время и скачайте файл календаря с еженедельным повтором. Сама игра ни о чём не напоминает."
+      }
+    },
+    {
+      "id": "2026-10-09-mods",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.28",
+      "kind": "new",
+      "text": {
+        "en": "Founders can make their own reference sets — buildings, ships, technologies and leaders — in the profile and play single-player games on them. Such games do not count in history.",
+        "ru": "Основатели могут собирать свои наборы справочников — здания, корабли, технологии и лидеры — в кабинете и играть на них одиночные партии. Такие партии в историю не идут."
+      }
+    },
+    {
+      "id": "2026-10-09-agony",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.28",
+      "kind": "changed",
+      "text": {
+        "en": "AI empires now finish off a neighbour that is twice weaker: at war with it they no longer ask for peace, and they may declare war on it.",
+        "ru": "Империи ИИ теперь добивают соседа, который вдвое слабее: воюя с ним, они не просят мира и могут объявить ему войну."
+      }
+    },
+    {
+      "id": "2026-10-09-eight-slots",
+      "date": "2026-10-09T00:00:00+03:00",
+      "version": "0.1.28",
+      "kind": "new",
+      "text": {
+        "en": "Ship designs now have eight slots instead of six; the game fills only the first six itself. In the build window civilian ships come first, then your combat designs, then the spy.",
+        "ru": "Ячеек проектов кораблей теперь восемь вместо шести; сама игра заполняет только первые шесть. В окне стройки сперва гражданские корабли, затем боевые проекты, затем шпион."
+      }
+    },
+    {
+      "id": "2026-10-12-fast-turn",
+      "date": "2026-10-12T00:00:00+03:00",
+      "version": "0.1.28",
+      "kind": "fixed",
+      "text": {
+        "en": "Ending a turn is faster: the new turn appears right after the server has counted it, and the autosave is written in the background.",
+        "ru": "Ход передаётся быстрее: новый ход появляется сразу, как только сервер его посчитал, а автосохранение пишется в фоне."
+      }
+    },
+    {
+      "id": "2026-10-14-course-near-base",
+      "date": "2026-10-14T00:00:00+03:00",
+      "version": "0.1.29",
+      "kind": "changed",
+      "text": {
+        "en": "A fleet in flight can now change course near your own star base: closer than a parsec without communications, within 3 parsecs with Tachyon and 6 with Subspace Communications; Hyperspace Communications still works everywhere and gives bases 3 command points. An enemy warp interdictor is visible from outside, and the flight time to its system counts it.",
+        "ru": "Флоту в пути теперь можно сменить курс у своей звёздной базы: без связи — ближе парсека, с Тахионной связью — в 3 парсеках, с Подпространственной — в 6; Гиперпространственная связь по-прежнему действует везде и даёт базам по 3 командных очка. Чужой варп-перехватчик виден со стороны, и срок перелёта к его системе это учитывает."
+      }
+    },
+    {
+      "id": "2026-10-14-fighters-return",
+      "date": "2026-10-14T00:00:00+03:00",
+      "version": "0.1.29",
+      "kind": "changed",
+      "text": {
+        "en": "Fighters as in the original: a fighter bay takes 30 spaces (bombers 60, heavy fighters 80) on any hull, so it no longer fits a frigate; a flight that has struck returns to its carrier, and the bay launches a new one four rounds later; fighters get tougher with your best armor. Saved designs that no longer fit keep flying, but cannot be saved again.",
+        "ru": "Истребители — как в оригинале: отсек занимает 30 клеток (бомбардировщики 60, тяжёлые 80) на любом корпусе и на фрегат больше не встаёт; звено, отбив удары, возвращается на носитель — новое отсек выпускает через четыре круга; истребители крепнут вместе с лучшей бронёй. Сохранённые проекты, которые больше не помещаются, летают, но пересохранить их нельзя."
+      }
+    },
+    {
+      "id": "2026-10-14-androids-beyond-cap",
+      "date": "2026-10-14T00:00:00+03:00",
+      "version": "0.1.30",
+      "kind": "changed",
+      "text": {
+        "en": "Androids can now be built beyond a colony's population limit: one on a tiny planet, two on a small one, up to five on a huge one. These androids take no resident's place; further ones do, as before.",
+        "ru": "Андроидов теперь можно строить сверх потолка населения колонии: одного на крошечной планете, двух на малой — и до пяти на огромной. Такие андроиды места жителя не занимают; следующие, как и прежде, занимают."
+      }
+    }
+  ]
+}

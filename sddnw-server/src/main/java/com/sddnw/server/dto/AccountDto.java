@@ -19,6 +19,9 @@ import java.util.UUID;
  *                  ({@code {"turn": "KeyT"}}) или пусто, если игрок клавиш не
  *                  переназначал. Что значат эти пары, знает только клиент: сервер по
  *                  горячей клавише не делает ничего, он её хранит и отдаёт
+ * @param musicVolume громкость музыки в процентах 0…100 или пусто — «не трогал», то есть
+ *                    выключено. Едет за игроком, как и язык
+ * @param sfxVolume   громкость звуковых эффектов в процентах 0…100 или пусто — выключено
  */
 public record AccountDto(
         UUID id,
@@ -29,6 +32,36 @@ public record AccountDto(
         String roleLabel,
         String locale,
         Integer textScale,
-        Map<String, String> hotkeys
+        Map<String, String> hotkeys,
+        Integer musicVolume,
+        Integer sfxVolume,
+        /** Подсказки новичку (пункт 30): пусто — ещё не спрашивали. */
+        Boolean noviceHints,
+        /** Отклонённые «больше не показывать» подсказки (пункт 130); пусто — ни одной. */
+        java.util.List<String> dismissedHints,
+        /** Окна, которые не открываются сами (пункт 164); пусто — открываются все. */
+        java.util.List<String> quietWindows,
+        /** Меньше движения (пункт 170): пусто — как в системе. */
+        Boolean reduceMotion,
+        /** Знаки знамён у хозяев на карте (пункт 202): пусто — выключены. */
+        Boolean bannerGlyphs,
+        /** Действующие права записи видами (backlog-promo, пункт 41): FOUNDER, EARLY_ACCESS, SUPPORTER. */
+        java.util.List<String> entitlements,
+        /** Новая почта, ждущая подтверждения по ссылке (пункт 45); пусто — не меняли. */
+        String pendingEmail,
+        /** Своё знамя (пункт 144): по умолчанию в новой партии, если свободно; пусто — не выбирал. */
+        String banner,
+        /** Уникальный игровой код (личный кабинет): номер записи по порядку заведения. */
+        Long playerCode,
+        /** Советник (пункт 23): пусто — по умолчанию, выключен, а в гостевой партии включён. */
+        Boolean advisor,
+        /** Когда запись заведена — для личного кабинета. */
+        java.time.OffsetDateTime createdAt,
+        /** Сцены, увиденные целиком (пункт 163): дальше они идут строкой итогов. */
+        java.util.List<String> seenScenes,
+        /** Письма о ходе в партии с людьми (пункт 22): пусто — не согласился. */
+        Boolean notifyMail,
+        /** Открыты ли страницы прибора — баланс рас и «как сделано» (пункты 47, 70, 101). */
+        Boolean insider
 ) {
 }

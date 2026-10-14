@@ -166,4 +166,62 @@ class FlightRulesTest {
         // Без топливных технологий — те же начальные 4 парсека.
         assertEquals(4, FuelTech.baseRangeParsecs(Set.of()));
     }
+
+    /** Врата Physics — перенос MOO II (13.10.2026): звёздные — ход между колониями, прыжковые — +3 пк. */
+    @Test
+    @DisplayName("Звёздные врата дают ход между колониями, прыжковые разгоняют от своей колонии")
+    void gates() {
+        Set<String> none = Set.of();
+        Set<String> jump = Set.of(FlightRules.JUMP_GATE_TECH);
+        Set<String> star = Set.of(FlightRules.STAR_GATE_TECH);
+
+        assertEquals(5, rules.travelTurns(20.0, 4, none, true, true));
+        // Прыжковые: скорость 4 + 3 = 7, двадцать парсеков — три хода; от чужой звезды — без разгона.
+        assertEquals(3, rules.travelTurns(20.0, 4, jump, true, false));
+        assertEquals(5, rules.travelTurns(20.0, 4, jump, false, true));
+        // Звёздные: между своими колониями — один ход, к чужой звезде — обычный срок.
+        assertEquals(1, rules.travelTurns(20.0, 4, star, true, true));
+        assertEquals(5, rules.travelTurns(20.0, 4, star, true, false));
+    }
+
+    /** Варп-перехватчик — перенос MOO II: последние 3 пк к его системе — по парсеку за ход. */
+    @Test
+    @DisplayName("Чужой варп-перехватчик тормозит последние парсеки пути, врата там не работают")
+    void interdictor() {
+        Set<String> star = Set.of(FlightRules.STAR_GATE_TECH);
+        // 20 пк со скоростью 4: 17 пк своим ходом (5 ходов) и 3 пк по одному — итого 8.
+        assertEquals(8, rules.travelTurns(20.0, 4, Set.of(), false, false, 3));
+        // Ближе радиуса — весь путь по парсеку.
+        assertEquals(2, rules.travelTurns(2.0, 4, Set.of(), false, false, 3));
+        // Звёздные врата в поле перехватчика не ведут.
+        assertEquals(8, rules.travelTurns(20.0, 4, star, true, true, 3));
+        // Без перехватчика — обычный срок.
+        assertEquals(1, rules.travelTurns(20.0, 4, star, true, true, 0));
+    }
+
+    /** Приказ флоту в пути — перенос MOO II и решение хозяина проекта 14.10.2026. */
+    @Test
+    @DisplayName("Флот в пути слышит приказ у своей базы: без связи ближе парсека, тахионная 3, подпространственная 6")
+    void orderNearBase() {
+        Set<String> none = Set.of();
+        Set<String> tachyon = Set.of(CommandRules.TACHYON_COMMUNICATIONS);
+        Set<String> subspace = Set.of(CommandRules.TACHYON_COMMUNICATIONS, CommandRules.SUBSPACE_COMMUNICATIONS);
+        Set<String> hyper = Set.of(FlightRules.REDIRECT_TECH);
+        assertTrue(rules.canOrder(none, 0.0));
+        assertTrue(rules.canOrder(none, 0.9));
+        // Отлетев на парсек, без связи флот уже не развернуть.
+        assertFalse(rules.canOrder(none, 1.0));
+        assertTrue(rules.canOrder(tachyon, 3.0));
+        assertFalse(rules.canOrder(tachyon, 3.1));
+        assertTrue(rules.canOrder(subspace, 6.0));
+        assertFalse(rules.canOrder(subspace, 6.1));
+        // Без баз — только гиперпространственная связь.
+        assertFalse(rules.canOrder(subspace, null));
+        assertTrue(rules.canOrder(hyper, null));
+        assertTrue(rules.canOrder(hyper, 40.0));
+        // Точка в пути — доля пройденных ходов.
+        double[] at = FlightRules.point(0, 0, 10, 0, 5, 7, 6);
+        assertEquals(5.0, at[0], 1e-9);
+        assertEquals(0.0, FlightRules.point(0, 0, 10, 0, 5, 7, 5)[0], 1e-9);
+    }
 }

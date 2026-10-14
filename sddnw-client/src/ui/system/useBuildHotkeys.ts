@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
 
 /**
- * Горячие клавиши очереди стройки — п. 10: **R** повторяет, **D** убирает, **↑ ↓** выбирают
- * строку, **Shift + ↑ ↓** её переносят.
+ * Горячие клавиши очереди стройки — п. 10: **R** повторяет, **D** убирает, **T** ставит выбранную
+ * строку текущей стройкой (09.10.2026), **↑ ↓** выбирают строку, **Shift + ↑ ↓** её переносят.
  *
  * Правила те же, что у клавиш карты (`ui/hotkeys.ts`), и каждое тут не для красоты:
  *
@@ -24,6 +24,7 @@ export function useBuildHotkeys({
   active,
   onRepeat,
   onDelete,
+  onTop,
   onStep,
   onShift,
 }: {
@@ -31,6 +32,8 @@ export function useBuildHotkeys({
   active: boolean;
   onRepeat: () => void;
   onDelete: () => void;
+  /** T — выбранную строку очереди на стапель, прежняя стройка встаёт первой в очередь. */
+  onTop?: () => void;
   /** ↑ / ↓ — выбрать соседнюю строку очереди (−1 вверх, +1 вниз). */
   onStep: (delta: number) => void;
   /** Shift + ↑ / ↓ — передвинуть выбранную строку. */
@@ -74,9 +77,14 @@ export function useBuildHotkeys({
       if (event.code === 'KeyD' || key === 'd' || key === 'в') {
         event.preventDefault();
         onDelete();
+        return;
+      }
+      if (onTop && (event.code === 'KeyT' || key === 't' || key === 'е')) {
+        event.preventDefault();
+        onTop();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [active, onRepeat, onDelete, onStep, onShift]);
+  }, [active, onRepeat, onDelete, onTop, onStep, onShift]);
 }

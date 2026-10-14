@@ -12,7 +12,10 @@ import com.sddnw.server.domain.entity.ShipDesignEntity;
 import com.sddnw.server.domain.enums.FuelTech;
 import com.sddnw.server.domain.enums.ShipComponentSlot;
 import com.sddnw.server.domain.enums.ShipEffectType;
+import com.sddnw.server.domain.enums.PlayerType;
+import com.sddnw.server.domain.enums.ShipMission;
 import com.sddnw.server.domain.enums.ShipRole;
+import com.sddnw.server.domain.enums.WeaponKind;
 import com.sddnw.server.dto.SaveShipDesignRequest;
 import com.sddnw.server.dto.ShipCatalogDto;
 import com.sddnw.server.dto.ShipComponentDto;
@@ -63,8 +66,15 @@ public class ShipDesignService {
 
     private static final Logger log = LoggerFactory.getLogger(ShipDesignService.class);
 
-    /** Ячеек проектов у империи — как шесть строк в окне дизайна MOO II. */
-    public static final Integer MAX_DESIGNS = 6;
+    /**
+     * Ячеек проектов у империи — восемь (09.10.2026, решение хозяина проекта; в MOO II их шесть).
+     * Сама игра свои проекты кладёт только в первые {@link #AUTO_DESIGNS}: две верхние остаются
+     * игроку, а ИИ собирает флот так же, как прежде, — его поведение и замеры не сдвинулись.
+     */
+    public static final Integer MAX_DESIGNS = 8;
+
+    /** Ячейки, которые игра держит заполненными своими проектами ({@link #ensureAutoDesigns}). */
+    static final Integer AUTO_DESIGNS = 6;
 
     /** Имя стартового проекта: с ним империя входит в партию. */
     /**
@@ -88,8 +98,35 @@ public class ShipDesignService {
 
     private static final String TRANSPORT_NAME = "Transport";
 
+    /** Код и технологии, и модуля противоракет — у них он один, как у баков (пункт 30). */
+    private static final String ANTI_MISSILE_ROCKETS = "anti-missile-rockets";
+
+    /** Модификации, которые игра ставит на стволы эскорта и штурмовика (ShipMission). */
+    private static final String POINT_DEFENCE = "point-defense";
+    private static final String ARMOUR_PIERCING = "armor-piercing";
+
+    /**
+     * Средства абордажа в порядке предпочтения ИИ (п. 8): транспортёр берёт корабль с
+     * двенадцати клеток, лишь бы щит был опущен, — лучшее; шаттлы летят сами и берут без
+     * условий, но их сбивает ближняя оборона; тяговый луч только держит цель для абордажа
+     * вплотную. Ставится одно — первое изученное.
+     */
+    private static final List<String> BOARDING_MEANS = List.of("transporters", "assault-shuttles", "tractor-beam");
+
+    /** Десантные отсеки — вдвое больше пехоты на борту (п. 8). */
+    private static final String TROOP_PODS = "troop-pods";
+
+
     private final Messages messages;
     private final ShipCatalog shipCatalog;
+
+    /**
+     * Колонии владельца — перевести их стройку и очередь на новый проект ячейки
+     * ({@link #retargetProjects}). Полем, а не параметром конструктора: службу собирают руками
+     * тесты, которым колонии не нужны.
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.sddnw.server.repository.PlanetRepository planetRepository;
     private final ShipDesignRules shipDesignRules;
     private final ShipDesignRepository shipDesignRepository;
     private final ShipDesignComponentRepository shipDesignComponentRepository;
@@ -108,7 +145,8 @@ public class ShipDesignService {
      */
     private String shipbuildingRequirement(Set<String> technologies) {
         List<String> missing = shipDesignRules.missingShipbuildingTechnologies(technologies);
-        return missing.isEmpty() ? null : messages.get("ship.noShipbuilding", String.join(", ", missing));
+        return missing.isEmpty() ? null
+                : messages.get("ship.noShipbuilding", String.join(", ", missing.stream().map(this::techName).toList()));
     }
 
     public ShipDesignService(ShipCatalog shipCatalog,
@@ -146,6 +184,8 @@ public class ShipDesignService {
                 // Платформы обороны в окне дизайна не показываются вовсе: их не собирают,
                 // а строят зданием колонии, и вооружает их игра сама — п. 8, п. 11.
                 .filter(hull -> !Boolean.TRUE.equals(hull.platform()))
+                // Мегафлюксеры (п. 8): окно дизайна получает место корпуса уже увеличенным.
+                .map(hull -> enlarged(hull, technologies))
                 .map(hull -> new ShipHullDto(
                         hull.code(),
                         hull.name(),
@@ -170,7 +210,7 @@ public class ShipDesignService {
                         component.slot(),
                         component.space(),
                         component.cost(),
-                        component.slot().scalesWithHull(),
+                        component.scalesWithHull(),
                         component.weaponKind(),
                         component.envelops(),
                         component.requiredTechCode(),
@@ -226,7 +266,14 @@ public class ShipDesignService {
             Integer hullSize,
             Integer cost,
             Integer attack,
-            Integer defense
+            Integer defense,
+            /** Задача проекта игры (ShipMission); у проекта игрока — пусто. */
+            ShipMission mission,
+            /**
+             * Доля ракет в залпе проекта, в процентах: по ней ИИ видит, что сосед воюет
+             * ракетами, и добавляет в строй эскорт (ShipMission.ESCORT).
+             */
+            Integer missilePercent
     ) {
     }
 
@@ -263,8 +310,10 @@ public class ShipDesignService {
                     items.getOrDefault(design.getId(), List.of()),
                     races.getOrDefault(design.getOwnerPlayerId(), RaceEffects.NONE));
             options.computeIfAbsent(design.getOwnerPlayerId(), key -> new ArrayList<>())
-                    .add(new ShipBuildOption(design.getId(), design.getName(), hull.name(),
-                            hull.sortOrder(), stats.cost(), stats.attack(), stats.defense()));
+                    .add(new ShipBuildOption(design.getId(), messages.shown(design.getName()), hull.name(),
+                            hull.sortOrder(), stats.cost(), stats.attack(), stats.defense(),
+                            design.getMission(),
+                            missilePercent(items.getOrDefault(design.getId(), List.of()))));
         }
         return options;
     }
@@ -298,19 +347,22 @@ public class ShipDesignService {
         Set<String> technologies = technologies(player);
         if (!Boolean.TRUE.equals(shipDesignRules.shipbuildingAvailable(technologies))) {
             throw new ConflictException("ship.noShipbuilding",
-                    String.join(", ", shipDesignRules.missingShipbuildingTechnologies(technologies)));
+                    String.join(", ", shipDesignRules.missingShipbuildingTechnologies(technologies).stream()
+                            .map(this::techName).toList()));
         }
         if (!researched(hull.requiredTechCode(), technologies)) {
             throw new ConflictException("ship.hullNotResearched", hull.name());
         }
 
         List<ShipDesignRules.Item> items = requireItems(request, technologies);
-        validate(hull, items);
+        validate(enlarged(hull, technologies), items);
 
+        List<UUID> replacedIds = new ArrayList<>();
         shipDesignRepository.findByOwnerPlayerIdAndSlotAndObsoleteFalse(player.getId(), request.slot())
                 .ifPresent(previous -> {
                     previous.setObsolete(Boolean.TRUE);
                     shipDesignRepository.save(previous);
+                    replacedIds.add(previous.getId());
                 });
 
         ShipDesignEntity design = new ShipDesignEntity();
@@ -323,6 +375,7 @@ public class ShipDesignService {
         design.setObsolete(Boolean.FALSE);
         shipDesignRepository.saveAndFlush(design);
         saveComponents(design, items);
+        replacedIds.forEach(previous -> retargetProjects(player.getId(), previous, design.getId()));
 
         log.info("Игрок {} сохранил проект «{}» в ячейку {}: корпус {}, {} компонентов",
                 player.getName(), design.getName(), design.getSlot(), hull.name(), items.size());
@@ -343,13 +396,14 @@ public class ShipDesignService {
         }
         design.setObsolete(Boolean.TRUE);
         shipDesignRepository.save(design);
+        retargetProjects(player.getId(), design.getId(), null);
         log.info("Игрок {} убрал проект «{}» из ячейки {}", player.getName(), design.getName(), design.getSlot());
     }
 
     /**
-     * Стартовый проект империи — п. 8: фрегат с ядерным двигателем, титановой обшивкой и
-     * масс-драйверами. Ровно то, с чем раса начинает партию в MOO II, и заодно ответ на
-     * вопрос, что строить колонии, пока игрок не открыл окно дизайна.
+     * Стартовый проект империи — п. 8: фрегат с ядерным двигателем и тем, что дано без
+     * исследования (обшивку и стволы теперь изучают, 12.10.2026). Ответ на вопрос, что строить
+     * колонии, пока игрок не открыл окно дизайна, — у партий, начатых до шести ячеек.
      */
     @Transactional
     public ShipDesignEntity createDefaultDesign(GameEntity game, PlayerEntity player) {
@@ -398,11 +452,12 @@ public class ShipDesignService {
                 .filter(hull -> !Boolean.TRUE.equals(hull.platform()))
                 .filter(hull -> researched(hull.requiredTechCode(), technologies))
                 .sorted(Comparator.comparing(ShipHull::sortOrder))
-                .limit(MAX_DESIGNS)
+                .limit(AUTO_DESIGNS)
                 .toList();
         Set<Integer> taken = designs.stream()
                 .filter(design -> !Boolean.TRUE.equals(design.getAuto()))
                 .map(ShipDesignEntity::getSlot)
+                .filter(slot -> slot <= AUTO_DESIGNS)
                 .collect(Collectors.toSet());
 
         // СОСТАВЫ БЕРУТСЯ ОДНОЙ ВЫБОРКОЙ, а не по проекту в цикле. Ниже каждый проект
@@ -415,14 +470,15 @@ public class ShipDesignService {
         Map<UUID, List<ShipDesignRules.Item>> current = itemsOf(designs);
 
         int next = 0;
-        for (ShipHull hull : hulls) {
+        for (Plan plan : plans(player, hulls, technologies, AUTO_DESIGNS - taken.size())) {
+            ShipHull hull = plan.hull();
             // Ячейки игрока не трогаем вовсе: он их и занял. Проект игры под этот корпус
             // либо обновляется до нынешних технологий, либо заводится заново.
             next++;
-            while (next <= MAX_DESIGNS && taken.contains(next)) {
+            while (next <= AUTO_DESIGNS && taken.contains(next)) {
                 next++;
             }
-            if (next > MAX_DESIGNS) {
+            if (next > AUTO_DESIGNS) {
                 break;
             }
             final int slot = next;
@@ -431,12 +487,12 @@ public class ShipDesignService {
                     .filter(design -> design.getSlot() == slot)
                     .findFirst()
                     .orElse(null);
-            List<ShipDesignRules.Item> items = defaultItems(hull, technologies);
+            List<ShipDesignRules.Item> items = plan.items();
             if (mine == null) {
-                designs.add(createAutoDesign(gameId, player, turn, slot, hull, items));
+                designs.add(createAutoDesign(gameId, player, turn, slot, hull, items, plan.mission()));
             } else {
                 ShipDesignEntity fresh = replaceAutoDesign(gameId, player, turn, mine, hull, items,
-                        current.getOrDefault(mine.getId(), List.of()));
+                        current.getOrDefault(mine.getId(), List.of()), plan.mission());
                 if (fresh != mine) {
                     designs.remove(mine);
                     designs.add(fresh);
@@ -444,6 +500,330 @@ public class ShipDesignService {
             }
         }
         return designs;
+    }
+
+    /**
+     * Проект трофея — п. 8, абордаж: копия чужого проекта у захватчика, чтобы взятый корабль
+     * встал в его флот. Копия сразу ВЫТЕСНЕННАЯ: ячеек дизайна она не занимает и в стройку
+     * не идёт — трофей летает, но строить такой корабль захватчик не умеет (технологий у него
+     * может и не быть). Повторный трофей того же проекта берёт уже заведённую копию.
+     */
+    @Transactional
+    public ShipDesignEntity trophyDesign(PlayerEntity captor, UUID designId, Integer turn) {
+        ShipDesignEntity source = shipDesignRepository.findById(designId)
+                .orElseThrow(() -> new NotFoundException("ship.designNotFound", designId));
+        String name = source.getName();
+        ShipDesignEntity known = shipDesignRepository.findAllByOwnerPlayerIdOrderBySlotAsc(captor.getId()).stream()
+                .filter(design -> Boolean.TRUE.equals(design.getTrophy()))
+                .filter(design -> name.equals(design.getName()) && source.getHullCode().equals(design.getHullCode()))
+                .filter(design -> itemsOf(List.of(design)).getOrDefault(design.getId(), List.of())
+                        .equals(itemsOf(List.of(source)).getOrDefault(source.getId(), List.of())))
+                .findFirst()
+                .orElse(null);
+        if (known != null) {
+            return known;
+        }
+        ShipDesignEntity copy = new ShipDesignEntity();
+        copy.setGameId(source.getGameId());
+        copy.setOwnerPlayerId(captor.getId());
+        copy.setSlot(source.getSlot());
+        copy.setName(name);
+        copy.setHullCode(source.getHullCode());
+        copy.setCreatedTurn(turn);
+        copy.setObsolete(Boolean.TRUE);
+        copy.setTrophy(Boolean.TRUE);
+        copy.setRole(source.getRole());
+        shipDesignRepository.saveAndFlush(copy);
+        saveComponents(copy, itemsOf(List.of(source)).getOrDefault(source.getId(), List.of()));
+        return copy;
+    }
+
+    /** Что поставить в очередную ячейку игры: корпус, задача и состав под неё. */
+    private record Plan(ShipHull hull, ShipMission mission, List<ShipDesignRules.Item> items) {
+    }
+
+    /**
+     * Какие проекты держит игра в свободных ячейках — п. 8, п. 15.
+     * <p>
+     * У всех — линейный проект на каждый изученный корпус. У империи ИИ сверх того ещё два
+     * (03.10.2026, просьба хозяина проекта): <b>эскорт</b> на втором по величине корпусе —
+     * против того, кто воюет ракетами, — и <b>штурмовик</b> на самом крупном — против колонии
+     * с обороной. ИИ своих проектов не собирает, и без них его флот был одинаковым против
+     * любого врага. Ячеек шесть, поэтому, когда задачам не хватает места, уступают
+     * линейные проекты мелких корпусов: мелкий корпус хуже всех служит и строю, и штурму.
+     * Человеку игра задачи не навязывает — его ячейки он собирает сам.
+     */
+    private List<Plan> plans(PlayerEntity player, List<ShipHull> hulls, Set<String> technologies, int free) {
+        List<Plan> plans = new ArrayList<>();
+        for (ShipHull hull : hulls) {
+            plans.add(new Plan(hull, ShipMission.LINE, defaultItems(hull, technologies)));
+        }
+        if (player.getPlayerType() != PlayerType.AI || hulls.isEmpty()) {
+            return plans;
+        }
+        ShipHull largest = hulls.get(hulls.size() - 1);
+        ShipHull second = hulls.size() >= 2 ? hulls.get(hulls.size() - 2) : largest;
+        // Абордаж — на линейном проекте КАЖДОГО корпуса, где после модуля остаётся половина
+        // стволов (04.10.2026): крупнейший изученный корпус строит лишь колония со звёздной
+        // базой, а массовый флот ИИ — эсминцы и крейсера. С абордажем на одном линкоре партия
+        // на средней галактике дала ноль трофеев: шаттлы изучены на 148-м ходу, а после этого
+        // построены одиннадцать эсминцев и крейсеров и ни одного линкора.
+        plans.replaceAll(plan -> plan.mission() == ShipMission.LINE
+                ? new Plan(plan.hull(), ShipMission.LINE, lineWithBoarding(plan.hull(), technologies))
+                : plan);
+        List<ShipDesignRules.Item> escort = escortItems(second, technologies);
+        if (escort != null) {
+            plans.add(new Plan(second, ShipMission.ESCORT, escort));
+        }
+        List<ShipDesignRules.Item> assault = hulls.size() >= 2 ? assaultItems(largest, technologies) : null;
+        if (assault != null) {
+            plans.add(new Plan(largest, ShipMission.ASSAULT, assault));
+        }
+        // Бомбардировщик — на КРУПНЕЙШЕМ корпусе (03.10.2026): на втором по величине он нёс
+        // горстку ранних бомб и за четыре партии ИИ трижды ударил по 84 урона — житель за
+        // заход. Бомбы ценны числом стволов, а их даёт место.
+        List<ShipDesignRules.Item> bomber = bomberItems(largest, technologies);
+        if (bomber != null) {
+            plans.add(new Plan(largest, ShipMission.BOMBER, bomber));
+        }
+        while (plans.size() > Math.max(0, free) && plans.stream()
+                .filter(plan -> plan.mission() == ShipMission.LINE).count() > 1) {
+            plans.remove(0);
+        }
+        return plans;
+    }
+
+    /** Оснащение корпуса без оружия — двигатель, броня, компьютер, щит и баки, как в {@link #defaultItems}. */
+    private List<ShipDesignRules.Item> hullFittings(ShipHull hull, Set<String> technologies) {
+        return defaultItems(hull, technologies).stream()
+                .filter(item -> item.component().slot() != ShipComponentSlot.WEAPON)
+                .filter(item -> !ANTI_MISSILE_ROCKETS.equals(item.component().code()))
+                .toList();
+    }
+
+    /**
+     * Оснащение без отсеков истребителей — штурмовику и бомбардировщику (п. 8, 14.10.2026): их дело —
+     * оборона колонии и сама колония, а звено бьёт корабли. Место отсека уходит под стволы или бомбы;
+     * истребители остаются линейным кораблям и эскорту.
+     */
+    private List<ShipDesignRules.Item> withoutFighters(List<ShipDesignRules.Item> items) {
+        return items.stream()
+                .filter(item -> item.component().amount(ShipEffectType.FIGHTER_BAY) <= 0)
+                .toList();
+    }
+
+    private int spaceLeft(ShipHull hull, List<ShipDesignRules.Item> items) {
+        return hull.space() - items.stream().mapToInt(item -> item.spaceOn(hull) * item.count()).sum();
+    }
+
+    /**
+     * Эскорт (ShipMission.ESCORT): противоракеты, если изучены, и лучи или снаряды с ближней
+     * обороной на остальное место — ствол выбирается по залпу, как у линейного. Ближняя
+     * оборона вдвое мельче обычного ствола, поэтому стволов у эскорта вдвое больше: он бьёт
+     * часто и слабо, а ракете хватает одного попадания. {@code null} — собрать нечем.
+     */
+    private List<ShipDesignRules.Item> escortItems(ShipHull hull, Set<String> technologies) {
+        List<ShipDesignRules.Item> items = new ArrayList<>(hullFittings(hull, technologies));
+        int left = spaceLeft(hull, items);
+        if (technologies.contains(ANTI_MISSILE_ROCKETS)) {
+            ShipComponent rockets = shipCatalog.component(ANTI_MISSILE_ROCKETS);
+            if (rockets.spaceOn(hull) < left) {
+                items.add(new ShipDesignRules.Item(rockets, 1));
+                left -= rockets.spaceOn(hull);
+            }
+        }
+        WeaponModification pointDefence = shipCatalog.modification(POINT_DEFENCE);
+        ShipDesignRules.Item best = null;
+        int bestSalvo = 0;
+        for (ShipComponent weapon : shipCatalog.components(ShipComponentSlot.WEAPON)) {
+            if (!researched(weapon.requiredTechCode(), technologies)
+                    || weapon.weaponKind() == WeaponKind.MISSILE
+                    || weapon.weaponKind() == WeaponKind.BOMB
+                    || !Boolean.TRUE.equals(weapon.carries(pointDefence))
+                    || !researched(pointDefence.requiredTechCode(), technologies)) {
+                continue;
+            }
+            ShipDesignRules.Item one = new ShipDesignRules.Item(weapon, 1, List.of(pointDefence));
+            int guns = left / Math.max(1, one.spaceOn(hull));
+            int salvo = guns * damage(weapon);
+            if (guns >= 1 && salvo > bestSalvo) {
+                best = new ShipDesignRules.Item(weapon, guns, List.of(pointDefence));
+                bestSalvo = salvo;
+            }
+        }
+        if (best == null) {
+            return null;
+        }
+        items.add(best);
+        return List.copyOf(items);
+    }
+
+    /**
+     * Штурмовик (ShipMission.ASSAULT): самый тяжёлый ОДИНОЧНЫЙ выстрел из лучей и снарядов и
+     * бронебойность, если ствол её носит. У платформ обороны щит и броня толще корабельных, а
+     * щит снимает с КАЖДОГО попадания: залп из мелких стволов о крепость рассыпается, крупный
+     * её пробивает. Ракеты штурмовику не годятся — ракетная база и крепость сбивают их
+     * противоракетами. {@code null} — собрать нечем.
+     */
+    private List<ShipDesignRules.Item> assaultItems(ShipHull hull, Set<String> technologies) {
+        List<ShipDesignRules.Item> items = new ArrayList<>(withoutFighters(hullFittings(hull, technologies)));
+        int left = spaceLeft(hull, items);
+        /*
+          Абордаж (п. 8): штурмовик идёт к чужой обороне и к подбитым кораблям — ему и брать их.
+          ИИ своих проектов не собирает, и без этих строк средств абордажа у него не было бы
+          никогда: транспортёры, шаттлы, тяговый луч и десантные отсеки лежали бы для его
+          флота мёртвыми, а трофеи быстрого боя доставались бы одним телепатам. Модули
+          ставятся, только пока на корпусе остаётся место хотя бы под половину его стволов —
+          штурмовик прежде всего бьёт.
+        */
+        List<ShipDesignRules.Item> boarding = boardingItems(technologies);
+        int boardingSpace = boarding.stream().mapToInt(item -> item.component().spaceOn(hull)).sum();
+        if (boardingSpace > 0 && boardingSpace * 2 <= left) {
+            items.addAll(boarding);
+            left -= boardingSpace;
+        }
+        WeaponModification piercing = shipCatalog.modification(ARMOUR_PIERCING);
+        ShipDesignRules.Item best = null;
+        for (ShipComponent weapon : shipCatalog.components(ShipComponentSlot.WEAPON)) {
+            if (!researched(weapon.requiredTechCode(), technologies)
+                    || weapon.weaponKind() == WeaponKind.MISSILE
+                    || weapon.weaponKind() == WeaponKind.BOMB) {
+                continue;
+            }
+            List<WeaponModification> mods = Boolean.TRUE.equals(weapon.carries(piercing))
+                    && researched(piercing.requiredTechCode(), technologies)
+                    ? List.of(piercing) : List.of();
+            ShipDesignRules.Item one = new ShipDesignRules.Item(weapon, 1, mods);
+            int guns = left / Math.max(1, one.spaceOn(hull));
+            if (guns < 1 && !mods.isEmpty()) {
+                one = new ShipDesignRules.Item(weapon, 1);
+                guns = left / Math.max(1, one.spaceOn(hull));
+            }
+            if (guns < 1) {
+                continue;
+            }
+            ShipDesignRules.Item candidate = new ShipDesignRules.Item(weapon, guns, one.modifications());
+            if (best == null || shotDamage(weapon) > shotDamage(best.component())
+                    || (shotDamage(weapon) == shotDamage(best.component())
+                        && guns * damage(weapon) > best.count() * damage(best.component()))) {
+                best = candidate;
+            }
+        }
+        if (best == null) {
+            return null;
+        }
+        items.add(best);
+        return List.copyOf(items);
+    }
+
+    /**
+     * Средства абордажа, которые ставит ИИ (п. 8): первое изученное из {@link #BOARDING_MEANS}
+     * и десантные отсеки к нему. Пусто — абордажу учиться не на чем.
+     */
+    private List<ShipDesignRules.Item> boardingItems(Set<String> technologies) {
+        String means = BOARDING_MEANS.stream()
+                .filter(technologies::contains)
+                .findFirst()
+                .orElse(null);
+        if (means == null) {
+            return List.of();
+        }
+        List<ShipDesignRules.Item> boarding = new ArrayList<>(2);
+        boarding.add(new ShipDesignRules.Item(shipCatalog.component(means), 1));
+        if (technologies.contains(TROOP_PODS)) {
+            boarding.add(new ShipDesignRules.Item(shipCatalog.component(TROOP_PODS), 1));
+        }
+        return boarding;
+    }
+
+    /**
+     * Линейный проект с абордажем — п. 8, для линейных корпусов ИИ. Трофеи быстрого боя
+     * уводит флот, у которого есть чем брать, — а штурмовик строится, только когда цель войны
+     * прикрыта обороной, и в победивших флотах его не оказывалось: за партию быстрый бой
+     * выигрывался шесть десятков раз, и ни разу у победителя не было средств абордажа
+     * (замер 03.10.2026). Линейный корабль — самый массовый боевой корабль партии, и средство
+     * абордажа на нём делает абордаж частью флота, а не его исключением.
+     * Ствол уступает место модулю, только пока остаётся хотя бы половина стволов.
+     */
+    private List<ShipDesignRules.Item> lineWithBoarding(ShipHull hull, Set<String> technologies) {
+        List<ShipDesignRules.Item> items = new ArrayList<>(defaultItems(hull, technologies));
+        List<ShipDesignRules.Item> boarding = boardingItems(technologies);
+        if (boarding.isEmpty()) {
+            return List.copyOf(items);
+        }
+        int weaponIndex = -1;
+        for (int index = 0; index < items.size(); index++) {
+            if (items.get(index).component().slot() == ShipComponentSlot.WEAPON) {
+                weaponIndex = index;
+            }
+        }
+        if (weaponIndex < 0) {
+            return List.copyOf(items);
+        }
+        ShipDesignRules.Item weapon = items.get(weaponIndex);
+        int perGun = Math.max(1, weapon.component().spaceOn(hull));
+        int need = boarding.stream().mapToInt(item -> item.component().spaceOn(hull)).sum()
+                - spaceLeft(hull, items);
+        int removed = need <= 0 ? 0 : (need + perGun - 1) / perGun;
+        int kept = weapon.count() - removed;
+        if (kept < 1 || kept * 2 < weapon.count()) {
+            return List.copyOf(items);
+        }
+        items.set(weaponIndex, new ShipDesignRules.Item(weapon.component(), kept, weapon.modifications()));
+        items.addAll(boarding);
+        return List.copyOf(items);
+    }
+
+    /** Доля ракет в залпе состава, в процентах. */
+    private Integer missilePercent(List<ShipDesignRules.Item> items) {
+        int total = 0;
+        int missiles = 0;
+        for (ShipDesignRules.Item item : items) {
+            if (item.component().slot() != ShipComponentSlot.WEAPON) {
+                continue;
+            }
+            int salvo = damage(item.component()) * item.count();
+            total += salvo;
+            if (item.component().weaponKind() == WeaponKind.MISSILE) {
+                missiles += salvo;
+            }
+        }
+        return total == 0 ? 0 : missiles * 100 / total;
+    }
+
+    /**
+     * Бомбардировщик (ShipMission.BOMBER, пункт 25): тяжелейшая изученная бомба на всё место —
+     * «выжженная земля» оригинала: колонию, которую не взять десантом, можно стереть; плюс
+     * средство абордажа, если влезает. {@code null} — бомб не изучено.
+     */
+    private List<ShipDesignRules.Item> bomberItems(ShipHull hull, Set<String> technologies) {
+        List<ShipDesignRules.Item> items = new ArrayList<>(withoutFighters(hullFittings(hull, technologies)));
+        int left = spaceLeft(hull, items);
+        ShipComponent bomb = shipCatalog.components(ShipComponentSlot.WEAPON).stream()
+                .filter(component -> component.weaponKind() == WeaponKind.BOMB)
+                .filter(component -> researched(component.requiredTechCode(), technologies))
+                .max(Comparator.comparingInt(this::shotDamage))
+                .orElse(null);
+        if (bomb == null || bomb.spaceOn(hull) > left) {
+            return null;
+        }
+        // Средство абордажа — и на бомбардировщике (04.10.2026): он заменил в строю часть
+        // линейных кораблей, которые его несли, и трофеев стало вшестеро меньше (27 → 4 за две
+        // партии). Модуль встаёт, только если после него остаётся место хотя бы под бомбу.
+        List<ShipDesignRules.Item> boarding = boardingItems(technologies);
+        int boardingSpace = boarding.stream().mapToInt(item -> item.spaceOn(hull) * item.count()).sum();
+        if (!boarding.isEmpty() && left - boardingSpace >= bomb.spaceOn(hull)) {
+            items.addAll(boarding);
+            left -= boardingSpace;
+        }
+        items.add(new ShipDesignRules.Item(bomb, left / Math.max(1, bomb.spaceOn(hull))));
+        return List.copyOf(items);
+    }
+
+    /** Урон ОДНОГО выстрела ствола — то, что решает, пробьёт ли он щит платформы. */
+    private int shotDamage(ShipComponent weapon) {
+        int sides = Boolean.TRUE.equals(weapon.envelops()) ? ShipDesignRules.ENVELOPING_SIDES : 1;
+        return weapon.effects().getOrDefault(ShipEffectType.WEAPON_DAMAGE, 0) * sides;
     }
 
     /**
@@ -521,6 +901,12 @@ public class ShipDesignService {
     private ShipDesignEntity createAutoDesign(UUID gameId, PlayerEntity player, Integer turn,
                                               Integer slot, ShipHull hull,
                                               List<ShipDesignRules.Item> items) {
+        return createAutoDesign(gameId, player, turn, slot, hull, items, null);
+    }
+
+    private ShipDesignEntity createAutoDesign(UUID gameId, PlayerEntity player, Integer turn,
+                                              Integer slot, ShipHull hull,
+                                              List<ShipDesignRules.Item> items, ShipMission mission) {
         ShipDesignEntity design = new ShipDesignEntity();
         design.setGameId(gameId);
         design.setOwnerPlayerId(player.getId());
@@ -532,9 +918,21 @@ public class ShipDesignService {
         design.setCreatedTurn(turn);
         design.setObsolete(Boolean.FALSE);
         design.setAuto(Boolean.TRUE);
+        design.setMission(mission);
         shipDesignRepository.saveAndFlush(design);
         saveComponents(design, items);
-        log.debug("Империя {} получила проект «{}» в ячейку {}", player.getName(), hull.name(), slot);
+        if (mission != null && mission != ShipMission.LINE) {
+            // Проект под задачу — событие редкое (раз на изученную технологию), и по журналу
+            // видно, что ИИ правда собирает эскорты и штурмовики.
+            log.info("Империя {} получила проект-{} «{}» в ячейку {}: {}", player.getName(), mission,
+                    hull.code(), slot, items.stream()
+                            .map(item -> item.component().code() + "×" + item.count()
+                                    + (item.modifications().isEmpty() ? "" : item.modifications().stream()
+                                            .map(WeaponModification::code).collect(Collectors.joining("+", "[", "]"))))
+                            .collect(Collectors.joining(", ")));
+        } else {
+            log.debug("Империя {} получила проект «{}» в ячейку {}", player.getName(), hull.name(), slot);
+        }
         return design;
     }
 
@@ -562,15 +960,19 @@ public class ShipDesignService {
     private ShipDesignEntity replaceAutoDesign(UUID gameId, PlayerEntity player, Integer turn,
                                                ShipDesignEntity design, ShipHull hull,
                                                List<ShipDesignRules.Item> items,
-                                               List<ShipDesignRules.Item> current) {
-        if (current.equals(items) && hull.code().equals(design.getHullCode())) {
+                                               List<ShipDesignRules.Item> current,
+                                               ShipMission mission) {
+        if (current.equals(items) && hull.code().equals(design.getHullCode())
+                && mission == design.getMission()) {
             return design;
         }
         design.setObsolete(Boolean.TRUE);
         shipDesignRepository.saveAndFlush(design);
         log.debug("Империя {}: проект «{}» вытеснен новым — изучено лучшее вооружение",
                 player.getName(), design.getName());
-        return createAutoDesign(gameId, player, turn, design.getSlot(), hull, items);
+        ShipDesignEntity fresh = createAutoDesign(gameId, player, turn, design.getSlot(), hull, items, mission);
+        retargetProjects(player.getId(), design.getId(), fresh.getId());
+        return fresh;
     }
 
     /**
@@ -609,8 +1011,14 @@ public class ShipDesignService {
      */
     @Transactional
     public ShipDesignEntity civilDesign(GameEntity game, PlayerEntity player, ShipRole role) {
+        // ТРОФЕИ НЕ БЕРУТСЯ, а равные упорядочены явно (14.10.2026): трофейная копия наследует ячейку и роль
+        // исходного проекта, и захваченный чужой колонист лежал в той же ячейке 0, что и свой. Упорядоченные одной
+        // ячейкой, они шли в порядке строк базы — и одна и та же партия строила то свой корабль, то копию трофея;
+        // на 500 ходах это разводило партию с самой собой (проверка повторимости, зёрна 1000–1002).
         return shipDesignRepository.findAllByOwnerPlayerIdOrderBySlotAsc(player.getId()).stream()
                 .filter(design -> design.getRole() == role)
+                .filter(design -> !Boolean.TRUE.equals(design.getTrophy()))
+                .sorted(GameOrder.DESIGNS)
                 .findFirst()
                 .map(design -> withTanks(player, design))
                 .orElseGet(() -> createCivilDesign(game, player, role));
@@ -640,7 +1048,7 @@ public class ShipDesignService {
         if (rows.stream().anyMatch(row -> tanks.code().equals(row.getComponentCode()))) {
             return design;
         }
-        ShipHull hull = shipCatalog.hull(design.getHullCode());
+        ShipHull hull = enlarged(shipCatalog.hull(design.getHullCode()), technologies(player));
         List<ShipDesignRules.Item> items = new ArrayList<>(toItems(rows));
         items.add(new ShipDesignRules.Item(tanks, 1));
         if (!shipDesignRules.stats(hull, items, RaceEffects.NONE).fits()) {
@@ -863,7 +1271,7 @@ public class ShipDesignService {
         return new ShipDesignDto(
                 design.getId(),
                 design.getSlot(),
-                design.getName(),
+                messages.shown(design.getName()),
                 hull.code(),
                 hull.name(),
                 components,
@@ -956,8 +1364,12 @@ public class ShipDesignService {
             }
         }
         // Особые модули не повторяются: два одинаковых усиления корпуса смысла не имеют.
+        // Кроме тяговых лучей и отсеков шаттлов — они бьют числом, как стволы (п. 8, абордаж).
         for (ShipDesignRules.Item item : items) {
-            if (item.component().slot() == ShipComponentSlot.SPECIAL && item.count() > 1) {
+            boolean stacks = item.component().amount(ShipEffectType.TRACTOR) > 0
+                    || item.component().amount(ShipEffectType.SHUTTLE_BAY) > 0
+                    || item.component().amount(ShipEffectType.FIGHTER_BAY) > 0;
+            if (item.component().slot() == ShipComponentSlot.SPECIAL && item.count() > 1 && !stacks) {
                 throw new ConflictException("ship.specialOnce", item.component().name());
             }
         }
@@ -966,6 +1378,15 @@ public class ShipDesignService {
         if (!stats.fits()) {
             throw new ConflictException("ship.noSpace", stats.spaceUsed(), stats.space());
         }
+    }
+
+    /**
+     * Корпус с местом, поднятым изученным, — мегафлюксеры (п. 8, 13.10.2026, перенос MOO II):
+     * действие {@code SHIP_SPACE_PERCENT} из дерева технологий.
+     */
+    private ShipHull enlarged(ShipHull hull, Set<String> technologies) {
+        return hull.withSpacePercent(researchCatalog.effectsOf(technologies)
+                .amount(com.sddnw.server.domain.enums.BuildingEffectType.SHIP_SPACE_PERCENT));
     }
 
     /** Состав стартового проекта: двигатель, обшивка и столько пушек, сколько влезет. */
@@ -981,12 +1402,21 @@ public class ShipDesignService {
      * колонии всегда есть что строить, пока игрок не собрал своего. Лучшим считается
      * последнее в справочнике: он идёт по возрастанию уровня, как дерево технологий.
      */
-    private List<ShipDesignRules.Item> defaultItems(ShipHull hull, Set<String> technologies) {
+    private List<ShipDesignRules.Item> defaultItems(ShipHull plainHull, Set<String> technologies) {
+        // Мегафлюксеры (п. 8): проекты игры собираются на увеличенном месте, как и проекты игрока.
+        ShipHull hull = enlarged(plainHull, technologies);
         List<ShipDesignRules.Item> items = new ArrayList<>(4);
         int left = hull.space();
 
+        // Платформе обороны двигатель не нужен: она не ходит и никуда не летает (п. 8, п. 11).
+        // Прежде она получала его вместе с баками, как корабль, — место уходило впустую, а в
+        // бою у звёздной базы появлялась боевая скорость.
+        boolean platform = Boolean.TRUE.equals(hull.platform());
         for (ShipComponentSlot slot : List.of(ShipComponentSlot.ENGINE, ShipComponentSlot.ARMOR,
                 ShipComponentSlot.COMPUTER, ShipComponentSlot.SHIELD)) {
+            if (platform && slot == ShipComponentSlot.ENGINE) {
+                continue;
+            }
             ShipComponent best = bestAvailable(slot, technologies);
             if (best == null || best.spaceOn(hull) > left) {
                 continue;
@@ -1004,7 +1434,7 @@ public class ShipDesignService {
           не окно дизайна, а всю партию. Игра снаряжает свои корабли сама — как топливом,
           так и баками; собранное игроком не трогается никогда.
         */
-        ShipComponent tanks = extendedTanks(technologies);
+        ShipComponent tanks = platform ? null : extendedTanks(technologies);
         if (tanks != null && tanks.spaceOn(hull) <= left) {
             items.add(new ShipDesignRules.Item(tanks, 1));
             left -= tanks.spaceOn(hull);
@@ -1016,16 +1446,165 @@ public class ShipDesignService {
             return List.copyOf(items);
         }
 
+        // Оружия, данного с первого хода, больше нет (12.10.2026, решение хозяина проекта):
+        // масс-драйвер открывает продвинутый магнетизм, ядерную ракету — базовая химия. Пока
+        // не изучено ни одного ствола, проект остаётся без оружия — так стоит звёздная база
+        // родного мира в первые ходы. Кораблю это не грозит: кораблестроение открывают те же
+        // базовые уровни, что дают ракету.
         ShipComponent weapon = bestWeapon(hull, left, technologies);
         if (weapon == null) {
-            weapon = shipCatalog.components(ShipComponentSlot.WEAPON).stream()
-                    .filter(component -> component.requiredTechCode() == null)
-                    .min(Comparator.comparing(ShipComponent::space))
-                    .orElseThrow(() -> new IllegalStateException("В справочнике нет стартового оружия"));
+            return List.copyOf(items);
+        }
+        // Особые модули (13.10.2026, перенос MOO II): не больше трети оставшегося места и только
+        // если после них встаёт хоть один ствол. Без этого ИИ, своих проектов не собирающий, не
+        // ставил бы их никогда, и два десятка технологий были бы для него мертвы.
+        if (!platform) {
+            int before = left;
+            List<ShipDesignRules.Item> specials = specialsFor(hull, left, weapon, items, technologies);
+            int used = 0;
+            int bonus = 0;
+            for (ShipDesignRules.Item special : specials) {
+                used += special.component().spaceOn(hull);
+                bonus += hull.space() * special.component().amount(ShipEffectType.SPACE_PERCENT) / 100;
+            }
+            ShipComponent rearmed = bestWeapon(hull, before - used + bonus, technologies);
+            if (!specials.isEmpty() && rearmed != null && rearmed.spaceOn(hull) <= before - used + bonus) {
+                items.addAll(specials);
+                left = before - used + bonus;
+                weapon = rearmed;
+            }
         }
         int guns = Math.max(1, left / Math.max(1, weapon.spaceOn(hull)));
         items.add(new ShipDesignRules.Item(weapon, guns));
+
+        /*
+          Противоракеты (backlog-promo, пункт 30): ИИ своих проектов не собирает, и без этой
+          строки не пользовался бы ими никогда. Встают они на ЛЮБОЙ корпус, где после них
+          остаётся хоть один ствол, — фрегату это стоит половины залпа, но так решил хозяин
+          проекта (03.10.2026): прежний порог в четверть стволов оставлял фрегаты ИИ без защиты
+          от ракет вовсе. Остатка корпуса после стволов на модуль не хватает никогда — он ровно
+          вдвое меньше модуля на любом корпусе, поэтому ствол уступает место всегда.
+        */
+        ShipComponent antiMissile = technologies.contains(ANTI_MISSILE_ROCKETS)
+                ? shipCatalog.component(ANTI_MISSILE_ROCKETS)
+                : null;
+        if (antiMissile != null && antiMissile.spaceOn(hull) <= left) {
+            int kept = (left - antiMissile.spaceOn(hull)) / Math.max(1, weapon.spaceOn(hull));
+            if (kept >= 1) {
+                items.set(items.size() - 1, new ShipDesignRules.Item(weapon, kept));
+                items.add(new ShipDesignRules.Item(antiMissile, 1));
+            }
+        }
         return List.copyOf(items);
+    }
+
+    /**
+     * Порядок особых модулей в проектах, которые собирает игра, — п. 8 (13.10.2026, перенос MOO II).
+     * <i>Реконструкция</i>: по пользе в бою — боевые отсеки (место), лишний ход, истребители (14.10.2026:
+     * стоя в конце списка, они не получали места ни разу за 250 ходов партии ИИ), поле молний и прочные щиты
+     * (14.10.2026: их не было ни в одном проекте — бюджет съедали смещение и уклонение), смещение, уклонение,
+     * щиты, живучесть, станции безопасности (дешёвая защита от абордажа), затем модули под вид оружия,
+     * устройства, разведлаборатория (наука и меткость против чудищ) и маскировка. Из взаимоисключающих
+     * (стабилизатор и нейтрализатор) берётся первый изученный.
+     */
+    private static final List<String> SPECIAL_PRIORITY = List.of(
+            "battle-pods", "time-warp-facilitator", "heavy-fighters", "fighter-bays", "lightning-field",
+            "hard-shields", "displacement-device", "inertial-nullifier", "inertial-stabilizer", "multi-phased-shields",
+            "shield-capacitor", "energy-absorber", "automated-repair-unit", "heavy-armor", "reinforced-hull",
+            "security-stations", "high-energy-focus", "hyper-x-capacitors", "fast-missile-racks",
+            "achilles-targeting-unit", "rangemaster-targeting-unit", "battle-scanner", "augmented-engines",
+            "plasma-web", "gyro-destabilizer", "pulsar", "scout-lab", "cloaking-device", "stealth-field");
+
+    /** Изучен ли ствол, которым бьют истребители, — луч или снаряд с ближней обороной (п. 8). */
+    private boolean fighterBeam(Set<String> technologies) {
+        com.sddnw.server.domain.WeaponModification pointDefence = shipCatalog.modification("point-defense");
+        return shipCatalog.components(ShipComponentSlot.WEAPON).stream()
+                .filter(one -> one.weaponKind() == WeaponKind.BEAM || one.weaponKind() == WeaponKind.PROJECTILE)
+                .filter(one -> pointDefence == null || Boolean.TRUE.equals(one.carries(pointDefence)))
+                .anyMatch(one -> researched(one.requiredTechCode(), technologies));
+    }
+
+    /** Ускоритель времени — ему одному дано до двух третей места, а не треть ({@link #specialsFor}). */
+    private static final String TIME_WARP = "time-warp-facilitator";
+
+    /** Модули, которым нужен щит на корабле. */
+    private static final Set<String> NEEDS_SHIELD = Set.of("hard-shields", "multi-phased-shields", "shield-capacitor");
+
+    /** Взаимоисключающие пары: второй не берётся, если взят первый. */
+    private static final Map<String, String> SUPERSEDES = Map.of(
+            "inertial-stabilizer", "inertial-nullifier",
+            "stealth-field", "cloaking-device");
+
+    /**
+     * Особые модули проекта, который собирает игра, — в пределах трети места после двигателя,
+     * брони, компьютера, щита и баков (модули растут с корпусом, и в четверть встаёт лишь
+     * мельчайший — замер 13.10.2026). Модули под вид оружия (фокусировщик и прицелы — лучам и
+     * снарядам, скоростные стойки — ракетам) ставятся только под подходящий ствол.
+     */
+    private List<ShipDesignRules.Item> specialsFor(ShipHull hull, int left, ShipComponent weapon,
+                                                   List<ShipDesignRules.Item> core, Set<String> technologies) {
+        int budget = left / 3;
+        int used = 0;
+        boolean beams = weapon.weaponKind() == WeaponKind.BEAM || weapon.weaponKind() == WeaponKind.PROJECTILE;
+        boolean missiles = weapon.weaponKind() == WeaponKind.MISSILE;
+        boolean shield = core.stream().anyMatch(item -> item.component().slot() == ShipComponentSlot.SHIELD);
+        Map<String, ShipComponent> catalog = new java.util.HashMap<>();
+        shipCatalog.components(ShipComponentSlot.SPECIAL).forEach(one -> catalog.put(one.code(), one));
+        Set<String> taken = new java.util.HashSet<>();
+        List<ShipDesignRules.Item> chosen = new ArrayList<>();
+        for (String code : SPECIAL_PRIORITY) {
+            ShipComponent component = catalog.get(code);
+            if (component == null || !researched(component.requiredTechCode(), technologies)) {
+                continue;
+            }
+            if (NEEDS_SHIELD.contains(code) && !shield) {
+                continue;
+            }
+            if (SUPERSEDES.containsKey(code) && taken.contains(SUPERSEDES.get(code))) {
+                continue;
+            }
+            // Истребители бьют лучшим лучом или снарядом ИМПЕРИИ с ближней обороной (п. 8,
+            // TacticalBattleService.fighterBeam), а не стволом корабля: без такого ствола перехватчикам
+            // нечем стрелять. Фокусировщик и прицелы усиливают стволы самого корабля.
+            if ((Set.of("fighter-bays", "heavy-fighters").contains(code) && !fighterBeam(technologies))
+                    || (Set.of("high-energy-focus", "hyper-x-capacitors", "achilles-targeting-unit",
+                    "rangemaster-targeting-unit").contains(code) && !beams)
+                    || ("fast-missile-racks".equals(code) && !missiles)) {
+                continue;
+            }
+            if (component.spaceOn(hull) > budget) {
+                /*
+                  Ускоритель времени — исключение (14.10.2026): он занимает треть корпуса на ЛЮБОМ
+                  корпусе (10 клеток на множитель системы) — около 60 % места, оставшегося после
+                  двигателя, брони, щита и баков, — и в треть не влезал никогда: изученная технология
+                  была для ИИ мертва. Ему дано до двух третей места, если после него и уже взятого
+                  остаются хотя бы четыре ствола (на деле — линкор и крупнее); остальным модулям места
+                  тогда не остаётся. Лишний ход удваивает удар корабля и в силе быстрого боя
+                  ({@code ShipDesignRules.power}).
+                */
+                int rest = left - used - component.spaceOn(hull);
+                if (!TIME_WARP.equals(code) || used + component.spaceOn(hull) > left * 2 / 3
+                        || rest < 4 * weapon.spaceOn(hull)) {
+                    continue;
+                }
+                budget = 0;
+                used += component.spaceOn(hull);
+                taken.add(code);
+                chosen.add(new ShipDesignRules.Item(component, 1));
+                continue;
+            }
+            budget -= component.spaceOn(hull);
+            used += component.spaceOn(hull);
+            // Боевые отсеки прибавляют корпусу места (SPACE_PERCENT), и треть прибавки идёт модулям —
+            // 14.10.2026: без этого отсеки, стоящие первыми, съедали бюджет, и истребителям не
+            // оставалось места ни на одном корпусе (партия ИИ на 250 ходов — ноль носителей).
+            int bonus = hull.space() * component.amount(ShipEffectType.SPACE_PERCENT) / 100;
+            budget += bonus / 3;
+            left += bonus;
+            taken.add(code);
+            chosen.add(new ShipDesignRules.Item(component, 1));
+        }
+        return chosen;
     }
 
     /**
@@ -1102,6 +1681,8 @@ public class ShipDesignService {
     private ShipComponent bestWeapon(ShipHull hull, Integer space, Set<String> technologies) {
         List<ShipComponent> open = shipCatalog.components(ShipComponentSlot.WEAPON).stream()
                 .filter(component -> researched(component.requiredTechCode(), technologies))
+                // Бомба по кораблям не бьёт (пункт 25): лучшим оружием она быть не может.
+                .filter(component -> component.weaponKind() != WeaponKind.BOMB)
                 .toList();
         if (open.isEmpty()) {
             return null;
@@ -1181,8 +1762,13 @@ public class ShipDesignService {
         return List.copyOf(found);
     }
 
+    /** Коды изученных игроком технологий — для разбора трофеев (п. 8). */
+    public Set<String> technologiesOf(PlayerEntity player) {
+        return technologies(player);
+    }
+
     /** Коды изученных игроком технологий. */
-    private Set<String> technologies(PlayerEntity player) {
+    public Set<String> technologies(PlayerEntity player) {
         return playerTechnologyRepository.findAllByPlayerIdOrderByCategoryCodeAscLevelOrderAsc(player.getId())
                 .stream()
                 .map(technology -> technology.getOptionCode())
@@ -1228,6 +1814,8 @@ public class ShipDesignService {
     private Boolean percent(ShipEffectType type) {
         return type == ShipEffectType.ARMOUR_PERCENT
                 || type == ShipEffectType.ATTACK_PERCENT
+                || type == ShipEffectType.ANTI_MISSILE
+                || type == ShipEffectType.MARINES_PERCENT
                 || type == ShipEffectType.STRUCTURE_PERCENT
                 || type == ShipEffectType.SPACE_PERCENT
                 || type == ShipEffectType.FUEL_RANGE_PERCENT;
@@ -1240,5 +1828,51 @@ public class ShipDesignService {
      */
     private String effectName(ShipEffectType type) {
         return messages.label(type);
+    }
+
+    /**
+     * Переводит стройку и очередь колоний владельца с вытесненного проекта на новый проект той же
+     * ячейки — п. 8, п. 10 (09.10.2026, баг хозяина проекта). Строят КОРАБЛЬ ячейки, а не строку
+     * проекта: прежде колония, заказавшая фрегат до правки проекта, оставалась на вытесненной
+     * строке — экран звал её «проект снят с производства», цены у неё не было, и стройка висела
+     * бесконечной. Проект убран из ячейки вовсе ({@code fresh == null}) — строить нечего: текущая
+     * стройка сменяется товарами (вложенное остаётся колонии), а из очереди такие строки уходят.
+     */
+    void retargetProjects(UUID ownerPlayerId, UUID obsoleteId, UUID freshId) {
+        String oldCode = com.sddnw.server.domain.ColonyProject.ship(obsoleteId);
+        String newCode = freshId == null ? null : com.sddnw.server.domain.ColonyProject.ship(freshId);
+        for (var planet : planetRepository.findAllByOwnerPlayerId(ownerPlayerId)) {
+            if (obsoleteId.equals(planet.getProjectDesignId())) {
+                if (freshId == null) {
+                    planet.setProjectCode(com.sddnw.server.domain.ColonyProject.TRADE_GOODS);
+                    planet.setProjectDesignId(null);
+                } else {
+                    planet.setProjectDesignId(freshId);
+                }
+            }
+            if (planet.getBuildQueue().contains(oldCode)) {
+                // Очередь правится копией: правку того же списка Hibernate не заметил бы.
+                List<String> queue = new ArrayList<>();
+                for (String code : planet.getBuildQueue()) {
+                    if (!code.equals(oldCode)) {
+                        queue.add(code);
+                    } else if (newCode != null) {
+                        queue.add(newCode);
+                    }
+                }
+                planet.setBuildQueue(queue);
+            }
+        }
+    }
+
+    /**
+     * Действующий проект на месте вытесненного — та же ячейка; пусто — ячейка освобождена. Для
+     * колоний, застрявших на вытесненной строке до починки {@link #retargetProjects}.
+     */
+    public java.util.Optional<ShipDesignEntity> successor(ShipDesignEntity design) {
+        if (!Boolean.TRUE.equals(design.getObsolete()) || design.getSlot() == null) {
+            return java.util.Optional.of(design);
+        }
+        return shipDesignRepository.findByOwnerPlayerIdAndSlotAndObsoleteFalse(design.getOwnerPlayerId(), design.getSlot());
     }
 }

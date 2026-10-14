@@ -26,7 +26,7 @@
             {
               "code": "fighter-bays",
               "name": { "en": "Fighter Bays", "ru": "Отсеки истребителей" },
-              "description": { "en": "Ship-mounted fighter craft", "ru": "Истребители на борту корабля" }
+              "description": { "en": "Ship module. Launches four interceptors with every volley: each strikes four times with the best point-defence beam, at 8 squares plus twice the drive speed. Point defence can shoot them down.", "ru": "Модуль корабля. С каждым залпом выпускает четыре перехватчика: каждый бьёт четырежды лучшим лучом ближней обороны, летит со скоростью 8 клеток плюс удвоенная скорость двигателя. Ближняя оборона их сбивает." }
             },
             {
               "code": "reinforced-hull",
@@ -77,7 +77,7 @@
             {
               "code": "survival-pods",
               "name": { "en": "Survival Pods", "ru": "Спасательные капсулы" },
-              "description": { "en": "Crew escape system", "ru": "Экипаж уцелевает при гибели корабля" }
+              "description": { "en": "A ship leader whose ship is destroyed survives, provided the fleet keeps at least one ship. Without them the leader dies with the ship.", "ru": "Корабельный лидер, чей корабль погиб, уцелеет, если у флота остался хоть один корабль. Без капсул лидер гибнет вместе с кораблём." }
             }
           ],
           "recommended": ["battle-pods"]
@@ -123,7 +123,7 @@
             {
               "code": "powered-armor",
               "name": { "en": "Powered Armor", "ru": "Силовая броня" },
-              "description": { "en": "Advanced ground combat", "ru": "Пехота крепче в бою" }
+              "description": { "en": "Troops gain +10% strength in ground combat, on both attack and defence. Stacks with personal shields and battle walkers.", "ru": "Пехота на 10% сильнее в наземном бою, и в атаке, и в обороне. Складывается с личным щитом и шагоходами." }
             }
           ],
           "recommended": ["robo-miners"]
@@ -136,12 +136,12 @@
             {
               "code": "fast-missile-racks",
               "name": { "en": "Fast Missile Racks", "ru": "Быстрые пусковые" },
-              "description": { "en": "Improved missile fire rate", "ru": "Ракеты уходят чаще" }
+              "description": { "en": "Ship module: missiles fire twice in one turn, then the racks stay silent for the next round.", "ru": "Модуль корабля: ракеты уходят дважды за ход, а следующий круг стойки молчат." }
             },
             {
               "code": "advanced-damage-control",
               "name": { "en": "Advanced Damage Control", "ru": "Продвинутая ремонтная служба" },
-              "description": { "en": "Better ship repair", "ru": "Корабли чинятся лучше" }
+              "description": { "en": "Ships come out of every battle fully repaired. In this game they always do: damage is not kept between battles.", "ru": "Корабли выходят из каждого боя целыми. В этой игре так и есть всегда: урон между боями не хранится." }
             },
             {
               "code": "assault-shuttles",
@@ -169,7 +169,7 @@
             {
               "code": "battleoids",
               "name": { "en": "Battle Walkers", "ru": "Боевые шагоходы" },
-              "description": { "en": "Giant ground units", "ru": "Огромные наземные машины" }
+              "description": { "en": "Ground troops gain +100% strength when invading and +50% when defending. Stacks with powered armor and personal shields.", "ru": "Десант на 100% сильнее при вторжении и на 50% при обороне. Складывается с силовой бронёй и личным щитом." }
             }
           ],
           "recommended": ["titan-construction", "ground-batteries"]
@@ -187,12 +187,12 @@
             {
               "code": "automated-repair-unit",
               "name": { "en": "Automated Repair Unit", "ru": "Автоматический ремонт" },
-              "description": { "en": "Ship repair in battle", "ru": "Корабль чинится прямо в бою" }
+              "description": { "en": "Ship module: restores 20% of armor and hull every combat round. Adds up with cybernetic repair.", "ru": "Модуль корабля: каждый круг боя восстанавливает 20 % брони и корпуса. Складывается с починкой кибернетиков." }
             },
             {
               "code": "artificial-planet-construction",
               "name": { "en": "Artificial Planet Construction", "ru": "Строительство искусственных планет" },
-              "description": { "en": "Build artificial planets", "ru": "Планета, построенная руками" }
+              "description": { "en": "Adds Artificial Planet to the build list: for 800 production a gas giant of the system becomes a huge barren planet, an asteroid belt a large one, ready for a colony base.", "ru": "Открывает в стройке искусственную планету: за 800 производства газовый гигант системы становится огромной бесплодной планетой, пояс астероидов — большой, и её можно заселить колониальной базой." }
             }
           ],
           "recommended": ["automated-repair-unit", "recyclotron"]
@@ -205,12 +205,12 @@
             {
               "code": "robotic-factory",
               "name": { "en": "Robotic Factory", "ru": "Роботизированный завод" },
-              "description": { "en": "Maximum production", "ru": "Наибольшее производство колонии" }
+              "description": { "en": "Adds the Robotic Factory to the colony build list (200 production, upkeep 3 gc): 5 to 20 production depending on the planet's minerals, without workers, but it pollutes.", "ru": "Открывает в стройке роботизированный завод (200 производства, содержание 3 gc): от 5 до 20 производства по богатству недр, без рабочих, но пачкает планету." }
             },
             {
               "code": "bomber-bays",
               "name": { "en": "Bomber Bays", "ru": "Отсеки бомбардировщиков" },
-              "description": { "en": "Ship-mounted bombers", "ru": "Бомбардировщики на борту корабля" }
+              "description": { "en": "Ship module. Launches four bombers with every volley: each drops the best bomb on the target ship, at 4 squares plus four times the drive speed.", "ru": "Модуль корабля. С каждым залпом выпускает четыре бомбардировщика: каждый сбрасывает лучшую бомбу на корабль-цель, летит со скоростью 4 клетки плюс учетверённая скорость двигателя." }
             }
           ],
           "recommended": ["robotic-factory"]
@@ -246,12 +246,13 @@
             {
               "code": "advanced-city-planning",
               "name": { "en": "Advanced City Planning", "ru": "Продвинутая застройка" },
-              "description": { "en": "Maximum population", "ru": "Планета вмещает больше жителей" }
+              "description": { "en": "Maximum population of every colony +5. Most noticeable on small planets.", "ru": "Предел населения каждой колонии +5. Заметнее всего на малых планетах." },
+              "effects": [{ "type": "MAX_POPULATION", "amount": 5 }]
             },
             {
               "code": "heavy-fighters",
               "name": { "en": "Heavy Fighters", "ru": "Тяжёлые истребители" },
-              "description": { "en": "Advanced fighter craft", "ru": "Истребители крепче и сильнее" }
+              "description": { "en": "Ship module. Launches four heavy fighters with every volley: each strikes twice with the best point-defence beam and twice with the best bomb.", "ru": "Модуль корабля. С каждым залпом выпускает четыре тяжёлых истребителя: каждый бьёт дважды лучшим лучом ближней обороны и дважды лучшей бомбой." }
             }
           ],
           "recommended": ["advanced-city-planning"]
@@ -289,12 +290,12 @@
             {
               "code": "freighters",
               "name": { "en": "Freighters", "ru": "Грузовой флот" },
-              "description": { "en": "Improved cargo capacity", "ru": "Больше грузовиков для еды и жителей" }
+              "description": { "en": "Adds Freighter to the colony build list for 50 production. Each freighter carries 5 food a turn to starving colonies, or moves 1 colonist.", "ru": "Открывает в стройке колонии грузовой корабль за 50 производства. Каждый возит 5 еды за ход голодающим или 1 жителя." }
             },
             {
               "code": "nuclear-drive",
               "name": { "en": "Nuclear Drive", "ru": "Ядерный двигатель" },
-              "description": { "en": "Basic ship engine", "ru": "Простейший двигатель корабля" }
+              "description": { "en": "Opens shipbuilding together with fuel cells and gives the basic engine: speed 2, combat speed 12, takes 4 space, costs 12 gc.", "ru": "Вместе с топливными элементами открывает кораблестроение; простейший двигатель: скорость 2, в бою 12, место 4, цена 12 gc." }
             },
             {
               "code": "nuclear-bomb",
@@ -313,17 +314,17 @@
             {
               "code": "colony-ship",
               "name": { "en": "Colony Ship", "ru": "Колониальный корабль" },
-              "description": { "en": "Colonization vessel", "ru": "Корабль для новой колонии" }
+              "description": { "en": "Adds Colony Ship to the colony build list for 500 production; it flies to another system and founds a colony of 1 population. Needs shipbuilding.", "ru": "Открывает в стройке колониальный корабль за 500 производства: летит в другую систему и основывает колонию с 1 жителем." }
             },
             {
               "code": "outpost-ship",
               "name": { "en": "Outpost Ship", "ru": "Корабль-застава" },
-              "description": { "en": "Outpost establishment", "ru": "Корабль для заставы" }
+              "description": { "en": "Adds Outpost Ship to the build list for 100 production; it sets up an outpost on any planet, even asteroids and gas giants, extending fuel range.", "ru": "Открывает корабль-заставу за 100 производства: ставит заставу на любой планете, даже на астероидах, и продлевает дальность полёта." }
             },
             {
               "code": "transport",
               "name": { "en": "Transport", "ru": "Транспорт" },
-              "description": { "en": "Population transport", "ru": "Перевозка жителей и десанта" }
+              "description": { "en": "Adds Transport to the build list for 100 production; it carries 4 troops to invade enemy colonies in other systems.", "ru": "Открывает транспорт за 100 производства: везёт 4 бойцов для захвата чужих колоний в других системах." }
             }
           ],
           "recommended": [], "comment": "All technologies - general level"
@@ -369,7 +370,7 @@
             {
               "code": "shield-capacitor",
               "name": { "en": "Shield Capacitor", "ru": "Накопитель щита" },
-              "description": { "en": "Shield enhancement", "ru": "Щит держит больше" }
+              "description": { "en": "Ship module: the shield recovers 90% of its strength between rounds instead of 30%.", "ru": "Модуль корабля: щит восстанавливает между кругами 90 % запаса вместо 30 %." }
             }
           ],
           "recommended": ["ion-drive", "shield-capacitor"]
@@ -410,7 +411,7 @@
             {
               "code": "food-replicators",
               "name": { "en": "Matter Synthesizers", "ru": "Синтезаторы пищи" },
-              "description": { "en": "Eliminate food requirement", "ru": "Еда больше не нужна" }
+              "description": { "en": "Opens the Food Replicators building: whatever food the colony lacks after deliveries it makes from its own production, one for one.", "ru": "Открывает здание «пищевые репликаторы»: еду, которой колонии не хватает после подвоза, она делает из своего производства, единица за единицу." }
             }
           ],
           "recommended": ["transporters"]
@@ -423,17 +424,18 @@
             {
               "code": "high-energy-focus",
               "name": { "en": "High Energy Focus", "ru": "Фокусировка высоких энергий" },
-              "description": { "en": "Beam weapon booster", "ru": "Лучевое оружие сильнее" }
+              "description": { "en": "Ship module: beam weapons and mass drivers deal 50% more damage. Missiles are unaffected.", "ru": "Модуль корабля: лучевое оружие и масс-драйверы бьют на 50 % сильнее. На ракеты не действует." }
             },
             {
               "code": "energy-absorber",
               "name": { "en": "Energy Absorber", "ru": "Поглотитель энергии" },
-              "description": { "en": "Energy weapon defense", "ru": "Защита от энергетического оружия" }
+              "description": { "en": "Ship module: the ship takes 25% less damage to its armor and hull.", "ru": "Модуль корабля: корабль получает на 25 % меньше урона по броне и корпусу." }
             },
             {
               "code": "megafluxers",
               "name": { "en": "Compact Frames", "ru": "Компактные рамы" },
-              "description": { "en": "Power enhancement", "ru": "Места в корпусе больше" }
+              "description": { "en": "Every ship and base gets 25% more space for weapons and systems, including ships already designed.", "ru": "Все корабли и базы получают на 25 % больше места под оружие и системы, включая уже собранные проекты." },
+              "effects": [{ "type": "SHIP_SPACE_PERCENT", "amount": 25 }]
             }
           ],
           "recommended": ["high-energy-focus", "megafluxers"]
@@ -456,7 +458,7 @@
             {
               "code": "hyper-x-capacitors",
               "name": { "en": "Surge Capacitors", "ru": "Импульсные накопители" },
-              "description": { "en": "Advanced capacitors", "ru": "Оружие бьёт чаще" }
+              "description": { "en": "Ship module: beams and mass drivers fire twice in one turn, then stay silent for the next round.", "ru": "Модуль корабля: лучи и масс-драйверы стреляют дважды за ход, а следующий круг молчат." }
             }
           ],
           "recommended": [], "comment": "Depends on strategy"
@@ -504,7 +506,7 @@
             {
               "code": "standard-fuel-cells",
               "name": { "en": "Standard Fuel Cells", "ru": "Обычные топливные элементы" },
-              "description": { "en": "Basic fuel efficiency", "ru": "Простейшая дальность полёта" }
+              "description": { "en": "Ships can fly up to 4 parsecs from your nearest colony. Every empire has these from the first turn.", "ru": "Корабли летают до 4 парсеков от ближайшей своей колонии. Есть у всех империй с первого хода." }
             },
             {
               "code": "extended-fuel-tanks",
@@ -514,7 +516,7 @@
             {
               "code": "titanium-armor",
               "name": { "en": "Titanium Armor", "ru": "Титановая обшивка" },
-              "description": { "en": "Basic improved armor", "ru": "Простейшая улучшенная броня" }
+              "description": { "en": "Opens Titanium Armor in the ship design window: 4 armor points per hull size (frigate 4, destroyer 8, cruiser 16, battleship 32), space 3, cost 3 gc per hull size. The first armor a ship can carry.", "ru": "Открывает в окне дизайна титановую обшивку: 4 очка брони на размер корпуса (фрегат 4, эсминец 8, крейсер 16, линкор 32), место 3, цена 3 gc на размер. Первая броня, которую может нести корабль." }
             }
           ],
           "recommended": [], "comment": "All technologies - general level"
@@ -527,7 +529,7 @@
             {
               "code": "deuterium-fuel-cells",
               "name": { "en": "Deuterium Fuel Cells", "ru": "Дейтериевые элементы" },
-              "description": { "en": "Improved fuel cells", "ru": "Дальность полёта выше" }
+              "description": { "en": "Raises fleet range to 6 parsecs from your nearest colony (up from 4).", "ru": "Дальность полёта флота — 6 парсеков от ближайшей своей колонии (вместо 4)." }
             },
             {
               "code": "tritanium-armor",
@@ -573,7 +575,7 @@
             {
               "code": "iridium-fuel-cells",
               "name": { "en": "Iridium Fuel Cells", "ru": "Иридиевые элементы" },
-              "description": { "en": "Superior fuel cells", "ru": "Дальность ещё выше" }
+              "description": { "en": "Raises fleet range to 9 parsecs from your nearest colony.", "ru": "Дальность полёта флота — 9 парсеков от ближайшей своей колонии." }
             }
           ],
           "recommended": ["iridium-fuel-cells", "atmospheric-renewer"]
@@ -591,7 +593,8 @@
             {
               "code": "microlite-construction",
               "name": { "en": "Lightframe Construction", "ru": "Лёгкие корпуса" },
-              "description": { "en": "Advanced materials", "ru": "Корпуса легче и дешевле" }
+              "description": { "en": "Nano-machines build with less metal: every worker gives 1 more production.", "ru": "Наномашины строят из меньшего металла: каждый рабочий даёт на 1 производства больше." },
+              "effects": [{ "type": "PRODUCTION_PER_WORKER", "amount": 1 }]
             },
             {
               "code": "zortrium-armor",
@@ -619,7 +622,7 @@
             {
               "code": "uridium-fuel-cells",
               "name": { "en": "Ytterbium Fuel Cells", "ru": "Иттербиевые элементы" },
-              "description": { "en": "Ultimate fuel cells", "ru": "Дальность почти без предела" }
+              "description": { "en": "Raises fleet range to 12 parsecs from your nearest colony.", "ru": "Дальность полёта флота — 12 парсеков от ближайшей своей колонии." }
             }
           ],
           "recommended": [], "comment": "Depends on strategy"
@@ -632,7 +635,7 @@
             {
               "code": "thorium-fuel-cells",
               "name": { "en": "Thorium Fuel Cells", "ru": "Ториевые элементы" },
-              "description": { "en": "Perfect fuel cells", "ru": "Топливо больше не ограничивает" }
+              "description": { "en": "Fleet range becomes unlimited: ships can reach any star in the galaxy.", "ru": "Дальность полёта без ограничений: корабли долетают до любой звезды галактики." }
             },
             {
               "code": "adamantium-armor",
@@ -656,7 +659,7 @@
             {
               "code": "space-academy",
               "name": { "en": "Space Academy", "ru": "Космическая академия" },
-              "description": { "en": "Improved officer training", "ru": "Экипажи учатся быстрее" }
+              "description": { "en": "Opens the Space Academy building: ships built at the colony start as Regulars, and ships stationed in its system gain 1 experience a turn. Crews also learn in every battle.", "ru": "Открывает здание «космическая академия»: корабли, построенные в колонии, начинают обученными, а стоящие в её системе получают по очку опыта за ход. Опыт экипажи набирают и в каждом бою." }
             }
           ],
           "recommended": ["space-academy"]
@@ -669,7 +672,7 @@
             {
               "code": "xeno-psychology",
               "name": { "en": "Xeno Psychology", "ru": "Ксенопсихология" },
-              "description": { "en": "Better diplomacy", "ru": "Переговоры идут легче" }
+              "description": { "en": "Neighbours find your offers more appealing: every deal needs 15 less of their trust.", "ru": "Соседям ваши предложения понятнее: любой сделке нужно на 15 меньше их доверия." }
             },
             {
               "code": "alien-management-center",
@@ -713,22 +716,22 @@
             {
               "code": "confederation",
               "name": { "en": "Confederation", "ru": "Конфедерация" },
-              "description": { "en": "Government type", "ru": "Развитый строй: феодализм становится союзом равных" }
+              "description": { "en": "Feudalism becomes Confederation: ships cost 66% less, science −50%, colonies without barracks lose 20% morale. Feudal empires only.", "ru": "Феодализм становится конфедерацией: корабли дешевле на 66 %, наука −50 %, без казарм мораль колонии −20 %. Только для феодализма." }
             },
             {
               "code": "imperium",
               "name": { "en": "Imperium", "ru": "Империум" },
-              "description": { "en": "Government type", "ru": "Развитый строй: диктатура становится империей" }
+              "description": { "en": "Dictatorship becomes Imperium: counter-espionage +2 instead of +1, fleet command +50%, colonies with barracks get +20% morale and no penalty without them.", "ru": "Диктатура становится империумом: контрразведка +2 вместо +1, командование флотом +50 %, колонии с казармами получают +20 % морали, без них штрафа нет." }
             },
             {
               "code": "federation",
               "name": { "en": "Federation", "ru": "Федерация" },
-              "description": { "en": "Government type", "ru": "Развитый строй: демократия становится федерацией" }
+              "description": { "en": "Democracy becomes Federation: science and tax income +75% instead of +50%. Democracies only.", "ru": "Демократия становится федерацией: наука и налоговый доход +75 % вместо +50 %. Только для демократии." }
             },
             {
               "code": "galactic-unification",
               "name": { "en": "Galactic Unification", "ru": "Галактическое единство" },
-              "description": { "en": "Ultimate government", "ru": "Развитый строй: объединение становится галактическим" }
+              "description": { "en": "Unification becomes Galactic Unification: production and food +100% instead of +50%. Unification only.", "ru": "Объединение становится галактическим: производство и еда +100 % вместо +50 %. Только для объединения." }
             }
           ],
           "recommended": ["confederation", "imperium", "federation", "galactic-unification"]
@@ -741,7 +744,8 @@
             {
               "code": "galactic-currency-exchange",
               "name": { "en": "Galactic Currency Exchange", "ru": "Галактическая валютная биржа" },
-              "description": { "en": "Economic optimization", "ru": "Доход империи выше" }
+              "description": { "en": "Tax income of every colony +50%, at no cost. Adds up with the spaceport and stock exchange; gold and gem deposits are not raised.", "ru": "Налоговый доход каждой колонии +50 %, без затрат. Складывается с космопортом и биржей; золото и самоцветы не растут." },
+              "effects": [{ "type": "INCOME_PERCENT", "amount": 50 }]
             }
           ],
           "recommended": ["galactic-currency-exchange"]
@@ -783,7 +787,7 @@
             {
               "code": "dauntless-guidance-system",
               "name": { "en": "Steadfast Guidance System", "ru": "Система наведения «Стойкость»" },
-              "description": { "en": "Missile guidance", "ru": "Ракеты не теряют цель" }
+              "description": { "en": "Missiles whose target was destroyed or retreated turn on the nearest enemy ship instead of being lost.", "ru": "Ракеты, чья цель погибла или ушла с поля, поворачивают на ближайший вражеский корабль, а не пропадают." }
             }
           ],
           "recommended": ["research-laboratory"]
@@ -796,17 +800,18 @@
             {
               "code": "neural-scanner",
               "name": { "en": "Neural Scanner", "ru": "Нейросканер" },
-              "description": { "en": "Detection system", "ru": "Допрос пленных раскрывает чужие тайны" }
+              "description": { "en": "Spies and counter-espionage agents get +1 point a turn each.", "ru": "Шпионы и контрразведчики получают по +1 очку за ход." },
+              "effects": [{ "type": "ESPIONAGE_TRAINING", "amount": 10 }]
             },
             {
               "code": "scout-lab",
               "name": { "en": "Scout Lab", "ru": "Лаборатория разведчика" },
-              "description": { "en": "Scout enhancement", "ru": "Разведчик узнаёт о системе больше" }
+              "description": { "en": "Ship module: the ship brings research points every turn — 1 on a frigate, 2 on a destroyer, up to 32 on a Leviathan. Every ship on its side aims 20 better at monsters.", "ru": "Модуль корабля: корабль приносит очки исследований каждый ход — 1 на фрегате, 2 на эсминце и до 32 на Левиафане. Вся его сторона на 20 метче против чудищ." }
             },
             {
               "code": "security-stations",
               "name": { "en": "Security Stations", "ru": "Посты охраны" },
-              "description": { "en": "Counter-intelligence", "ru": "Абордаж отбивать легче" }
+              "description": { "en": "Ship module: marines on board are 20% stronger against boarding parties.", "ru": "Модуль корабля: пехота на борту на 20 % сильнее против абордажа." }
             }
           ],
           "recommended": ["neural-scanner"]
@@ -829,7 +834,7 @@
             {
               "code": "holo-simulator",
               "name": { "en": "Holo Simulator", "ru": "Голосимулятор" },
-              "description": { "en": "Combat training", "ru": "Экипажи учатся быстрее" }
+              "description": { "en": "Colony morale +20%", "ru": "Мораль колонии +20 %" }
             }
           ],
           "recommended": ["supercomputer"]
@@ -847,12 +852,13 @@
             {
               "code": "rangemaster-targeting-unit",
               "name": { "en": "Longsight Targeting Unit", "ru": "Прицельный блок «Дальновид»" },
-              "description": { "en": "Targeting system", "ru": "Дальность оружия выше" }
+              "description": { "en": "Ship module: beams lose strength with distance as if the target were three times closer.", "ru": "Модуль корабля: лучи слабеют с расстоянием так, будто цель втрое ближе." }
             },
             {
               "code": "cyber-security-link",
               "name": { "en": "Cyber Security Link", "ru": "Кибербезопасная связь" },
-              "description": { "en": "Network security", "ru": "Чужим агентам работать труднее" }
+              "description": { "en": "Spies and counter-espionage agents get +1 point a turn each. Adds up with the Neural Scanner.", "ru": "Шпионы и контрразведчики получают по +1 очку за ход. Складывается с нейросканером." },
+              "effects": [{ "type": "ESPIONAGE_TRAINING", "amount": 10 }]
             }
           ],
           "recommended": ["emissions-guidance-system", "cyber-security-link"]
@@ -888,17 +894,17 @@
             {
               "code": "android-farmers",
               "name": { "en": "Android Farmers", "ru": "Андроиды-фермеры" },
-              "description": { "en": "Automated farming", "ru": "Еда без жителей" }
+              "description": { "en": "Colonies can build android farmers: each gives 3 food, eats 1 production instead of food and takes a colonist's place.", "ru": "Колонии могут строить андроидов-фермеров: каждый даёт 3 еды, ест 1 производства вместо еды и занимает место жителя." }
             },
             {
               "code": "android-workers",
               "name": { "en": "Android Workers", "ru": "Андроиды-рабочие" },
-              "description": { "en": "Automated production", "ru": "Производство без жителей" }
+              "description": { "en": "Colonies can build android workers: each gives 3 production, eats 1 production instead of food and takes a colonist's place.", "ru": "Колонии могут строить андроидов-рабочих: каждый даёт 3 производства, ест 1 производства вместо еды и занимает место жителя." }
             },
             {
               "code": "android-scientists",
               "name": { "en": "Android Scientists", "ru": "Андроиды-учёные" },
-              "description": { "en": "Automated research", "ru": "Наука без жителей" }
+              "description": { "en": "Colonies can build android scientists: each gives 3 research, eats 1 production instead of food and takes a colonist's place.", "ru": "Колонии могут строить андроидов-учёных: каждый даёт 3 очка исследований, ест 1 производства вместо еды и занимает место жителя." }
             }
           ],
           "recommended": ["android-scientists", "android-workers"]
@@ -911,7 +917,7 @@
             {
               "code": "virtual-reality-network",
               "name": { "en": "Virtual Reality Network", "ru": "Сеть виртуальной реальности" },
-              "description": { "en": "Entertainment network", "ru": "Настроение колоний выше" }
+              "description": { "en": "Morale of every colony in your empire +20%.", "ru": "Мораль всех колоний империи +20 %." }
             },
             {
               "code": "galactic-cybernet",
@@ -929,7 +935,7 @@
             {
               "code": "pleasure-dome",
               "name": { "en": "Elysium Dome", "ru": "Купол Элизия" },
-              "description": { "en": "Ultimate entertainment", "ru": "Настроение колоний наивысшее" }
+              "description": { "en": "Colony morale +30%", "ru": "Мораль колонии +30 %" }
             },
             {
               "code": "moleculartronic-computer",
@@ -939,7 +945,7 @@
             {
               "code": "achilles-targeting-unit",
               "name": { "en": "Weakpoint Targeting Unit", "ru": "Прицельный блок «Уязвимость»" },
-              "description": { "en": "Perfect targeting", "ru": "Оружие бьёт в уязвимые места" }
+              "description": { "en": "Ship module: beams that get through the shield ignore armor and hit the hull, and wreck systems three times as often. Heavy armor stops it.", "ru": "Модуль корабля: лучи, пробившие щит, идут мимо брони прямо в корпус и втрое чаще выбивают системы. Тяжёлая броня это останавливает." }
             }
           ],
           "recommended": ["achilles-targeting-unit"]
@@ -986,7 +992,7 @@
             {
               "code": "death-spores",
               "name": { "en": "Death Spores", "ru": "Споры смерти" },
-              "description": { "en": "Biological weapon", "ru": "Биологическое оружие против колоний" }
+              "description": { "en": "Opens Death Spores, a biological bomb: each has a 10% chance to kill a colonist of the bombed colony. Halved by Microbiotics, a quarter by Universal Antidote. Relations with the victim suffer badly.", "ru": "Открывает споры смерти — биологическую бомбу: каждая с шансом 10 % убивает жителя бомбимой колонии. Микробиотика жертвы вдвое ослабляет её, универсальный антидот — вчетверо. Отношения с жертвой страдают сильно." }
             }
           ],
           "recommended": ["cloning-center", "soil-enrichment"]
@@ -999,12 +1005,13 @@
             {
               "code": "telepathic-training",
               "name": { "en": "Telepathic Training", "ru": "Телепатическая подготовка" },
-              "description": { "en": "Psionic abilities", "ru": "Раса овладевает телепатией" }
+              "description": { "en": "Half the training of the Neural Scanner for spies and counter-espionage agents: +1 point a turn on its own, and it adds up with other training.", "ru": "Половина подготовки нейросканера шпионам и контрразведчикам: сама по себе +1 очко за ход, и складывается с другой подготовкой." },
+              "effects": [{ "type": "ESPIONAGE_TRAINING", "amount": 5 }]
             },
             {
               "code": "microbiotics",
               "name": { "en": "Microbiotics", "ru": "Микробиотика" },
-              "description": { "en": "Health improvement", "ru": "Население растёт быстрее и живёт дольше" }
+              "description": { "en": "Population growth in all colonies +25%. Does not add up with Universal Antidote; only the higher bonus counts.", "ru": "Прирост населения во всех колониях +25 %. Не складывается с универсальным антидотом, действует бо́льшая прибавка." }
             }
           ],
           "recommended": ["telepathic-training", "microbiotics"]
@@ -1017,7 +1024,7 @@
             {
               "code": "terraforming",
               "name": { "en": "Terraforming", "ru": "Терраформирование" },
-              "description": { "en": "Planet modification", "ru": "Климат планеты улучшается" }
+              "description": { "en": "Adds Terraforming to the colony build list: the climate improves one step (barren to desert or tundra, desert to arid, tundra to swamp, ocean, arid and swamp to terran) for 250, 500 and then 750 production.", "ru": "Открывает в стройке колонии терраформирование: климат на ступень лучше (бесплодная — в пустыню или тундру, пустыня — в засушливую, тундра — в болото, океан, засушливая и болото — в земную) за 250, 500 и затем 750 производства." }
             }
           ],
           "recommended": ["terraforming"]
@@ -1048,12 +1055,14 @@
             {
               "code": "psionics",
               "name": { "en": "Psionics", "ru": "Псионика" },
-              "description": { "en": "Psionic abilities", "ru": "Телепатические способности сильнее" }
+              "description": { "en": "Spies and counter-espionage agents get +1 point a turn each. Also morale +10% in all colonies under Feudalism, Dictatorship, Confederation or Imperium.", "ru": "Шпионы и контрразведчики получают по +1 очку за ход. Ещё мораль всех колоний +10 % при феодализме, диктатуре, конфедерации или империуме." },
+              "effects": [{ "type": "ESPIONAGE_TRAINING", "amount": 10 }]
             },
             {
               "code": "heightened-intelligence",
               "name": { "en": "Heightened Intelligence", "ru": "Повышенный разум" },
-              "description": { "en": "Intelligence boost", "ru": "Наука империи выше" }
+              "description": { "en": "Every scientist gives 1 more research point.", "ru": "Каждый учёный даёт на 1 очко исследований больше." },
+              "effects": [{ "type": "RESEARCH_PER_SCIENTIST", "amount": 1 }]
             }
           ],
           "recommended": ["psionics", "heightened-intelligence"]
@@ -1066,12 +1075,12 @@
             {
               "code": "bio-terminator",
               "name": { "en": "Bioplague", "ru": "Биочума" },
-              "description": { "en": "Biological weapon", "ru": "Сильнейшее биологическое оружие" }
+              "description": { "en": "Opens the Bio Terminator, a biological bomb: each has a 20% chance to kill a colonist of the bombed colony. Halved by Microbiotics, a quarter by Universal Antidote. Relations with the victim suffer badly.", "ru": "Открывает биотерминатор — биологическую бомбу: каждая с шансом 20 % убивает жителя бомбимой колонии. Микробиотика жертвы вдвое ослабляет её, универсальный антидот — вчетверо. Отношения с жертвой страдают сильно." }
             },
             {
               "code": "universal-antidote",
               "name": { "en": "Universal Antidote", "ru": "Универсальный антидот" },
-              "description": { "en": "Disease immunity", "ru": "Биологическое оружие не действует" }
+              "description": { "en": "Population growth in all colonies +50%. Replaces the +25% from Microbiotics; the two do not stack.", "ru": "Прирост населения во всех колониях +50 %. Заменяет +25 % от микробиотики, вместе они не складываются." }
             }
           ],
           "recommended": ["universal-antidote"]
@@ -1084,17 +1093,18 @@
             {
               "code": "biomorphic-fungi",
               "name": { "en": "Biomorphic Fungi", "ru": "Биоморфные грибы" },
-              "description": { "en": "Advanced farming", "ru": "Еда на любой планете" }
+              "description": { "en": "Farmers on toxic, radiated and barren planets grow 1 food each instead of none. Other climates are unaffected.", "ru": "Фермеры на токсичных, облучённых и бесплодных планетах дают по 1 еде вместо нуля. На прочих климатах ничего не меняет." },
+              "effects": [{ "type": "FOOD_ON_LIFELESS", "amount": 1 }]
             },
             {
               "code": "gaia-transformation",
               "name": { "en": "Gaia Transformation", "ru": "Превращение в Гею" },
-              "description": { "en": "Ultimate terraforming", "ru": "Наилучший климат планеты" }
+              "description": { "en": "Adds Gaia Transformation to the build list of terran colonies: 500 production turns the planet into a Gaia world.", "ru": "Открывает в стройке земных колоний превращение в Гею: за 500 производства планета становится Геей." }
             },
             {
               "code": "evolutionary-mutation",
               "name": { "en": "Evolutionary Mutation", "ru": "Эволюционная мутация" },
-              "description": { "en": "Species evolution", "ru": "Раса получает лишнюю сторону" }
+              "description": { "en": "The race mutates: you add strong racial traits worth 4 picks. A window opens to choose them; the government does not change.", "ru": "Раса мутирует: вы прибавляете к ней сильных сторон на 4 очка. Выбрать их откроется окно; строй мутация не меняет." }
             }
           ],
           "recommended": ["evolutionary-mutation"]
@@ -1119,12 +1129,12 @@
             {
               "code": "laser-rifle",
               "name": { "en": "Laser Rifle", "ru": "Лазерная винтовка" },
-              "description": { "en": "Basic ground weapon", "ru": "Простейшее оружие пехоты" }
+              "description": { "en": "Troops fight 5% stronger in ground combat, both when landing and when defending a colony. Only your best rifle counts.", "ru": "Войска на 5% сильнее в наземном бою, и при высадке, и при обороне колонии. Действует только лучшая из изученных винтовок." }
             },
             {
               "code": "space-scanner",
               "name": { "en": "Space Scanner", "ru": "Космический сканер" },
-              "description": { "en": "Detection system", "ru": "Видно чужое присутствие в системах" }
+              "description": { "en": "Reveals foreign colonies and fleets within 4 parsecs of your colonies and fleets (half that in a dark galaxy). Does not reveal planets.", "ru": "Видны чужие колонии и флоты в 4 парсеках от ваших колоний и флотов (в тёмной галактике вдвое ближе). Планеты систем не раскрывает." }
             }
           ],
           "recommended": [], "comment": "All technologies - general level"
@@ -1142,7 +1152,7 @@
             {
               "code": "fusion-rifle",
               "name": { "en": "Fusion Rifle", "ru": "Термоядерная винтовка" },
-              "description": { "en": "Advanced ground weapon", "ru": "Пехота вооружена лучше" }
+              "description": { "en": "Troops fight 10% stronger in ground combat, in attack and defence. Replaces the weaker rifle, does not add to it.", "ru": "Войска на 10% сильнее в наземном бою, при атаке и обороне. Заменяет более слабую винтовку, а не складывается с ней." }
             }
           ],
           "recommended": [], "comment": "Depends on strategy"
@@ -1155,12 +1165,12 @@
             {
               "code": "tachyon-communications",
               "name": { "en": "Tachyon Communications", "ru": "Тахионная связь" },
-              "description": { "en": "FTL communication", "ru": "Приказы доходят дальше" }
+              "description": { "en": "Every star base, battlestation and star fortress gives 1 more command point.", "ru": "Каждая звёздная база, боевая станция и звёздная крепость даёт на 1 командное очко больше." }
             },
             {
               "code": "tachyon-scanner",
               "name": { "en": "Tachyon Scanner", "ru": "Тахионный сканер" },
-              "description": { "en": "Advanced detection", "ru": "Сканер видит дальше" }
+              "description": { "en": "Scanner range rises to 6 parsecs from your colonies and fleets (half in a dark galaxy). The best scanner counts; they do not stack.", "ru": "Дальность сканеров растёт до 6 парсеков от ваших колоний и флотов (в тёмной галактике вдвое меньше). Работает лучший сканер, они не складываются." }
             },
             {
               "code": "battle-scanner",
@@ -1183,7 +1193,7 @@
             {
               "code": "neutron-scanner",
               "name": { "en": "Neutron Scanner", "ru": "Нейтронный сканер" },
-              "description": { "en": "Superior detection", "ru": "Сканер видит намного дальше" }
+              "description": { "en": "Scanner range rises to 8 parsecs from your colonies and fleets (half in a dark galaxy).", "ru": "Дальность сканеров растёт до 8 парсеков от ваших колоний и флотов (в тёмной галактике вдвое меньше)." }
             }
           ],
           "recommended": ["neutron-blaster", "neutron-scanner"]
@@ -1206,7 +1216,7 @@
             {
               "code": "gravity-generator",
               "name": { "en": "Gravity Generator", "ru": "Генератор гравитации" },
-              "description": { "en": "Artificial gravity", "ru": "Тяжесть планеты расе не помеха" }
+              "description": { "en": "Adds the Gravity Generator building (120 production, upkeep 2 gc): no production penalty from unusual gravity.", "ru": "Открывает здание «Гравитационный генератор» (120 производства, содержание 2 gc): тяжесть больше не снижает производство." }
             }
           ],
           "recommended": [], "comment": "Depends on strategy"
@@ -1219,12 +1229,12 @@
             {
               "code": "subspace-communications",
               "name": { "en": "Subspace Communications", "ru": "Подпространственная связь" },
-              "description": { "en": "Empire-wide comms", "ru": "Связь по всей империи" }
+              "description": { "en": "Every star base, battlestation and star fortress gives 2 more command points (instead of 1 from tachyon communications).", "ru": "Каждая звёздная база, боевая станция и звёздная крепость даёт на 2 командных очка больше (вместо 1 от тахионной связи)." }
             },
             {
               "code": "jump-gate",
               "name": { "en": "Jump Gate", "ru": "Прыжковые врата" },
-              "description": { "en": "FTL travel gate", "ru": "Флот идёт быстрее" }
+              "description": { "en": "Every colony gets a jump gate: fleets leaving a system with your colony fly 3 parsecs a turn faster.", "ru": "У каждой колонии появляются прыжковые врата: флот, уходящий из системы со своей колонией, летит на 3 парсека за ход быстрее." }
             }
           ],
           "recommended": ["subspace-communications"]
@@ -1242,12 +1252,12 @@
             {
               "code": "phasor-rifle",
               "name": { "en": "Resonator Rifle", "ru": "Резонаторная винтовка" },
-              "description": { "en": "Advanced ground weapon", "ru": "Пехота вооружена намного лучше" }
+              "description": { "en": "Troops fight 20% stronger in ground combat, in attack and defence. Replaces weaker rifles.", "ru": "Войска на 20% сильнее в наземном бою, при атаке и обороне. Заменяет более слабые винтовки." }
             },
             {
               "code": "multi-phased-shields",
               "name": { "en": "Multi-Phased Shields", "ru": "Многофазные щиты" },
-              "description": { "en": "Improved shields", "ru": "Щиты держат больше" }
+              "description": { "en": "Opens the Multi-Phased Shields ship module. The shield strength of the ship is half again as large.", "ru": "Открывает модуль корабля «многофазные щиты». Запас щита корабля становится в полтора раза больше." }
             }
           ],
           "recommended": [], "comment": "Depends on strategy"
@@ -1265,12 +1275,12 @@
             {
               "code": "plasma-rifle",
               "name": { "en": "Plasma Rifle", "ru": "Плазменная винтовка" },
-              "description": { "en": "Plasma ground weapon", "ru": "Сильнейшее оружие пехоты" }
+              "description": { "en": "Troops fight 30% stronger in ground combat, in attack and defence. The best infantry weapon in the game.", "ru": "Войска на 30% сильнее в наземном бою, при атаке и обороне. Лучшее оружие пехоты в игре." }
             },
             {
               "code": "plasma-web",
               "name": { "en": "Plasma Web", "ru": "Плазменная сеть" },
-              "description": { "en": "Area denial", "ru": "Оружие, опутывающее корабль" }
+              "description": { "en": "Opens the Plasma Web ship module. Fires with the volley at a target up to 15 squares away: 5–25 damage, and the web keeps burning it every round, 5 weaker each time.", "ru": "Открывает модуль корабля «плазменная сеть». Бьёт с залпом по цели в пределах 15 клеток: 5–25 урона, и сеть жжёт её каждый круг, слабея на 5." }
             }
           ],
           "recommended": [], "comment": "Depends on strategy"
@@ -1288,7 +1298,7 @@
             {
               "code": "dimensional-portal",
               "name": { "en": "Dimensional Portal", "ru": "Пространственный портал" },
-              "description": { "en": "A road to the worlds Beyond", "ru": "Дорога в миры из-за Предела" }
+              "description": { "en": "Has no effect in the game yet.", "ru": "Пока не действует в игре." }
             }
           ],
           "recommended": ["dimensional-portal", "disruptor-cannon"]
@@ -1301,7 +1311,7 @@
             {
               "code": "hyperspace-communications",
               "name": { "en": "Hyperspace Communications", "ru": "Гиперпространственная связь" },
-              "description": { "en": "Ultimate comms", "ru": "Флот меняет курс в пути" }
+              "description": { "en": "Lets you change the course of fleets already in flight. Without it, a fleet that has left cannot be redirected.", "ru": "Позволяет менять курс флотов, уже находящихся в пути. Без неё улетевший флот развернуть нельзя." }
             },
             {
               "code": "mauler-device",
@@ -1311,7 +1321,7 @@
             {
               "code": "sensors",
               "name": { "en": "Sensors", "ru": "Сенсоры" },
-              "description": { "en": "Perfect detection", "ru": "Совершенная разведка" }
+              "description": { "en": "Scanner range rises to 10 parsecs from your colonies and fleets (half in a dark galaxy) — the longest in the game.", "ru": "Дальность сканеров растёт до 10 парсеков от ваших колоний и флотов (в тёмной галактике вдвое меньше) — лучшая в игре." }
             }
           ],
           "recommended": [], "comment": "Depends on strategy"
@@ -1324,7 +1334,7 @@
             {
               "code": "time-warp-facilitator",
               "name": { "en": "Temporal Accelerator", "ru": "Ускоритель времени" },
-              "description": { "en": "Time manipulation", "ru": "Корабль ходит в бою дважды" }
+              "description": { "en": "Opens the Time Warp Facilitator ship module. The ship takes an extra turn at the end of every combat round: it moves and fires again.", "ru": "Открывает модуль корабля «ускоритель времени». Корабль получает лишний ход в конце каждого круга боя: снова ходит и стреляет." }
             },
             {
               "code": "stellar-converter",
@@ -1334,7 +1344,7 @@
             {
               "code": "star-gate",
               "name": { "en": "Void Gate", "ru": "Врата пустоты" },
-              "description": { "en": "Instant travel", "ru": "Флот переносится мгновенно" }
+              "description": { "en": "Every colony gets a star gate: a fleet flies between any two of your colonies in a single turn, however far apart.", "ru": "У каждой колонии появляются звёздные врата: между любыми двумя своими колониями флот летит один ход, как бы далеко они ни были." }
             }
           ],
           "recommended": ["time-warp-facilitator"]
@@ -1353,12 +1363,12 @@
             {
               "code": "class-i-shield",
               "name": { "en": "Class I Shield", "ru": "Щит I класса" },
-              "description": { "en": "Basic shields", "ru": "Простейший щит корабля" }
+              "description": { "en": "Opens the class I shield: takes 1 damage off every shot and absorbs 5 per hull size class before falling, recovering 30% each round.", "ru": "Открывает щит I класса: срезает 1 урона с каждого выстрела и поглощает 5 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 %." }
             },
             {
               "code": "mass-driver",
               "name": { "en": "Mass Driver", "ru": "Масс-драйвер" },
-              "description": { "en": "Kinetic weapon", "ru": "Кинетическое оружие" }
+              "description": { "en": "Opens the Mass Driver in the ship design window: a kinetic gun, 6 damage, 1 shot, 10 space, 4 gc. Unlike beams, it does not weaken with range.", "ru": "Открывает в окне дизайна масс-драйвер: кинетическая пушка, урон 6, один выстрел, 10 клеток, 4 gc. С расстоянием не слабеет, в отличие от лучей." }
             },
             {
               "code": "ecm-jammer",
@@ -1376,7 +1386,7 @@
             {
               "code": "anti-grav-harness",
               "name": { "en": "Anti-Grav Harness", "ru": "Антигравитационная сбруя" },
-              "description": { "en": "Anti-gravity", "ru": "Пехота передвигается быстрее" }
+              "description": { "en": "Ground troops +10% stronger in ground combat, on attack and defence. Adds up with powered armor and personal shields.", "ru": "Пехота на 10 % сильнее в наземном бою, и в атаке, и в обороне. Складывается с силовой бронёй и личным щитом." }
             },
             {
               "code": "inertial-stabilizer",
@@ -1386,7 +1396,7 @@
             {
               "code": "gyro-destabilizer",
               "name": { "en": "Spin Destabilizer", "ru": "Раскручиватель" },
-              "description": { "en": "Weapon disruption", "ru": "Оружие срывает корабль с курса" }
+              "description": { "en": "Opens the Gyro Destabilizer ship module. Fires with the volley at a target up to 15 squares away: 1–4 structural damage per hull class, past shields and armour.", "ru": "Открывает модуль корабля «гиродестабилизатор». Бьёт с залпом по цели в пределах 15 клеток: 1–4 урона корпусу на класс корпуса цели, мимо щита и брони." }
             }
           ],
           "recommended": ["inertial-stabilizer"]
@@ -1399,17 +1409,17 @@
             {
               "code": "class-iii-shield",
               "name": { "en": "Class III Shield", "ru": "Щит III класса" },
-              "description": { "en": "Improved shields", "ru": "Щит крепче" }
+              "description": { "en": "Opens the class III shield: takes 3 damage off every shot and absorbs 15 per hull size class before falling, recovering 30% each round.", "ru": "Открывает щит III класса: срезает 3 урона с каждого выстрела и поглощает 15 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 %." }
             },
             {
               "code": "radiation-shield",
               "name": { "en": "Radiation Shield", "ru": "Противорадиационный щит" },
-              "description": { "en": "Radiation protection", "ru": "Колония терпит радиацию" }
+              "description": { "en": "Opens the Planetary Radiation Shield building: the radiated world becomes barren, with room for more colonists.", "ru": "Открывает здание «планетарный радиационный щит»: облучённый мир становится бесплодным, и места для жителей на нём становится больше." }
             },
             {
               "code": "warp-dissipater",
               "name": { "en": "Warp Dissipater", "ru": "Рассеиватель искривления" },
-              "description": { "en": "Warp disruption", "ru": "Чужой флот не уйдёт из боя" }
+              "description": { "en": "Ship module: while the ship is intact, enemy ships cannot retreat from the battle.", "ru": "Модуль корабля: пока корабль цел, чужие корабли не могут уйти с поля боя." }
             }
           ],
           "recommended": ["class-iii-shield"]
@@ -1422,17 +1432,18 @@
             {
               "code": "stealth-field",
               "name": { "en": "Stealth Field", "ru": "Поле скрытности" },
-              "description": { "en": "Ship stealth", "ru": "Корабли не видны на карте" }
+              "description": { "en": "Ship module. A fleet whose every ship carries it is invisible on the galaxy map to other empires, except the omniscient.", "ru": "Модуль корабля. Флот, у которого оно стоит на каждом корабле, невидим на карте галактики для других империй, кроме всевидящих." }
             },
             {
               "code": "personal-shield",
               "name": { "en": "Personal Shield", "ru": "Личный щит" },
-              "description": { "en": "Ground unit shields", "ru": "Пехота под щитом" }
+              "description": { "en": "+10% to ground troop strength in both attack and defence; stacks with other troop gear such as Powered Armor.", "ru": "+10% к силе наземных войск и в нападении, и в обороне; складывается с другим снаряжением бойцов, например с силовым доспехом." }
             },
             {
               "code": "stealth-suit",
               "name": { "en": "Stealth Suit", "ru": "Костюм скрытности" },
-              "description": { "en": "Ground unit stealth", "ru": "Агенты работают незаметнее" }
+              "description": { "en": "Spies and counter-espionage agents get +1 point a turn each. Adds up with the Neural Scanner and other training.", "ru": "Шпионы и контрразведчики получают по +1 очку за ход. Складывается с нейросканером и другой подготовкой." },
+              "effects": [{ "type": "ESPIONAGE_TRAINING", "amount": 10 }]
             }
           ],
           "recommended": ["personal-shield", "stealth-suit"]
@@ -1445,17 +1456,17 @@
             {
               "code": "pulsar",
               "name": { "en": "Pulsar", "ru": "Пульсар" },
-              "description": { "en": "Area weapon", "ru": "Оружие бьёт по всем, кто рядом" }
+              "description": { "en": "Opens the Pulsar ship module. Fires with the volley: every enemy ship within 6 squares takes 1–24 damage per hull class through shields, and enemy volleys in flight there are destroyed.", "ru": "Открывает модуль корабля «пульсар». Бьёт с залпом: каждый чужой корабль в пределах 6 клеток получает 1–24 урона на класс корпуса через щит, а чужие залпы в полёте рядом сбиваются." }
             },
             {
               "code": "warp-interdictor",
               "name": { "en": "Warp Interdictor", "ru": "Запиратель искривления" },
-              "description": { "en": "Prevent warp", "ru": "Чужой флот не войдёт в систему" }
+              "description": { "en": "Opens the Warp Interdictor building: an enemy fleet flying into the system covers the last 3 parsecs at 1 parsec a turn, and star gates do not work there.", "ru": "Открывает здание «варп-перехватчик»: чужой флот, летящий в систему, последние 3 парсека идёт по одному парсеку за ход, и звёздные врата туда не ведут." }
             },
             {
               "code": "lightning-field",
               "name": { "en": "Lightning Field", "ru": "Поле молний" },
-              "description": { "en": "Defensive field", "ru": "Ракеты сбиваются сами" }
+              "description": { "en": "Opens the Lightning Field ship module. Each missile, torpedo or fighter strike reaching the ship has a 50% chance to be burnt before it hits.", "ru": "Открывает модуль корабля «поле молний». Каждая ракета, торпеда или удар истребителя, долетевшие до корабля, с шансом 50 % сгорают, не успев ударить." }
             }
           ],
           "recommended": ["lightning-field"]
@@ -1468,7 +1479,7 @@
             {
               "code": "class-v-shields",
               "name": { "en": "Class V Shields", "ru": "Щит V класса" },
-              "description": { "en": "Advanced shields", "ru": "Щит намного крепче" }
+              "description": { "en": "Opens the class V shield: takes 5 damage off every shot and absorbs 25 per hull size class before falling, recovering 30% each round.", "ru": "Открывает щит V класса: срезает 5 урона с каждого выстрела и поглощает 25 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 %." }
             },
             {
               "code": "multi-wave-ecm-jammer",
@@ -1491,17 +1502,17 @@
             {
               "code": "cloaking-device",
               "name": { "en": "Cloaking Device", "ru": "Устройство маскировки" },
-              "description": { "en": "Ship cloaking", "ru": "Корабль невидим до выстрела" }
+              "description": { "en": "Ship module. Invisible on the galaxy map like the stealth field; in battle +80 defence against beams and missiles miss twice as often while the ship does not fire. After firing it must hold fire for a round to cloak again.", "ru": "Модуль корабля. Невидим на карте, как со стелс-полем; в бою +80 к защите от лучей и вдвое больше промахов ракет, пока корабль не стреляет. Выстрелив, чтобы снова скрыться, ему нужно круг не стрелять." }
             },
             {
               "code": "stasis-field",
               "name": { "en": "Stasis Field", "ru": "Поле стазиса" },
-              "description": { "en": "Time stop field", "ru": "Чужой корабль замирает" }
+              "description": { "en": "Ship module. Fires with the volley at a target up to 3 squares away and freezes it until the end of the next round: it cannot move, fire or be attacked.", "ru": "Модуль корабля. Бьёт с залпом по цели в пределах 3 клеток и замораживает её до конца следующего круга: она не ходит, не стреляет, и атаковать её нельзя." }
             },
             {
               "code": "hard-shields",
               "name": { "en": "Hard Shields", "ru": "Твёрдые щиты" },
-              "description": { "en": "Superior shields", "ru": "Щит держит любой удар лучше" }
+              "description": { "en": "Opens the Hard Shields ship module. Every hit loses 3 more damage on top of the shield class; weapons that pierce shields no longer get through, and enemy transporters cannot board even when the shield is down.", "ru": "Открывает модуль корабля «прочные щиты». Каждый удар теряет ещё 3 урона сверх класса щита; щитопробивающее оружие больше не пробивает, а чужой телепорт не высаживает абордаж даже при опущенном щите." }
             }
           ],
           "recommended": ["stasis-field", "hard-shields"]
@@ -1514,7 +1525,7 @@
             {
               "code": "class-vii-shield",
               "name": { "en": "Class VII Shield", "ru": "Щит VII класса" },
-              "description": { "en": "Ultimate shields", "ru": "Почти лучший щит" }
+              "description": { "en": "Opens the class VII shield: takes 7 damage off every shot and absorbs 35 per hull size class before falling, recovering 30% each round.", "ru": "Открывает щит VII класса: срезает 7 урона с каждого выстрела и поглощает 35 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 %." }
             },
             {
               "code": "planetary-flux-shield",
@@ -1537,17 +1548,17 @@
             {
               "code": "displacement-device",
               "name": { "en": "Blink Field", "ru": "Поле смещения" },
-              "description": { "en": "Teleportation", "ru": "Часть выстрелов проходит мимо" }
+              "description": { "en": "Opens the Displacement Device ship module. Any shot aimed at this ship has a 30% chance to miss outright, whatever else is in play.", "ru": "Открывает модуль корабля «смещающее устройство». Любой выстрел по этому кораблю с шансом 30 % уходит мимо, что бы ещё ни было в бою." }
             },
             {
               "code": "subspace-teleporter",
               "name": { "en": "Subspace Teleporter", "ru": "Подпространственный телепортер" },
-              "description": { "en": "Subspace teleport", "ru": "Корабль прыгает по полю боя" }
+              "description": { "en": "Opens the Subspace Teleporter ship module: a jump of up to 20 squares on the battlefield on top of normal movement.", "ru": "Открывает модуль корабля «подпространственный телепорт»: прыжок до 20 клеток по полю боя сверх обычного хода." }
             },
             {
               "code": "inertial-nullifier",
               "name": { "en": "Inertial Nullifier", "ru": "Инерционный нейтрализатор" },
-              "description": { "en": "Nullify inertia", "ru": "Корабль уходит от огня почти всегда" }
+              "description": { "en": "Opens the Inertial Nullifier ship module. A warp field around the ship: +100 defence against beams and +50 missile evasion.", "ru": "Открывает модуль корабля «инерционный нейтрализатор». Варп-поле вокруг корабля: +100 к защите от лучей и +50 к уклонению от ракет." }
             }
           ],
           "recommended": ["inertial-nullifier", "subspace-teleporter"]
@@ -1560,7 +1571,7 @@
             {
               "code": "class-x-shield",
               "name": { "en": "Class X Shield", "ru": "Щит X класса" },
-              "description": { "en": "Perfect shields", "ru": "Лучший щит игры" }
+              "description": { "en": "Opens the class X shield: takes 10 damage off every shot and absorbs 50 per hull size class before falling, recovering 30% each round.", "ru": "Открывает щит X класса: срезает 10 урона с каждого выстрела и поглощает 50 на класс корпуса, прежде чем упасть; за круг восстанавливает 30 %." }
             },
             {
               "code": "planetary-barrier-shield",
@@ -1570,7 +1581,7 @@
             {
               "code": "phasing-cloak",
               "name": { "en": "Phasing Cloak", "ru": "Фазовая маскировка" },
-              "description": { "en": "Perfect cloaking", "ru": "Совершенная невидимость" }
+              "description": { "en": "Ship module. Like the cloaking device, and for the first 10 rounds of battle the ship cannot be attacked at all while it does not fire.", "ru": "Модуль корабля. Как маскировочное устройство, а первые 10 кругов боя корабль вовсе нельзя атаковать, пока он не стреляет." }
             }
           ],
           "recommended": ["phasing-cloak"]

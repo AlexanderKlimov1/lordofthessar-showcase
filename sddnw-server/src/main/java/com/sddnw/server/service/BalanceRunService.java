@@ -220,6 +220,46 @@ public class BalanceRunService {
         return repository.findAllByOrderByCreatedAtDesc().stream().map(this::toDto).toList();
     }
 
+    /** С какого числа партий прогон показывается приговорами на открытой странице — пункт 70. */
+    public static final int OPEN_MIN_GAMES = 40;
+
+    /**
+     * Баланс рас в открытую — field-backlog, пункты 70 и 101: итоги законченных прогонов без управления.
+     * Счёт партий и ходов — по ВСЕМ законченным прогонам (так растёт число, которое нельзя округлить
+     * красивым), а приговоры — последнего прогона не меньше {@link #OPEN_MIN_GAMES} партий: крошечные
+     * прогоны сквозной проверки шумят и вывода не дают.
+     */
+    @Transactional(value = "historyTransactionManager", readOnly = true)
+    public com.sddnw.server.dto.OpenBalanceDto openSummary() {
+        List<BalanceRunEntity> finished = repository.findAllByStatus(FINISHED).stream()
+                .sorted(java.util.Comparator.comparing(BalanceRunEntity::getFinishedAt,
+                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())).reversed())
+                .toList();
+        int games = finished.stream().mapToInt(BalanceRunEntity::getPlayed).sum();
+        long turns = finished.stream().mapToLong(run -> (long) run.getPlayed() * run.getTurns()).sum();
+        List<BalanceRunEntity> measures = finished.stream()
+                .filter(run -> MEASURE.equals(run.getKind()) && run.getPlayed() >= OPEN_MIN_GAMES)
+                .toList();
+        BalanceRunEntity oracle = finished.stream()
+                .filter(run -> ORACLE.equals(run.getKind()) && run.getPlayed() >= OPEN_MIN_GAMES)
+                .findFirst().orElse(null);
+        BalanceRunDto last = measures.isEmpty() ? null : toDto(measures.get(0));
+        BalanceRunDto previous = measures.size() < 2 ? null : toDto(measures.get(1));
+        List<com.sddnw.server.dto.OpenBalanceDto.PriceChangeDto> changes = new ArrayList<>();
+        if (last != null && previous != null && last.traitCosts() != null && previous.traitCosts() != null) {
+            for (Map.Entry<String, Integer> price : new java.util.TreeMap<>(last.traitCosts()).entrySet()) {
+                Integer before = previous.traitCosts().get(price.getKey());
+                if (!price.getValue().equals(before)) {
+                    changes.add(new com.sddnw.server.dto.OpenBalanceDto.PriceChangeDto(price.getKey(), before, price.getValue()));
+                }
+            }
+        }
+        return new com.sddnw.server.dto.OpenBalanceDto(finished.size(), games, turns,
+                finished.isEmpty() ? null : finished.get(0).getFinishedAt(), OPEN_MIN_GAMES,
+                last, oracle == null ? null : toDto(oracle),
+                previous == null ? null : previous.finishedAt(), changes);
+    }
+
     public BalanceRunDto run(UUID runId) {
         return toDto(repository.findById(runId)
                 .orElseThrow(() -> new NotFoundException("balance.runNotFound", runId)));
@@ -470,7 +510,7 @@ public class BalanceRunService {
             case "SYNERGY" -> messages.label(BalanceVerdictRules.Pairing.SYNERGY);
             case "ANTI" -> messages.label(BalanceVerdictRules.Pairing.ANTI);
             case "PLAIN" -> messages.label(BalanceVerdictRules.Pairing.PLAIN);
-            default -> "носителей не набралось";
+            default -> messages.get("balance.pairing.noCarriers");
         };
         return new BalanceCombinationDto(entity.getId(), traits,
                 traits.stream().map(this::name).toList(),
@@ -608,6 +648,8 @@ public class BalanceRunService {
      */
     private void play(UUID runId) {
         List<BalanceVerdictRules.Empire> measured = new ArrayList<>();
+        // Когда решена каждая партия (пункт 155) — из разных потоков, поэтому список общий.
+        List<DecidedRules.Decided> decided = java.util.Collections.synchronizedList(new ArrayList<>());
         try {
             BalanceRunEntity run = repository.findById(runId).orElseThrow();
             List<Slot> slots = read(run.getRaceDesigns(), new TypeReference<>() { });
@@ -643,7 +685,7 @@ public class BalanceRunService {
                         load.take();
                         List<BalanceVerdictRules.Empire> one;
                         try {
-                            one = playOne(run, designs, run.getSeed() + game);
+                            one = playOne(run, designs, run.getSeed() + game, decided::add);
                         } finally {
                             load.release();
                         }
@@ -667,6 +709,10 @@ public class BalanceRunService {
 
             BalanceVerdictRules.Assessment assessment =
                     verdictRules.assess(measured, prices, combination);
+            synchronized (decided) {
+                progress.decided(runId, DecidedRules.median(decided.stream().map(DecidedRules.Decided::percent).toList()),
+                        DecidedRules.median(decided.stream().map(DecidedRules.Decided::tail).toList()));
+            }
             progress.finished(runId, assessment, measured);
             remember(runId, combination, assessment);
             log.info("Балансовый прогон {} закончен: {} замеров, оценено сторон {}",
@@ -740,8 +786,9 @@ public class BalanceRunService {
     /** Одна партия прогона: условия берутся из его записи. */
     private List<BalanceVerdictRules.Empire> playOne(BalanceRunEntity run,
                                                      List<BalanceGameRunner.Design> designs,
-                                                     long seed) {
-        return games.play(run.getGalaxySize(), run.getEmpires(), run.getTurns(), designs, seed);
+                                                     long seed,
+                                                     java.util.function.Consumer<DecidedRules.Decided> decided) {
+        return games.play(run.getGalaxySize(), run.getEmpires(), run.getTurns(), designs, seed, decided);
     }
 
     private GalaxySize galaxySize(BalanceRunRequest request) {
@@ -814,7 +861,9 @@ public class BalanceRunService {
                 run.getKind(),
                 run.getPopulation(),
                 ladder(run),
-                run.getFailure());
+                run.getFailure(),
+                run.getDecidedPercent(),
+                run.getTailTurns());
     }
 
     /** Ладдер оракула для пульта: коды сторон разворачиваются в названия. */
@@ -873,8 +922,8 @@ public class BalanceRunService {
         if (slot.raceCode() == null) {
             return new BalanceRunDto.RaceSlotDto(slot.slot(),
                     slot.budget() == null
-                            ? "Случайная сборка, бюджет свой на каждую партию"
-                            : "Случайная сборка на " + slot.budget(),
+                            ? messages.get("balance.slot.randomEachGame")
+                            : messages.get("balance.slot.randomBudget", slot.budget()),
                     List.of(), slot.budget());
         }
         List<String> traits = raceTraits.raceTraits(slot.raceCode());

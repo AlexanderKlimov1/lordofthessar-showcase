@@ -58,6 +58,19 @@ public record ShipHull(
         Boolean monster
 ) {
 
+    /**
+     * Тот же корпус с местом, поднятым на процент, — мегафлюксеры (п. 8): «increases available
+     * space on all ships by +25%». Место в бою не участвует, поэтому корпус увеличивается только
+     * там, где проект собирают: окно дизайна, проверка проекта, проекты игры.
+     */
+    public ShipHull withSpacePercent(Integer percent) {
+        if (percent == null || percent == 0) {
+            return this;
+        }
+        return new ShipHull(code, names, descriptions, space * (100 + percent) / 100, cost, structure,
+                command, hitChancePercent, systemFactor, requiredTechCode, sortOrder, platform, unarmed, monster);
+    }
+
     /** Название на языке читателя — п. 3.5. */
     public String name() {
         return names.text();

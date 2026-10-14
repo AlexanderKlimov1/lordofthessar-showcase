@@ -212,8 +212,8 @@ class ShipDesignRulesTest {
     @Test
     @DisplayName("Игроку названо, чего именно не хватает")
     void requirementNamesMissingLevels() {
-        assertTrue(rules.missingShipbuildingTechnologies(Set.of()).contains("Nuclear Fission (Power)"));
-        assertTrue(rules.missingShipbuildingTechnologies(Set.of()).contains("Chemistry (Chemistry)"));
+        assertTrue(rules.missingShipbuildingTechnologies(Set.of()).contains(ShipDesignRules.DRIVE_TECH));
+        assertTrue(rules.missingShipbuildingTechnologies(Set.of()).contains(ShipDesignRules.FUEL_TECH));
         assertFalse(rules.missingShipbuildingTechnologies(Set.of(ShipDesignRules.DRIVE_TECH))
                 .contains("Nuclear Fission (Power)"), "изученное в требованиях не повторяется");
         assertTrue(rules.missingShipbuildingTechnologies(

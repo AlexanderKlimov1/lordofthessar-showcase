@@ -3,6 +3,10 @@ package com.sddnw.server.web.error;
 import com.sddnw.server.dto.ApiErrorDto;
 import com.sddnw.server.service.MailService;
 import com.sddnw.server.service.Messages;
+import com.sddnw.server.service.RefusalCountService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,28 +46,56 @@ public class GlobalExceptionHandler {
 
     private final Messages messages;
 
+    /**
+     * Счётчик частых отказов — field-backlog, пункт 77. Пусто — в юнит-тестах, где обработчик
+     * собирают без контекста и считать отказы некуда.
+     */
+    private final RefusalCountService refusals;
+
     public GlobalExceptionHandler(Messages messages) {
+        this(messages, null);
+    }
+
+    @Autowired
+    public GlobalExceptionHandler(Messages messages, RefusalCountService refusals) {
+        this.refusals = refusals;
         this.messages = messages;
+    }
+
+    /**
+     * Отказ — в счёт частых (пункт 76–77): ключ и то, кто спросил, — браузер или скрипт проекта.
+     * Запроса нет (обработчик позвали вне него) — считать нечего.
+     */
+    private void counted(ApiException exception) {
+        if (refusals == null
+                || !(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
+            return;
+        }
+        refusals.count(exception.key(), attributes.getRequest().getHeader(HttpHeaders.USER_AGENT));
     }
 
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ApiErrorDto> handleNotFound(NotFoundException exception) {
+        counted(exception);
         return build(HttpStatus.NOT_FOUND, messages.get(exception), List.of());
     }
 
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiErrorDto> handleConflict(ConflictException exception) {
+        counted(exception);
         return build(HttpStatus.CONFLICT, messages.get(exception), List.of());
     }
 
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<ApiErrorDto> handleForbidden(ForbiddenException exception) {
+        counted(exception);
         return build(HttpStatus.FORBIDDEN, messages.get(exception), List.of());
     }
 
     /** Заявка неверна по сути, а не по форме: 400 — чинить запрос, а не сервер. */
     @ExceptionHandler(BadRequestException.class)
     public ResponseEntity<ApiErrorDto> handleBadRequest(BadRequestException exception) {
+        counted(exception);
         return build(HttpStatus.BAD_REQUEST, messages.get(exception), List.of());
     }
 
@@ -78,6 +110,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiErrorDto> handleTooManyAttempts(TooManyAttemptsException exception) {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.RETRY_AFTER, String.valueOf(Math.max(1, exception.retryAfter().toSeconds())));
+        counted(exception);
         return build(HttpStatus.TOO_MANY_REQUESTS, headers, messages.get(exception), List.of());
     }
 

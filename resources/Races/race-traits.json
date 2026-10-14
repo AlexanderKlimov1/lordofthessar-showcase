@@ -3,19 +3,20 @@
   "version": "3.0",
   "description": "Custom race traits and the thirteen ready races of MOO II: what a race is made of",
   "notes": {
-    "source": "The table of picks is MOO II's own, checked against StrategyWiki, page 'Master_of_Orion_II:_Battle_at_Antares/Race_design_options': 53 picks in 18 groups, the same thirteen ready races, the same effects. The prices of the POSITIVE picks are this game's own — see \"picks\" below.",
-    "picks": "30 picks to spend and at most 22 to win back from negative traits (21.09.2026, cycle 8). The budget was raised from 20 because five traits measured AT or ABOVE the whole budget once the race capacity bonus was repaired: Subterranean 29, Unification 26, Telepathic 23, Tolerant and Lithovore 20 each. A trait worth more than a full race cannot be priced at all, and the mirror held on the negative side: Slow Growth cost 23.6 against a ceiling of 15. The prices written for those five are a FIRST STEP towards the measured value, not the value itself: raising the budget moves the points-to-strength rate as well, so the honest prices must be measured again next cycle. MOO II had 10 and 10: its budget was 10, and Silicoids — the deepest sellers in the game — took exactly 10 picks' worth of negatives. Widening the budget to 15 while leaving the negative side at 10 makes selling your weaknesses worth less than in the original, and that is the intent.",
-    "prices": "Because the budget grew by half and the negative side did not, the positive prices had to be recomputed. They are set so that every one of the thirteen ready races still costs EXACTLY the budget with nothing left over — the same test MOO II's own table passes at 10. That was the starting point: within it the prices began as close to 1.5x the original as integers allow. They no longer are, and deliberately so — from 14.09.2026 prices move by MEASUREMENT (stage 2 of balance-metrics-works.txt: the balance panel plays hundreds of games and weighs every pick by the share of production it buys). What survives untouched is the rule that generates the prices: the EFFECT of a pick is MOO II's and never changes, only its price does, and every one of the thirteen ready races still costs EXACTLY the budget. Every move is written down in the price journal of balance-metrics-works.txt together with the measurement it rests on. Where they do not, the reason is always the same: a race that sells 10 picks' worth of weaknesses can no longer afford 1.5x prices, so the picks such races lean on (Growth +100%, Subterranean, Telepathic, +2 Science, Lithovore, Tolerant, Rich Home World, Farming +1, Trade Goods) are a point or two below the straight 1.5x line.",
+    "source": "The table of picks is MOO II's own, checked against StrategyWiki, page 'Master_of_Orion_II:_Battle_at_Antares/Race_design_options': 53 picks in 18 groups, the same thirteen ready races, the same effects, and since 07.10.2026 the same prices and budget as MOO II 1.50.",
+    "picks": "10 picks to spend and at most 10 to win back from negative traits — MOO II 1.50 (07.10.2026, решение хозяина проекта: number_of_race_picks of the 1.50 patch, 10 / -10). The budget had grown to 30 and 22 over the balance cycles of September 2026; with the original prices back, the original budget comes back with them.",
+    "prices": "Every price is MOO II 1.50's own (07.10.2026, решение хозяина проекта): race_pick defaults of the 1.50 patch, C:\\MOO2\\MOO2-1.50.26\\patch\\150\\docs\\config.json — the same as the unmodded game. The measured prices of the balance cycles (journal, balance-metrics-works.txt) are replaced; the instrument stays and can measure these prices anew. Pair surcharges (pairs-balance.json) stay off: MOO II has none.",
     "groups": "A group with \"multiple\": true lets several of its options stand together — that is how MOO II's special abilities work. Without the flag the group is a radio button: one option at most.",
     "excludes": "Codes that cannot stand with this option. MOO II: Lithovore rules out every farming trait, Rich rules out Poor home world. Options of one radio group need no excludes — the group already allows only one.",
     "effect_types": "See RaceEffectType. FOOD_*, PRODUCTION_*, RESEARCH_*, INCOME_PERCENT and GROWTH_PERCENT act on colonies exactly like buildings. The rest belong to their own subsystems: ground combat, espionage, ships, flight, exploration, research. A few are extension points and nothing reads them yet — they are marked as such in the enum.",
     "reconstruction": "Two things had to be reconstructed. MOO II measures spying in percent, this game counts espionage points per turn, so ±10% became ±1 point and ±20% became ±2. And MOO II's '-1/2 Food' cannot be an integer here, so it is written as -25% of a farmer's output: 2 units become 1.5 exactly as in the original.",
     "government_upgrades": "The four advanced governments of MOO II (Confederation, Imperium, Federation, Galactic Unification). They are not picks and cannot be bought in the race constructor: each arrives with its own technology of the Advanced Government level and replaces the government the race started with. That is why they live outside \"groups\" — the constructor table stays exactly the 53 picks of the original.",
     "manual_vs_game": "Where the printed manual and the shipped game disagreed about MOO II's own prices, the game won: the manual prices Creative at 6 and Spying +10 at 2, the game at 8 and 3 (moo2mod.com, race_pick defaults of the unmodded game). The ready races proved the game right — Psilons are Dictatorship, Creative, +2 Science, Large Home World and Low-G, and that adds up to 10 only with Creative at 8. Those original prices are what the recomputation above starts from.",
-    "races": "Тринадцать готовых рас MOO II: состав, название, описание, климат родного мира и цвет на карте. Всё это лежало ВТОРОЙ копией в таблице `race`, наполняемой Liquibase, а климат — ТРЕТЬЕЙ, прямо в коде (PlayerRoster.homeClimatesByRace). Справочник, разложенный по трём местам, разъезжается молча; к тому же из базы его не поднять на пустой схеме, а балансовому прогону в памяти взяться ему неоткуда. Порядок рас в этом списке и есть порядок на экране выбора."
+    "races": "Тринадцать готовых рас MOO II: состав, название, описание, климат родного мира и цвет на карте. Всё это лежало ВТОРОЙ копией в таблице `race`, наполняемой Liquibase, а климат — ТРЕТЬЕЙ, прямо в коде (PlayerRoster.homeClimatesByRace). Справочник, разложенный по трём местам, разъезжается молча; к тому же из базы его не поднять на пустой схеме, а балансовому прогону в памяти взяться ему неоткуда. Порядок рас в этом списке и есть порядок на экране выбора.",
+    "races_moo2": "Составы тринадцати готовых рас — MOO II 1.50 дословно (08.10.2026, решение хозяина проекта): stock_race по умолчанию патча 1.50 (config.json). Каждая стоит ровно 10 очков по ценам 1.50 — как в оригинале."
   },
-  "picks": 30,
-  "anti_picks": 22,
+  "picks": 10,
+  "anti_picks": 10,
   "groups": [
     {
       "code": "government",
@@ -35,11 +36,23 @@
             "ru": "Феодализм"
           },
           "description": {
-            "en": "Ships are built a third cheaper, but a scientist works twice as badly.",
-            "ru": "Корабли строятся на треть дешевле, но учёный работает вдвое хуже."
+            "en": "Ships are built a third cheaper, but a scientist works twice as badly, and a colony without Marine Barracks loses a fifth of its morale.",
+            "ru": "Корабли строятся на треть дешевле, но учёный работает вдвое хуже, а колония без казарм морской пехоты теряет пятую часть морали."
           },
-          "picks": -1,
+          "picks": -4,
           "effects": [
+            {
+              "type": "CAPITOL_LOSS_MORALE",
+              "amount": -50
+            },
+            {
+              "type": "MORALE_WITHOUT_BARRACKS",
+              "amount": -20
+            },
+            {
+              "type": "PSIONICS_MORALE",
+              "amount": 10
+            },
             {
               "type": "RESEARCH_PERCENT",
               "amount": -50
@@ -61,11 +74,23 @@
             "ru": "Диктатура"
           },
           "description": {
-            "en": "An ordinary empire: it adds nothing and takes nothing away, only the counter-espionage is a little stronger.",
-            "ru": "Обычная империя: ничего не прибавляет и ничего не отнимает, только контрразведка чуть крепче."
+            "en": "An ordinary empire: counter-espionage is a little stronger, but a colony without Marine Barracks loses a fifth of its morale.",
+            "ru": "Обычная империя: контрразведка чуть крепче, но колония без казарм морской пехоты теряет пятую часть морали."
           },
           "picks": 0,
           "effects": [
+            {
+              "type": "CAPITOL_LOSS_MORALE",
+              "amount": -35
+            },
+            {
+              "type": "MORALE_WITHOUT_BARRACKS",
+              "amount": -20
+            },
+            {
+              "type": "PSIONICS_MORALE",
+              "amount": 10
+            },
             {
               "type": "ESPIONAGE_DEFENSE_POINTS",
               "amount": 1
@@ -84,6 +109,10 @@
           },
           "picks": 7,
           "effects": [
+            {
+              "type": "CAPITOL_LOSS_MORALE",
+              "amount": -20
+            },
             {
               "type": "RESEARCH_PERCENT",
               "amount": 50
@@ -109,11 +138,15 @@
             "ru": "Объединение"
           },
           "description": {
-            "en": "A single organism: a worker and a farmer work half again as well, the counter-espionage is stronger.",
-            "ru": "Единый организм: рабочий и фермер работают в полтора раза лучше, контрразведка крепче."
+            "en": "A single organism: a worker and a farmer work half again as well, the counter-espionage is stronger, and morale means nothing to it — neither for good nor for ill.",
+            "ru": "Единый организм: рабочий и фермер работают в полтора раза лучше, контрразведка крепче, а мораль ему безразлична — ни к добру, ни к худу."
           },
-          "picks": 19,
+          "picks": 6,
           "effects": [
+            {
+              "type": "NO_MORALE",
+              "amount": 1
+            },
             {
               "type": "PRODUCTION_PERCENT",
               "amount": 50
@@ -155,7 +188,7 @@
             "en": "Population growth is half the usual.",
             "ru": "Прирост населения вдвое ниже обычного."
           },
-          "picks": -16,
+          "picks": -4,
           "effects": [
             {
               "type": "GROWTH_PERCENT",
@@ -173,7 +206,7 @@
             "en": "Population growth is half again as high.",
             "ru": "Прирост населения выше на половину."
           },
-          "picks": 9,
+          "picks": 3,
           "effects": [
             {
               "type": "GROWTH_PERCENT",
@@ -191,7 +224,7 @@
             "en": "Population growth is twice the usual.",
             "ru": "Прирост населения вдвое выше обычного."
           },
-          "picks": 11,
+          "picks": 6,
           "effects": [
             {
               "type": "GROWTH_PERCENT",
@@ -222,7 +255,7 @@
             "en": "A farmer gives a quarter less food: two units turn into one and a half.",
             "ru": "Фермер даёт на четверть меньше еды: две единицы обращаются в полторы."
           },
-          "picks": -11,
+          "picks": -3,
           "effects": [
             {
               "type": "FOOD_PERCENT",
@@ -240,7 +273,7 @@
             "en": "Every farmer gives one more food.",
             "ru": "Каждый фермер даёт на единицу еды больше."
           },
-          "picks": 7,
+          "picks": 4,
           "effects": [
             {
               "type": "FOOD_PER_FARMER",
@@ -258,7 +291,7 @@
             "en": "Every farmer gives two more food.",
             "ru": "Каждый фермер даёт на две единицы еды больше."
           },
-          "picks": 11,
+          "picks": 7,
           "effects": [
             {
               "type": "FOOD_PER_FARMER",
@@ -289,7 +322,7 @@
             "en": "Every worker gives one production less.",
             "ru": "Каждый рабочий даёт на единицу производства меньше."
           },
-          "picks": -5,
+          "picks": -3,
           "effects": [
             {
               "type": "PRODUCTION_PER_WORKER",
@@ -307,7 +340,7 @@
             "en": "Every worker gives one production more.",
             "ru": "Каждый рабочий даёт на единицу производства больше."
           },
-          "picks": 6,
+          "picks": 3,
           "effects": [
             {
               "type": "PRODUCTION_PER_WORKER",
@@ -325,7 +358,7 @@
             "en": "Every worker gives two production more.",
             "ru": "Каждый рабочий даёт на две единицы производства больше."
           },
-          "picks": 9,
+          "picks": 6,
           "effects": [
             {
               "type": "PRODUCTION_PER_WORKER",
@@ -356,7 +389,7 @@
             "en": "Every scientist gives one research point less.",
             "ru": "Каждый учёный даёт на очко исследований меньше."
           },
-          "picks": -1,
+          "picks": -3,
           "effects": [
             {
               "type": "RESEARCH_PER_SCIENTIST",
@@ -374,7 +407,7 @@
             "en": "Every scientist gives one research point more.",
             "ru": "Каждый учёный даёт на очко исследований больше."
           },
-          "picks": 2,
+          "picks": 3,
           "effects": [
             {
               "type": "RESEARCH_PER_SCIENTIST",
@@ -392,7 +425,7 @@
             "en": "Every scientist gives two research points more.",
             "ru": "Каждый учёный даёт на два очка исследований больше."
           },
-          "picks": 4,
+          "picks": 6,
           "effects": [
             {
               "type": "RESEARCH_PER_SCIENTIST",
@@ -423,7 +456,7 @@
             "en": "The tax from colonists is half the usual.",
             "ru": "Налог с жителей вдвое ниже обычного."
           },
-          "picks": -6,
+          "picks": -4,
           "effects": [
             {
               "type": "INCOME_PERCENT",
@@ -441,7 +474,7 @@
             "en": "The tax from colonists is half again as high.",
             "ru": "Налог с жителей выше на половину."
           },
-          "picks": 6,
+          "picks": 5,
           "effects": [
             {
               "type": "INCOME_PERCENT",
@@ -459,7 +492,7 @@
             "en": "The tax from colonists is twice the usual.",
             "ru": "Налог с жителей вдвое выше обычного."
           },
-          "picks": 9,
+          "picks": 8,
           "effects": [
             {
               "type": "INCOME_PERCENT",
@@ -490,7 +523,7 @@
             "en": "Ship defence is 20% lower.",
             "ru": "Защита кораблей ниже на 20%."
           },
-          "picks": -1,
+          "picks": -2,
           "effects": [
             {
               "type": "SHIP_DEFENSE_PERCENT",
@@ -508,7 +541,7 @@
             "en": "Ship defence is 25% higher.",
             "ru": "Защита кораблей выше на 25%."
           },
-          "picks": 2,
+          "picks": 3,
           "effects": [
             {
               "type": "SHIP_DEFENSE_PERCENT",
@@ -526,7 +559,7 @@
             "en": "Ship defence is 50% higher.",
             "ru": "Защита кораблей выше на 50%."
           },
-          "picks": 3,
+          "picks": 7,
           "effects": [
             {
               "type": "SHIP_DEFENSE_PERCENT",
@@ -557,7 +590,7 @@
             "en": "Ship attack is 20% lower.",
             "ru": "Атака кораблей ниже на 20%."
           },
-          "picks": -1,
+          "picks": -2,
           "effects": [
             {
               "type": "SHIP_ATTACK_PERCENT",
@@ -575,7 +608,7 @@
             "en": "Ship attack is 20% higher.",
             "ru": "Атака кораблей выше на 20%."
           },
-          "picks": 1,
+          "picks": 2,
           "effects": [
             {
               "type": "SHIP_ATTACK_PERCENT",
@@ -593,7 +626,7 @@
             "en": "Ship attack is 50% higher.",
             "ru": "Атака кораблей выше на 50%."
           },
-          "picks": 2,
+          "picks": 4,
           "effects": [
             {
               "type": "SHIP_ATTACK_PERCENT",
@@ -624,7 +657,7 @@
             "en": "Ground combat strength is 10% lower.",
             "ru": "Сила наземного боя ниже на 10%."
           },
-          "picks": -1,
+          "picks": -2,
           "effects": [
             {
               "type": "GROUND_COMBAT_PERCENT",
@@ -642,7 +675,7 @@
             "en": "Ground combat strength is 10% higher.",
             "ru": "Сила наземного боя выше на 10%."
           },
-          "picks": 1,
+          "picks": 2,
           "effects": [
             {
               "type": "GROUND_COMBAT_PERCENT",
@@ -660,7 +693,7 @@
             "en": "Ground combat strength is 20% higher: both in taking an enemy colony and in holding your own.",
             "ru": "Сила наземного боя выше на 20%: и при захвате чужой колонии, и при обороне своей."
           },
-          "picks": 2,
+          "picks": 4,
           "effects": [
             {
               "type": "GROUND_COMBAT_PERCENT",
@@ -691,7 +724,7 @@
             "en": "The empire gathers one espionage point less a turn.",
             "ru": "Империя набирает на очко шпионажа меньше за ход."
           },
-          "picks": 0,
+          "picks": -3,
           "effects": [
             {
               "type": "ESPIONAGE_POINTS",
@@ -709,7 +742,7 @@
             "en": "The empire gathers one extra espionage point a turn.",
             "ru": "Империя набирает лишнее очко шпионажа за ход."
           },
-          "picks": 2,
+          "picks": 3,
           "effects": [
             {
               "type": "ESPIONAGE_POINTS",
@@ -727,7 +760,7 @@
             "en": "The empire gathers two extra espionage points a turn.",
             "ru": "Империя набирает два лишних очка шпионажа за ход."
           },
-          "picks": 3,
+          "picks": 6,
           "effects": [
             {
               "type": "ESPIONAGE_POINTS",
@@ -780,7 +813,7 @@
             "en": "The race grew up in high gravity: heavy worlds cost it nothing, and its soldiers take one more blow.",
             "ru": "Раса выросла в большой тяжести: тяжёлые миры ей нипочём, а солдат держит лишний удар."
           },
-          "picks": 2,
+          "picks": 6,
           "effects": [
             {
               "type": "GRAVITY_HIGH",
@@ -801,8 +834,8 @@
         "ru": "Вместимость миров"
       },
       "description": {
-        "en": "How many colonists a planet holds. Both sides are taken together too — as they are in MOO II, when both room and food are needed.",
-        "ru": "Сколько жителей помещается на планете. Обе стороны берутся и вместе — так делают в MOO II, когда нужно и много места, и еда."
+        "en": "How many colonists a planet holds. Both sides can be taken together too — when both room and food are needed.",
+        "ru": "Сколько жителей помещается на планете. Обе стороны можно взять и вместе — когда нужно и много места, и еда."
       },
       "multiple": true,
       "options": [
@@ -816,7 +849,7 @@
             "en": "Wet worlds are home to the race: tundra, swamp and ocean hold far more colonists and feed them better.",
             "ru": "Мокрые миры для расы — дом: тундра, болото и океан вмещают куда больше жителей и лучше кормят."
           },
-          "picks": 12,
+          "picks": 5,
           "effects": [
             {
               "type": "AQUATIC",
@@ -834,7 +867,7 @@
             "en": "The race lives below the surface: the planet's capacity grows with its size — from two colonists on a tiny world to ten on a huge one.",
             "ru": "Раса живёт под поверхностью: вместимость планеты растёт с её размером — от двух жителей на крошечной до десяти на огромной."
           },
-          "picks": 17,
+          "picks": 6,
           "effects": [
             {
               "type": "MAX_POPULATION_PER_SIZE",
@@ -870,7 +903,7 @@
             "en": "The home world is poor in minerals: a worker gives less, and building goes hard at the start.",
             "ru": "Родной мир беден минералами: рабочий даёт меньше, и стройка на старте идёт туго."
           },
-          "picks": -3,
+          "picks": -1,
           "excludes": [
             "world-rich"
           ],
@@ -891,7 +924,7 @@
             "en": "The home world is one size larger than usual — and holds more colonists.",
             "ru": "Родной мир на размер больше обычного — и вмещает больше жителей."
           },
-          "picks": 5,
+          "picks": 1,
           "effects": [
             {
               "type": "HOME_SIZE_STEPS",
@@ -930,7 +963,7 @@
             "en": "The home world is strewn with the legacy of a vanished civilisation: a scientist there gives two extra points.",
             "ru": "Родной мир усыпан наследием ушедшей цивилизации: учёный на нём даёт два лишних очка."
           },
-          "picks": 2,
+          "picks": 3,
           "effects": [
             {
               "type": "HOME_RESEARCH_PER_SCIENTIST",
@@ -961,7 +994,7 @@
             "en": "A colonist eats half the food, but half a portion of production on top of that. Ships repair themselves.",
             "ru": "Житель съедает половину еды, но полпорции производства сверх того. Корабли чинятся сами."
           },
-          "picks": -2,
+          "picks": 4,
           "effects": [
             {
               "type": "FOOD_CONSUMPTION_PERCENT",
@@ -987,7 +1020,7 @@
             "en": "The race eats stone: it needs no food at all, and there is no need to keep farmers. Farming sides of the race are not taken with this one.",
             "ru": "Раса ест камень: еда ей не нужна вовсе, и фермеров можно не держать. Сельских сторон расы с этим не берут."
           },
-          "picks": 16,
+          "picks": 10,
           "excludes": [
             "food-poor",
             "food-good",
@@ -1045,7 +1078,7 @@
             "en": "The race is liked: the neighbours agree to treaties more readily, and leaders come more often and hire for half the price.",
             "ru": "Расу любят: соседи охотнее идут на договор, а лидеры приходят чаще и нанимаются вдвое дешевле."
           },
-          "picks": 4,
+          "picks": 3,
           "effects": [
             {
               "type": "DIPLOMACY_PERCENT",
@@ -1084,7 +1117,7 @@
             "en": "The race does not choose: at every level of the tree it gets a random technology.",
             "ru": "Раса не выбирает: на каждом уровне дерева ей достаётся случайная технология."
           },
-          "picks": -8,
+          "picks": -4,
           "effects": [
             {
               "type": "UNCREATIVE",
@@ -1102,7 +1135,7 @@
             "en": "The race gets every technology of the level at once instead of one by choice.",
             "ru": "Раса получает все технологии уровня разом, а не одну на выбор."
           },
-          "picks": 3,
+          "picks": 8,
           "effects": [
             {
               "type": "CREATIVE",
@@ -1134,7 +1167,7 @@
             "en": "Poisoned air costs the race nothing: the usable share of any planet is a quarter higher, and pollution does not get in the way.",
             "ru": "Расе нипочём отравленный воздух: пригодная доля любой планеты выше на четверть, загрязнение не мешает."
           },
-          "picks": 16,
+          "picks": 10,
           "effects": [
             {
               "type": "TOLERANT",
@@ -1156,7 +1189,7 @@
             "en": "Trade goods and surplus food go for twice as much, and trade treaties bring half again as much.",
             "ru": "Товары и лишняя еда идут вдвое дороже, договоры о торговле приносят в полтора раза больше."
           },
-          "picks": 3,
+          "picks": 4,
           "effects": [
             {
               "type": "TRADE_INCOME_PERCENT",
@@ -1192,7 +1225,7 @@
             "en": "Good chances come more often than bad ones, and the raiders from Beyond attack three times as rarely.",
             "ru": "Хорошие случайности приходят чаще плохих, а налётчики из-за Предела нападают втрое реже."
           },
-          "picks": 2,
+          "picks": 3,
           "effects": [
             {
               "type": "LUCKY",
@@ -1210,7 +1243,7 @@
             "en": "The race sees the whole galaxy from the first turn: every system, planet and colony.",
             "ru": "Раса видит всю галактику с первого хода: любую систему, планету и колонию."
           },
-          "picks": 4,
+          "picks": 3,
           "effects": [
             {
               "type": "OMNISCIENT",
@@ -1228,7 +1261,7 @@
             "en": "The race's warships are invisible on the map until they come to an enemy system.",
             "ru": "Боевые корабли расы не видны на карте, пока не придут в чужую систему."
           },
-          "picks": 1,
+          "picks": 4,
           "effects": [
             {
               "type": "STEALTHY_SHIPS",
@@ -1272,7 +1305,7 @@
             "en": "The race's ships cover two more parsecs a turn and are nimbler in battle.",
             "ru": "Корабли расы проходят на два парсека за ход больше и проворнее в бою."
           },
-          "picks": 4,
+          "picks": 5,
           "effects": [
             {
               "type": "SHIP_SPEED_PARSECS",
@@ -1294,7 +1327,7 @@
             "en": "A large ship takes an enemy colony without troops, the neighbours are more agreeable, and the agents work better.",
             "ru": "Крупный корабль подчиняет чужую колонию без десанта, соседи сговорчивее, агенты работают лучше."
           },
-          "picks": 16,
+          "picks": 6,
           "effects": [
             {
               "type": "TELEPATHIC",
@@ -1328,6 +1361,18 @@
       "required_tech": "confederation",
       "effects": [
         {
+          "type": "CAPITOL_LOSS_MORALE",
+          "amount": -50
+        },
+        {
+          "type": "MORALE_WITHOUT_BARRACKS",
+          "amount": -20
+        },
+        {
+          "type": "PSIONICS_MORALE",
+          "amount": 10
+        },
+        {
           "type": "RESEARCH_PERCENT",
           "amount": -50
         },
@@ -1344,12 +1389,24 @@
         "ru": "Империум"
       },
       "description": {
-        "en": "A dictatorship grown into an empire: the counter-espionage is twice as strong, and the empire keeps a fleet half again as large.",
-        "ru": "Диктатура, доросшая до империи: контрразведка крепче вдвое, а флот империя содержит в полтора раза больший."
+        "en": "A dictatorship grown into an empire: the counter-espionage is twice as strong, the empire keeps a fleet half again as large, and a colony with barracks gains a fifth in morale instead of losing it without them.",
+        "ru": "Диктатура, доросшая до империи: контрразведка крепче вдвое, флот империя содержит в полтора раза больший, а колония с казармами получает пятую часть морали, вместо того чтобы терять её без них."
       },
       "replaces": "gov-dictatorship",
       "required_tech": "imperium",
       "effects": [
+        {
+          "type": "CAPITOL_LOSS_MORALE",
+          "amount": -35
+        },
+        {
+          "type": "MORALE_WITH_BARRACKS",
+          "amount": 20
+        },
+        {
+          "type": "PSIONICS_MORALE",
+          "amount": 10
+        },
         {
           "type": "ESPIONAGE_DEFENSE_POINTS",
           "amount": 2
@@ -1373,6 +1430,10 @@
       "replaces": "gov-democracy",
       "required_tech": "federation",
       "effects": [
+        {
+          "type": "CAPITOL_LOSS_MORALE",
+          "amount": -20
+        },
         {
           "type": "RESEARCH_PERCENT",
           "amount": 75
@@ -1405,6 +1466,10 @@
       "required_tech": "galactic-unification",
       "effects": [
         {
+          "type": "NO_MORALE",
+          "amount": 1
+        },
+        {
           "type": "PRODUCTION_PERCENT",
           "amount": 100
         },
@@ -1434,12 +1499,15 @@
         "en": "Democracy and charm. They grow rich and research faster than the rest, and the neighbours readily come to terms with them.",
         "ru": "Демократия и обаяние. Богатеют и исследуют быстрее прочих, а соседи охотно идут с ними на договор."
       },
+      "lore": {
+        "en": "Earthlings reached the stars last and are in a hurry to catch up: their trading houses were the first to hear of Thessar from runaway miners. They want a galaxy where a treaty weighs more than a salvo, and a seat at the table where such treaties are written.",
+        "ru": "Земляне вышли к звёздам последними и спешат наверстать: их торговые дома первыми услышали о Тессаре от беглых шахтёров. Им нужна галактика, где договор весит больше залпа, и место за столом, где такие договоры пишут."
+      },
       "home_climate": "TERRAN",
-      "color": "#4fa3ff",
+      "color": "#5fa3fc",
       "traits": [
         "gov-democracy",
-        "charismatic",
-        "traders"
+        "charismatic"
       ]
     },
     {
@@ -1452,18 +1520,18 @@
         "en": "Great scientists and inventors. A level of the tree gives them every technology at once, and their home world is large, if of low gravity.",
         "ru": "Великие учёные и изобретатели. Уровень дерева даёт им все технологии разом, а родной мир велик, хоть и малой тяжести."
       },
+      "lore": {
+        "en": "The Cerebri grew up on a vast light world where thinking came easier than walking. Their old counting temples remember the Wardens as teachers; to them Thessar is an unfinished book, and they mean to be the first to read it.",
+        "ru": "Церебри выросли на огромном лёгком мире, где думать было проще, чем ходить. Их старые счётные храмы помнят Стражей учителями; Тессар для них — недочитанная книга, и прочесть её они хотят первыми."
+      },
       "home_climate": "TERRAN",
-      "color": "#ff5f5f",
+      "color": "#fa260f",
       "traits": [
         "gov-dictatorship",
         "science-great",
-        "creative",
-        "world-large",
         "grav-low",
-        "ground-poor",
-        "spy-poor",
-        "ship-defense-poor",
-        "world-rich"
+        "world-large",
+        "creative"
       ]
     },
     {
@@ -1476,15 +1544,18 @@
         "en": "A hive: unification, good farmers and industrialists, a large home world. But chance will choose for them what to research.",
         "ru": "Улей: объединение, хорошие фермеры и промышленники, большой родной мир. Но выбирать, что изучать, за них будет случай."
       },
+      "lore": {
+        "en": "The Chitarri hive does not tell \"I\" from \"we\": for ages it grew under one sky with one purpose, to feed the hive. Stars are new fields to it, and Thessar a heart that ought to beat in the hive’s rhythm.",
+        "ru": "Улей Читарри не различает «я» и «мы»: веками он рос под одним небом с одной целью — накормить улей. Звёзды для него — новые поля, а Тессар — сердце, которое должно биться в ритме улья."
+      },
       "home_climate": "TERRAN",
-      "color": "#57d977",
+      "color": "#53df82",
       "traits": [
         "gov-unification",
+        "food-good",
         "industry-good",
-        "uncreative",
-        "science-poor",
-        "ground-poor",
-        "world-rich"
+        "world-large",
+        "uncreative"
       ]
     },
     {
@@ -1497,15 +1568,18 @@
         "en": "Living stones: they do not eat at all, live on any planet and please nobody. They grow twice as slowly as the rest.",
         "ru": "Живые камни: не едят вовсе, живут на любой планете и никому не нравятся. Растут вдвое медленнее прочих."
       },
+      "lore": {
+        "en": "The Lithari are living stone grown in the crust of a cooled world; they do not remember being softer. Other races are noise on the surface to them. They want silence, and silence, the stone teaches, belongs to whoever lies beneath everything else.",
+        "ru": "Литари — живой камень, проросший в коре остывшего мира; они не помнят себя мягче. Чужие расы для них — шум на поверхности. Им нужна тишина, а тишина, учит камень, принадлежит тому, кто лежит под всем остальным."
+      },
       "home_climate": "TERRAN",
-      "color": "#ffd447",
+      "color": "#fff822",
       "traits": [
         "gov-dictatorship",
-        "lithovore",
-        "tolerant",
         "growth-slow",
+        "lithovore",
         "repulsive",
-        "world-rich"
+        "tolerant"
       ]
     },
     {
@@ -1518,14 +1592,17 @@
         "en": "Gunner cats: the best volley in the galaxy, a rich home world and warlords at the head of the fleet.",
         "ru": "Кошки-канониры: лучший залп в галактике, богатый родной мир и военачальники во главе флота."
       },
+      "lore": {
+        "en": "Among the Felirs a voice in council is earned in single combat, and the oldest songs are about duels. Those songs call the Guardian of Thessar the last opponent worth fighting, and the Felirs mean to fight it.",
+        "ru": "У Фелиров голос на совете добывают поединком, и самые старые их песни — о дуэлях. Эти песни называют Стража Тессара последним противником, с которым стоит биться, и Фелиры намерены с ним сразиться."
+      },
       "home_climate": "TERRAN",
-      "color": "#b56cff",
+      "color": "#973afe",
       "traits": [
         "gov-dictatorship",
         "ship-attack-great",
         "world-rich",
-        "warlord",
-        "food-good"
+        "warlord"
       ]
     },
     {
@@ -1538,18 +1615,17 @@
         "en": "Bears of high gravity: sturdy troops and accurate gunners. Heavy worlds cost them nothing.",
         "ru": "Медведи большой тяжести: крепкий десант и меткие канониры. Тяжёлые миры им нипочём."
       },
+      "lore": {
+        "en": "The Ursani were born on a heavy world where every step is paid for in strength. They honour the oath and the clan above all; Thessar is a mountain to them, and a mountain that exists must be climbed.",
+        "ru": "Урсани родились на тяжёлом мире, где за каждый шаг платят силой. Выше всего они чтут клятву и клан; Тессар для них — гора, а на гору, раз она есть, нужно подняться."
+      },
       "home_climate": "TERRAN",
-      "color": "#ff9a3c",
+      "color": "#fd9d0d",
       "traits": [
         "gov-dictatorship",
-        "grav-high",
-        "ground-good",
         "ship-attack-good",
-        "world-large",
-        "world-rich",
-        "spy-poor",
-        "ship-defense-poor",
-        "food-good"
+        "ground-good",
+        "grav-high"
       ]
     },
     {
@@ -1562,18 +1638,19 @@
         "en": "Lizards: twice as prolific, good farmers, they live below the surface and their home world is large. Feudal and poor spies.",
         "ru": "Ящеры: плодовиты вдвое, хорошие фермеры, живут под поверхностью и родной мир их велик. Феодалы и плохие шпионы."
       },
+      "lore": {
+        "en": "The Saurath hatched in warm burrows under the marshes and still think of the surface as foreign land. Their lords share out planets like nests, and every lord needs more room to lay. Thessar promises room for ever.",
+        "ru": "Саураты вылупились в тёплых норах под болотами и до сих пор считают поверхность чужой землёй. Их лорды делят планеты, как гнёзда, и каждому нужно больше места для кладки. Тессар обещает место навсегда."
+      },
       "home_climate": "TERRAN",
       "color": "#47e3d5",
       "traits": [
         "gov-feudal",
         "growth-fast",
         "food-good",
-        "subterranean",
-        "world-large",
         "spy-poor",
-        "ship-attack-poor",
-        "ship-defense-poor",
-        "world-rich"
+        "subterranean",
+        "world-large"
       ]
     },
     {
@@ -1586,13 +1663,16 @@
         "en": "Masters of the secret war: great spies whose ships are invisible on the map.",
         "ru": "Мастера тайной войны: великие шпионы, чьи корабли не видны на карте."
       },
+      "lore": {
+        "en": "The Veilin live in the dusk of an ever-clouded world and learn early to see while staying unseen. Rumour says they carried the Wardens’ messages; the Veilin say nothing. They want not Thessar itself but whatever the others know about it.",
+        "ru": "Вейлины живут в сумерках вечно облачного мира и с детства учатся видеть, оставаясь невидимыми. Говорят, они носили вести Стражей; сами Вейлины молчат. Им нужен не Тессар, а то, что о нём знают другие."
+      },
       "home_climate": "TERRAN",
       "color": "#ff7bd5",
       "traits": [
         "gov-dictatorship",
         "spy-great",
-        "stealthy-ships",
-        "science-good"
+        "stealthy-ships"
       ]
     },
     {
@@ -1605,13 +1685,16 @@
         "en": "Bird pilots: the best ship defence in the galaxy and a home world strewn with the legacy of a vanished civilisation.",
         "ru": "Птицы-пилоты: лучшая в галактике защита кораблей и родной мир, усыпанный наследием ушедшей цивилизации."
       },
+      "lore": {
+        "en": "The Aviars nest among the ruins on their home world and fly as chicks between columns nobody living has built. They call themselves heirs of the Wardens by right of the sky, and want Thessar’s sky back for those who can fly.",
+        "ru": "Авиары гнездятся среди руин на родной планете и птенцами летают меж колонн, которых не строил никто из живых. Они называют себя наследниками Стражей по праву неба и хотят вернуть небо Тессара тем, кто умеет летать."
+      },
       "home_climate": "TERRAN",
       "color": "#8ad0ff",
       "traits": [
         "gov-dictatorship",
         "ship-defense-great",
-        "world-artifacts",
-        "world-rich"
+        "world-artifacts"
       ]
     },
     {
@@ -1624,15 +1707,18 @@
         "en": "Telepathic seers: they see the whole galaxy, take colonies without troops and shoot accurately. A feudal government halves their science.",
         "ru": "Телепаты-провидцы: видят всю галактику, подчиняют колонии без десанта и метко стреляют. Феодальный строй роняет их науку вдвое."
       },
+      "lore": {
+        "en": "The Iluni hear thoughts and are ruled by councils of seeresses. Their visions have long shown Thessar in flames; they want to be there before the vision comes true, to steer the fire.",
+        "ru": "Илуни слышат мысли и живут под рукой советов провидиц. Их видения давно показывают Тессар в огне; они хотят оказаться рядом раньше, чем видение сбудется, — чтобы направить огонь."
+      },
       "home_climate": "TERRAN",
       "color": "#c48bff",
       "traits": [
         "gov-feudal",
-        "telepathic",
-        "omniscient",
-        "ship-attack-good",
         "ship-defense-good",
-        "science-good"
+        "ship-attack-good",
+        "telepathic",
+        "omniscient"
       ]
     },
     {
@@ -1645,15 +1731,18 @@
         "en": "Traders and lucky ones: twice the tax, double the takings from goods, and fortune on their side. They grew up in low gravity.",
         "ru": "Торговцы и счастливчики: вдвое больший налог, двойная выручка с товаров и удача на их стороне. Выросли в малой тяжести."
       },
+      "lore": {
+        "en": "The Gildrin are a trading folk from a light world where luck counts for more than strength and a debt for more than kinship. Every clan keeps accounts in foreign banks. Thessar is the deal of the age to them, and shares in it are already sold to people who have never seen it.",
+        "ru": "Гилдрины — торговый народ с лёгкого мира, где удача ценится выше силы, а долг — выше родства. У каждого рода свои счета в чужих банках. Тессар для них — сделка века, и доли в ней уже проданы тем, кто его не видел."
+      },
       "home_climate": "TERRAN",
       "color": "#ffc061",
       "traits": [
         "gov-dictatorship",
         "money-rich",
-        "lucky",
-        "traders",
         "grav-low",
-        "science-good"
+        "traders",
+        "lucky"
       ]
     },
     {
@@ -1666,17 +1755,16 @@
         "en": "Cyborgs: they eat half as much but consume ore, and they are great industrialists on top of that.",
         "ru": "Киборги: едят вполовину меньше, но проедают руду, и великие промышленники сверх того."
       },
+      "lore": {
+        "en": "The Syntar traded flesh for machine when their world began to die, and have grown themselves in factories ever since. They know that the Guardian of Thessar is a machine too, and want to learn who built it and whether it can be built better.",
+        "ru": "Синтары сменили плоть на машину, когда их мир начал умирать, и с тех пор растят себя на заводах. Они знают, что Страж у Тессара — тоже машина, и хотят узнать, кто её построил и можно ли построить лучше."
+      },
       "home_climate": "TERRAN",
       "color": "#9fb0c9",
       "traits": [
         "gov-dictatorship",
-        "cybernetic",
         "industry-great",
-        "world-rich",
-        "ship-defense-good",
-        "ground-good",
-        "science-good",
-        "subterranean"
+        "cybernetic"
       ]
     },
     {
@@ -1689,13 +1777,16 @@
         "en": "A water folk: wet worlds hold three times as many of them, and their ships fold space and cover two extra parsecs a turn.",
         "ru": "Водный народ: мокрые миры вмещают их втрое, а корабли складывают пространство и проходят два лишних парсека за ход."
       },
+      "lore": {
+        "en": "The Tidari live in the depths of an ocean world where the currents carry them through folds of space. They believe the Rim is not a border but a current, and that the Wardens held it like a lock. They want Thessar as the key to that lock.",
+        "ru": "Тидари живут в глубинах водного мира, где течения проносят их сквозь складки пространства. Они уверены, что Предел — не граница, а течение, и Стражи держали его, как шлюз. Тессар им нужен, чтобы этот шлюз открыть."
+      },
       "home_climate": "TERRAN",
       "color": "#4fe0c4",
       "traits": [
         "gov-dictatorship",
         "aquatic",
-        "trans-dimensional",
-        "world-rich"
+        "trans-dimensional"
       ]
     }
   ]

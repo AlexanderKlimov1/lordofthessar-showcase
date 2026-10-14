@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Имя и подвиги флота (field-backlog, пункт 141): имя, данное игроком, и бои флота —
+        выигранные и проигранные. Прошлых боёв запись не знает: у всех флотов ноль.
+    -->
+    <changeSet id="113-fleet-name" author="sddnw">
+        <addColumn tableName="fleet">
+            <column name="name" type="varchar(48)"/>
+            <column name="battles_won" type="int" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="battles_lost" type="int" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -7,10 +7,14 @@ import { useColonyJobs } from './useColonyJobs';
 import { ColonyBuild } from './ColonyBuild';
 import { ColonyBuildings } from './ColonyBuildings';
 import { ColonyJobs } from './ColonyJobs';
-import { ResourceIcon } from './colonyIcons';
+import { Colonist, ResourceIcon } from './colonyIcons';
+import { useState, type ReactNode } from 'react';
+import { gameApi } from '../../api/client';
+import { isCapitol } from './buildingArt';
 import { Figure } from '../Figure';
 import { figureLabelClass, signTone, signed } from '../accent';
-import { t, tf, useT } from '../../i18n';
+import { t, useT } from '../../i18n';
+import { climateName, mineralsName, planetSizeName } from '../planetLabels';
 
 /**
  * Экран управления колонией — п. 4.1 и п. 10, разметкой экрана колонии MOO II.
@@ -83,10 +87,9 @@ function ColonyLayout({
   planet: Planet;
   onOpen: (planetId: string | null) => void;
 }) {
-  const players = useGameStore((state) => state.players);
   const map = useGameStore((state) => state.map);
   const game = useGameStore((state) => state.game);
-  const { jobs, move, error, own } = useColonyJobs(planet);
+  const { jobs, working, lift, move, error, own } = useColonyJobs(planet);
   // Система колонии: губернатор служит ей, а не планете. Ищется по карте — планета своего
   // родителя не называет.
   const system = (map?.systems ?? []).find((one) =>
@@ -94,13 +97,12 @@ function ColonyLayout({
   const turn = game?.turn ?? 1;
   useT();
   const colony = planet.colony;
-  const owner = players.find((player) => player.id === planet.ownerPlayerId) ?? null;
 
   return (
     // Экран занимает окно целиком: в MOO II колония — полноэкранный вид, а не окошко.
     <div className="absolute inset-0 z-40 flex flex-col overflow-auto bg-space-950 p-4">
-      <ColonyHeader planet={planet} colony={colony}
-                    ownerName={owner?.name} ownerColor={owner?.color} />
+      <ColonyHeader planet={planet} colony={colony} own={own}
+                    growth={colony ? growthK(planet, colony, working) : 0} />
 
       {/*
         Стройка — столбец во всю высоту справа: там же, где стояла выработка. Слева
@@ -112,20 +114,14 @@ function ColonyLayout({
       */}
       <div className="flex flex-1 gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          <ColonyJobs planet={planet} colony={colony} jobs={jobs} move={move} error={error}
-                      own={own} growth={colony ? growthK(planet, colony, jobs) : 0} />
-          <ColonyBuildings planet={planet} colony={colony} own={own} />
+          <ColonyJobs planet={planet} colony={colony} jobs={jobs} working={working} onLift={lift} move={move}
+                      error={error} own={own} />
+          <ColonyBuildings planet={planet} colony={colony} own={own}
+                           governor={own && system ? <ColonyLeader systemId={system.id} turn={turn} compact /> : null} />
         </div>
 
         <div className="flex w-[22rem] shrink-0 flex-col gap-3 2xl:w-[28rem]">
           <ColonyBuild planet={planet} own={own} />
-          {/*
-            Губернатор системы — правый нижний угол, как в оригинале
-            (`docs/moo2/colony.png`): колониальный лидер служит в СИСТЕМЕ и помогает всем
-            её колониям, и смотреть на него удобнее там, где смотрят на колонию. Только
-            своей колонии: чужой губернатор игрока не касается.
-          */}
-          {own && system ? <ColonyLeader systemId={system.id} turn={turn} /> : null}
         </div>
       </div>
 
@@ -139,72 +135,194 @@ function ColonyLayout({
 }
 
 /**
- * Шапка: название колонии, класс планеты и владелец — как «Colony of …» в оригинале.
+ * Шапка — редизайн колонии (07.10.2026, решение хозяина проекта): название, строка параметров мелко, а под ними ОДНА строка значков с
+ * числами — еда, производство, наука, доход, население с вместимостью, мораль и загрязнение.
+ * Пояснения — во всплывающих подсказках, а не словами в строке: прежде доход, содержание,
+ * мораль и грязь стояли фразами и занимали две строки.
  *
- * Доход стоит здесь же, в конце строки параметров: деньги — единственная величина, за
- * которой не стоят чьи-то руки, поэтому в строках жителей ей места нет. Население с
- * приростом ушло в заголовок жителей — их считают по головам, там оно и к месту.
+ * Губернатор служит СИСТЕМЕ (п. 6) и помогает всем её колониям: его портрет стоит в правом
+ * нижнем углу построек (`ColonyBuildings`, 09.10.2026), как в оригинале.
  */
 function ColonyHeader({
   planet,
   colony,
-  ownerName,
-  ownerColor,
+  own,
+  growth,
 }: {
   planet: Planet;
   colony?: Colony;
-  ownerName?: string;
-  ownerColor?: string;
+  own: boolean;
+  growth: number;
 }) {
+  /*
+    Заголовок — одно название планеты (09.10.2026, решение хозяина проекта): слово «колония»,
+    орбита и имя хозяина ничего не говорили — чужой колонией всё равно не управляют. Родной мир
+    и столица — значками у названия, слово — в подсказке.
+  */
   return (
     <div className="mb-3 border-b border-space-700 pb-2">
-      <h2 className="text-28 uppercase tracking-[0.3em] text-ink-bright">
-        {t('colony.title', { name: planet.name })}
-      </h2>
-
-      <div className="mt-1 flex items-baseline justify-between gap-6">
-        <p className="text-22 text-ink-faint">
-          {t('colony.params', { size: planet.sizeLabel, climate: planet.climateLabel, minerals: planet.mineralsLabel, orbit: planet.orbit })}
-          {ownerName ? (
-            <>
-              {' · '}
-              <span className="inline-block h-4 w-4 align-middle" style={{ backgroundColor: ownerColor }} />{' '}
-              <span className="text-ink-soft">{ownerName}</span>
-              {planet.homeworld ? <span className="text-accent">{t('colony.homeworld')}</span> : null}
-            </>
-          ) : null}
-        </p>
-
-        {colony ? (
-          <p className={'flex shrink-0 items-center gap-2 ' + figureLabelClass('lead')}>
-            {t('colony.income')}
-            <Figure accent="lead" tone={signTone(colony.income)}
-                    icon={(c) => <ResourceIcon kind="coins" className={c} />}>
-              {signed(colony.income)}
-            </Figure>
-            {colony.upkeep > 0 ? (
-              <span>{tf('colony.upkeep', { n: <Figure accent="lead">{colony.upkeep}</Figure> })}</span>
-            ) : null}
-            {/*
-              Загрязнение (п. 10) стоит рядом с доходом: это вторая постоянная утечка
-              колонии, только платит она не кредитами, а производством. Пока грязи нет,
-              в строке видно, сколько промышленности планета ещё стерпит, — без этого
-              числа уборка появлялась бы как гром среди ясного неба.
-            */}
-            <span>
-              {colony.pollutionFree ? (
-                t('colony.pollution.none')
-              ) : colony.pollution > 0 ? (
-                <>
-                  {t('colony.pollution.cleanup')} <Figure accent="lead" tone="warn">−{colony.pollution}</Figure> {t('colony.pollution.units')}
-                </>
-              ) : (
-                tf('colony.pollution.tolerates', { n: <Figure accent="lead">{colony.pollutionTolerance}</Figure> })
-              )}
+      <div className="min-w-0">
+        <h2 className="flex items-center gap-2 text-22 uppercase tracking-[0.25em] text-ink-bright">
+          {planet.name}
+          {/* Население и предел планеты — у названия (12.10.2026, решение хозяина проекта): это
+              первое, что спрашивают у колонии, и в ряду показателей его не находили. */}
+          {colony ? (
+            <span className="flex items-center gap-1 normal-case tracking-normal"
+                  title={t('colony.stat.population', { growth: signed(growth) })}>
+              <Colonist color="rgb(var(--lamp))" className="h-5 w-[14px]" />
+              <Figure accent="lead">{planet.population}</Figure>
+              <span className="text-ink-dim">/{colony.maxPopulation}</span>
             </span>
-          </p>
-        ) : null}
+          ) : null}
+          {planet.homeworld ? (
+            <span className="text-accent" title={t('colony.homeworld.title')} aria-label={t('colony.homeworld.title')}>⌂</span>
+          ) : null}
+          {isCapitol(colony) ? (
+            <span className="text-accent" title={t('colony.capitol.title')} aria-label={t('colony.capitol.title')}>♛</span>
+          ) : null}
+        </h2>
+        <p className="text-16 text-ink-faint">
+          {t('colony.paramsShort', { size: planetSizeName(planet.size, planet.sizeLabel), climate: climateName(planet.climate, planet.climateLabel), minerals: mineralsName(planet.minerals, planet.mineralsLabel) })}
+        </p>
       </div>
+
+      {colony ? (
+        <div className={'mt-2 flex flex-wrap items-center gap-x-6 gap-y-1 ' + figureLabelClass('lead')}>
+          <HeaderStat title={t('colony.stat.food')} icon={<ResourceIcon kind="grain" className="h-6 w-6 text-lamp" />}>
+            <Figure accent="lead" tone={signTone(colony.foodBalance + colony.foodDelivered)}>
+              {signed(colony.foodBalance + colony.foodDelivered)}
+            </Figure>
+          </HeaderStat>
+          <HeaderStat title={t('colony.stat.production')} icon={<ResourceIcon kind="hammer" className="h-6 w-6 text-lamp" />}>
+            <Figure accent="lead">{colony.production}</Figure>
+          </HeaderStat>
+          <HeaderStat title={t('colony.stat.research')} icon={<ResourceIcon kind="microscope" className="h-6 w-6 text-lamp" />}>
+            <Figure accent="lead">{colony.research}</Figure>
+          </HeaderStat>
+          <HeaderStat
+            title={t('colony.stat.income') + (colony.upkeep > 0 ? ' · ' + t('colony.stat.upkeep', { n: colony.upkeep }) : '')}
+            icon={<ResourceIcon kind="coins" className="h-6 w-6 text-lamp" />}
+          >
+            <Figure accent="lead" tone={signTone(colony.income)}>{signed(colony.income)}</Figure>
+          </HeaderStat>
+          <MoraleFigure colony={colony} />
+          {/*
+            Загрязнение (п. 10) — вторая постоянная утечка колонии: платит она производством.
+            Пока грязи нет, значок говорит, сколько промышленности планета ещё стерпит.
+          */}
+          <HeaderStat
+            title={colony.pollutionFree
+              ? t('colony.pollution.none')
+              : colony.pollution > 0
+                ? t('colony.stat.pollution', { n: colony.pollution })
+                : t('colony.stat.tolerates', { n: colony.pollutionTolerance })}
+            icon={<DropIcon warn={colony.pollution > 0} />}
+          >
+            {colony.pollutionFree
+              ? <span className="text-ink-dim">—</span>
+              : colony.pollution > 0
+                ? <Figure accent="lead" tone="warn">−{colony.pollution}</Figure>
+                : <span className="text-ink-dim">{colony.pollutionTolerance}</span>}
+          </HeaderStat>
+          {own ? <AutoJobsToggle planet={planet} colony={colony} /> : null}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+/** Значок с числом в шапке колонии; что это за число — в подсказке. */
+function HeaderStat({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
+  return (
+    <span className="flex items-center gap-1.5" title={title}>
+      {icon}
+      <span className="sr-only">{title}</span>
+      {children}
+    </span>
+  );
+}
+
+/** Загрязнение — капля; есть уборка — тревожным цветом. */
+function DropIcon({ warn }: { warn: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden className={`h-6 w-6 ${warn ? 'text-warn' : 'text-lamp'}`} fill="none"
+         stroke="currentColor" strokeWidth={1.7} strokeLinejoin="round">
+      <path d="M12 3.5C9 8 6.5 11 6.5 14.5a5.5 5.5 0 0 0 11 0C17.5 11 15 8 12 3.5Z" />
+    </svg>
+  );
+}
+
+/**
+ * Мораль колонии — п. 10.1, рядом с доходом: это процент ко всему, что дают жители, и
+ * доход в шапке уже посчитан с ним. Слагаемые — подсказкой: «−20 %» без причины читается
+ * как поломка, а причина почти всегда одна и та же — нет казарм.
+ */
+function MoraleFigure({ colony }: { colony: Colony }) {
+  if (colony.moraleIgnored) {
+    return <span title={t('colony.morale.ignoredHint')}>{t('colony.morale.ignored')}</span>;
+  }
+  const lines = [
+    t('colony.morale.hint'),
+    ...colony.moraleParts.map((part) =>
+      `${t(`colony.morale.source.${part.source}` as const)}: ${signed(part.percent)} %`),
+  ];
+  return (
+    <span className="flex items-center gap-1.5" title={[t('colony.morale'), ...lines].join('\n')}>
+      <svg viewBox="0 0 24 24" aria-hidden className="h-6 w-6 text-lamp" fill="none" stroke="currentColor"
+           strokeWidth={1.7} strokeLinecap="round">
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M8.5 14.5c1 1.3 2.2 2 3.5 2s2.5-.7 3.5-2" />
+        <path d="M9 9.5h.01M15 9.5h.01" strokeWidth={2.4} />
+      </svg>
+      <span className="sr-only">{t('colony.morale')}</span>
+      <Figure accent="lead" tone={signTone(colony.moralePercent)}>
+        {signed(colony.moralePercent)} %
+      </Figure>
+    </span>
+  );
+}
+
+/**
+ * «Жители сами» — field-backlog, пункт 91, значком в шапке колонии (09.10.2026, решение хозяина
+ * проекта): колония держит фермеров ровно на прокорм, а остальных — в той доле рабочих и учёных,
+ * что задал игрок. Расстановка руками остаётся: ею игрок и задаёт долю. Включённый значок горит
+ * янтарём и вжат, как переключатели под стройкой.
+ */
+function AutoJobsToggle({ planet, colony }: { planet: Planet; colony: Colony }) {
+  const game = useGameStore((state) => state.game);
+  const credentials = useGameStore((state) => state.credentials);
+  const updatePlanet = useGameStore((state) => state.updatePlanet);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = () => {
+    if (!game || !credentials) {
+      return;
+    }
+    setError(null);
+    gameApi.setBuildMode(game.id, planet.id, credentials.accessToken, { autoJobs: !colony.autoJobs })
+      .then(updatePlanet)
+      .catch((failure: Error) => setError(failure.message));
+  };
+  const label = `${t('colony.jobs.auto')} — ${t('colony.jobs.auto.title')}${error ? ` ⚠ ${error}` : ''}`;
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={colony.autoJobs}
+      onClick={toggle}
+      className={'hit-24 flex h-9 w-9 items-center justify-center rounded border '
+        + (error ? 'border-danger text-danger '
+          : colony.autoJobs ? 'border-accent bg-space-700 text-accent shadow-inner '
+            : 'border-space-600 bg-space-900 text-ink-soft hover:border-accent hover:text-accent ')}
+    >
+      {/* Житель в круговой стрелке: колония расставляет жителей сама. */}
+      <svg viewBox="0 0 24 24" aria-hidden className="h-6 w-6" fill="none" stroke="currentColor"
+           strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="8.5" r="2.2" fill="currentColor" stroke="none" />
+        <path d="M9 16.5v-2.3a3 3 0 0 1 6 0v2.3Z" fill="currentColor" stroke="none" />
+        <path d="M4.5 12a7.5 7.5 0 0 1 13-5.1" /><path d="M17.8 4.2v2.9h-2.9" />
+        <path d="M19.5 12a7.5 7.5 0 0 1-13 5.1" /><path d="M6.2 19.8v-2.9h2.9" />
+      </svg>
+    </button>
   );
 }

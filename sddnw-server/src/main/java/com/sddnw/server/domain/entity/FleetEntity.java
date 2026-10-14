@@ -97,6 +97,57 @@ public class FleetEntity {
     @Column(name = "auto_explore", nullable = false)
     private Boolean autoExplore = Boolean.FALSE;
 
+    /**
+     * Имя и подвиги флота — field-backlog, пункт 141: «Третья ударная, семь побед». Имя — хранимый
+     * текст игрока, языка у него нет; пусто — флот безымянный. Бои считаются выигранные и
+     * проигранные, ничьи не в счёт. Слияние оставляет имя и счёт того флота, к которому
+     * присоединились; отделившийся флот начинает без имени и без счёта.
+     */
+    @Column(name = "name", length = 48)
+    private String name;
+
+    @Column(name = "battles_won", nullable = false)
+    private Integer battlesWon = 0;
+
+    @Column(name = "battles_lost", nullable = false)
+    private Integer battlesLost = 0;
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public Integer getBattlesWon() {
+        return battlesWon;
+    }
+
+    public void setBattlesWon(Integer battlesWon) {
+        this.battlesWon = battlesWon;
+    }
+
+    public Integer getBattlesLost() {
+        return battlesLost;
+    }
+
+    public void setBattlesLost(Integer battlesLost) {
+        this.battlesLost = battlesLost;
+    }
+
+    /** Флот отвоевал — пункт 141; ничья ({@code null}) не пишется. */
+    public void recordBattle(Boolean won) {
+        if (won == null) {
+            return;
+        }
+        if (won) {
+            battlesWon = battlesWon + 1;
+        } else {
+            battlesLost = battlesLost + 1;
+        }
+    }
+
     public Boolean getAutoExplore() {
         return autoExplore;
     }

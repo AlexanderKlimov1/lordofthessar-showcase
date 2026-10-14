@@ -140,6 +140,85 @@ public class RaceTraitCatalog {
      * поэтому «слабая» раса может позволить себе больше сильных сторон — но не сколько
      * угодно: вернуть можно не больше {@link #antiPicksBudget()} очков.
      */
+    /**
+     * Сколько очков сторон даёт эволюционная мутация — Biology, число MOO II: «you may choose 4
+     * Picks worth of racial specials to add to your characteristics».
+     */
+    public static final int MUTATION_PICKS = 4;
+
+    /**
+     * Что мутация может прибавить к расе — п. 7 (перенос MOO II): только сильные стороны (цена
+     * больше нуля), которых у расы нет, не из группы-переключателя, где у неё уже есть сторона
+     * (строй мутация не меняет), и не запрещённые уже взятыми. Порядок — справочника.
+     */
+    public List<RaceTrait> mutationOptions(Collection<String> owned) {
+        Snapshot current = current();
+        Set<String> have = Set.copyOf(owned);
+        Set<String> takenGroups = new HashSet<>();
+        Set<String> forbidden = new HashSet<>();
+        for (String code : owned) {
+            RaceTrait trait = current.byCode().get(code);
+            if (trait == null) {
+                continue;
+            }
+            RaceTraitGroup group = current.groupsByCode().get(trait.groupCode());
+            if (group != null && !Boolean.TRUE.equals(group.multiple())) {
+                takenGroups.add(trait.groupCode());
+            }
+            forbidden.addAll(trait.excludes() == null ? List.of() : trait.excludes());
+        }
+        List<RaceTrait> options = new java.util.ArrayList<>();
+        for (RaceTraitGroup group : current.groups()) {
+            if (!Boolean.TRUE.equals(group.multiple()) && takenGroups.contains(group.code())) {
+                continue;
+            }
+            for (RaceTrait trait : group.options()) {
+                boolean excluded = forbidden.contains(trait.code())
+                        || (trait.excludes() != null && trait.excludes().stream().anyMatch(have::contains));
+                if (trait.picks() > 0 && !have.contains(trait.code()) && !excluded) {
+                    options.add(trait);
+                }
+            }
+        }
+        return options;
+    }
+
+    /**
+     * Раса после мутации — п. 7: к своим сторонам прибавляются выбранные, если каждая есть среди
+     * {@link #mutationOptions}, из одной группы-переключателя взята одна, вместе они совместимы и
+     * стоят не дороже {@code picks}. Иначе — отказ словами.
+     */
+    public List<String> mutated(Collection<String> owned, Collection<String> added, int picks) {
+        Map<String, RaceTrait> allowed = new java.util.LinkedHashMap<>();
+        mutationOptions(owned).forEach(trait -> allowed.put(trait.code(), trait));
+        Set<String> groups = new HashSet<>();
+        int spent = 0;
+        List<String> result = new java.util.ArrayList<>(owned);
+        for (String code : added) {
+            RaceTrait trait = allowed.get(code);
+            if (trait == null) {
+                throw new ConflictException("race.mutation.notAllowed", code);
+            }
+            RaceTraitGroup group = current().groupsByCode().get(trait.groupCode());
+            if (group != null && !Boolean.TRUE.equals(group.multiple()) && !groups.add(trait.groupCode())) {
+                throw new ConflictException("race.oneOfGroup", group.name());
+            }
+            for (String other : added) {
+                if (trait.excludes() != null && trait.excludes().contains(other)) {
+                    throw new ConflictException("race.mutation.notAllowed", other);
+                }
+            }
+            if (!result.contains(code)) {
+                result.add(code);
+                spent += trait.picks();
+            }
+        }
+        if (spent > picks) {
+            throw new ConflictException("race.mutation.overBudget", spent, picks);
+        }
+        return result;
+    }
+
     public List<String> validate(Collection<String> codes) {
         Snapshot current = current();
         return validate(codes, current.groupsByCode(), current.byCode(),
@@ -672,7 +751,7 @@ public class RaceTraitCatalog {
             for (RaceEntry race : parsed.races()) {
                 readyRaces.add(new ReadyRace(race.code(), race.name(), race.description(),
                         race.homeClimate(), race.color(),
-                        race.traits() == null ? List.of() : List.copyOf(race.traits())));
+                        race.traits() == null ? List.of() : List.copyOf(race.traits()), race.lore()));
                 // Опечатка в коде особенности здесь означала бы расу, молча потерявшую
                 // свою сторону, — поэтому набор готовой расы проверяется на состав так же
                 // строго, как собранный игроком. А вот ЦЕНА ей не спрашивается: готовые
@@ -757,7 +836,7 @@ public class RaceTraitCatalog {
      *                    данными, а не вшито в код
      */
     public record ReadyRace(String code, LocalizedText names, LocalizedText descriptions, String homeClimate,
-                            String color, List<String> traits) {
+                            String color, List<String> traits, LocalizedText lores) {
 
         /** Название расы на языке читателя — п. 3.5. */
         public String name() {
@@ -767,6 +846,14 @@ public class RaceTraitCatalog {
         /** Описание расы на языке читателя — п. 3.5. */
         public String description() {
             return descriptions == null ? null : descriptions.text();
+        }
+
+        /**
+         * Предыстория расы на языке читателя — пункт 43: откуда она и чего хочет. Факты мира, а
+         * не правила: стороны расы могут смениться, история остаётся.
+         */
+        public String lore() {
+            return lores == null ? null : lores.text();
         }
     }
 
@@ -854,7 +941,7 @@ public class RaceTraitCatalog {
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record RaceEntry(String code, LocalizedText name, LocalizedText description,
                              @JsonProperty("home_climate") String homeClimate,
-                             String color, List<String> traits) {
+                             String color, List<String> traits, LocalizedText lore) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

@@ -33,6 +33,11 @@ public record FleetSnapshot(
         Integer departureTurn,
 
         /** Ход прибытия; {@code null} у стоящего флота. */
-        Integer arrivalTurn
+        Integer arrivalTurn,
+        /** Имя флота (пункт 141); {@code null} — безымянный или старый слепок. */
+        String name,
+        /** Бои флота (пункт 141); {@code null} у старых слепков — ноль. */
+        Integer battlesWon,
+        Integer battlesLost
 ) {
 }

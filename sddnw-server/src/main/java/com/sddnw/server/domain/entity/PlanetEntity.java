@@ -200,6 +200,13 @@ public class PlanetEntity {
     private Boolean autoBuild = Boolean.FALSE;
 
     /**
+     * «Жители сами» — field-backlog, пункт 91 ({@code AutoJobsRules}): каждый ход фермеров ровно на
+     * прокорм колонии, остальные — в доле рабочих и учёных, заданной игроком.
+     */
+    @Column(name = "auto_jobs", nullable = false)
+    private Boolean autoJobs = Boolean.FALSE;
+
+    /**
       * Какой проект корабля строит колония — п. 8. Пусто, пока строится не корабль.
       * <p>
       * Код стройки говорит «корабль», а какой именно — эта ссылка: проект живёт у
@@ -217,6 +224,60 @@ public class PlanetEntity {
      */
     @Column(name = "sold_turn")
     private Integer soldTurn;
+
+    /**
+     * Сколько раз планету уже терраформировали — п. 4.1.2.1: каждое следующее дороже (250, 500,
+     * 750), кто бы ни переделывал её прежде.
+     */
+    @Column(name = "terraform_count", nullable = false)
+    private Integer terraformCount = 0;
+
+    /** Андроиды колонии по делам — п. 4.1 (перенос MOO II): фермеры, рабочие, учёные. */
+    @Column(name = "android_farmers", nullable = false)
+    private Integer androidFarmers = 0;
+
+    @Column(name = "android_workers", nullable = false)
+    private Integer androidWorkers = 0;
+
+    @Column(name = "android_scientists", nullable = false)
+    private Integer androidScientists = 0;
+
+    public Integer getAndroidFarmers() {
+        return androidFarmers;
+    }
+
+    public void setAndroidFarmers(Integer androidFarmers) {
+        this.androidFarmers = androidFarmers == null ? 0 : androidFarmers;
+    }
+
+    public Integer getAndroidWorkers() {
+        return androidWorkers;
+    }
+
+    public void setAndroidWorkers(Integer androidWorkers) {
+        this.androidWorkers = androidWorkers == null ? 0 : androidWorkers;
+    }
+
+    public Integer getAndroidScientists() {
+        return androidScientists;
+    }
+
+    public void setAndroidScientists(Integer androidScientists) {
+        this.androidScientists = androidScientists == null ? 0 : androidScientists;
+    }
+
+    /** Все андроиды колонии — каждый занимает место жителя. */
+    public Integer androids() {
+        return androidFarmers + androidWorkers + androidScientists;
+    }
+
+    public Integer getTerraformCount() {
+        return terraformCount;
+    }
+
+    public void setTerraformCount(Integer terraformCount) {
+        this.terraformCount = terraformCount == null ? 0 : terraformCount;
+    }
 
     /**
      * При скольких технологиях империи ИИ эта колония в последний раз смотрела список
@@ -490,6 +551,14 @@ public class PlanetEntity {
 
     public void setAutoBuild(Boolean autoBuild) {
         this.autoBuild = autoBuild == null ? Boolean.FALSE : autoBuild;
+    }
+
+    public Boolean getAutoJobs() {
+        return autoJobs;
+    }
+
+    public void setAutoJobs(Boolean autoJobs) {
+        this.autoJobs = autoJobs == null ? Boolean.FALSE : autoJobs;
     }
 
     public Boolean getHomeworld() {

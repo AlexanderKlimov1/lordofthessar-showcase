@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      Круг замыкается: «исправлено» — field-backlog, пункт 158.
+
+      Сообщение о проблеме (миграция 098) получает ОТВЕТ хозяина: исправлено в такой-то
+      версии или «не будем исправлять» с причиной. Написавший видит ответ один раз, при
+      следующем входе (`answer_seen`), — сообщение без ответа хуже отсутствия кнопки.
+
+      Отметка `resolved` остаётся своей: это «разобрано» для хозяина (лежит в работе или нет),
+      а ответ — то, что услышит игрок. Разобрать можно и не отвечая (дубль, шум).
+    -->
+    <changeSet id="101-problem-answer" author="sddnw">
+        <addColumn tableName="problem_report">
+            <column name="answer_kind" type="varchar(16)"/>
+            <column name="answer_version" type="varchar(32)"/>
+            <column name="answer_text" type="varchar(1000)"/>
+            <column name="answered_at" type="timestamptz"/>
+            <column name="answer_seen" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

@@ -49,6 +49,11 @@ export function modalOpen(): boolean {
  * боя): там Enter закрывает так же, как Esc. Окнам с выбором и полями ввода его не дают —
  * у них Enter значит своё.
  *
+ * Окно, где «Ок» — единственный выход, а кнопки внутри — выбор (дерево науки, окно выбора
+ * системы корабля), помечается `data-keeps-enter`: Enter на такой кнопке нажимает её, а не
+ * закрывает окно (09.10.2026, решение хозяина проекта: единственный выход зовётся «Ок» и
+ * закрывается и Esc, и Enter).
+ *
  * В поле ввода Enter не перехватывается. На КНОПКЕ — перехватывается, и это не оплошность:
  * фокус остаётся на кнопке, которой окно открыли, и без перехвата браузер превратил бы
  * Enter в щелчок по ней — окно закрылось бы и тут же открылось снова. `preventDefault`
@@ -84,7 +89,7 @@ export function useModalEscape(
       if (closeOnEnter && event.key === 'Enter' && !event.repeat
           && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
           && !(event.target instanceof HTMLElement
-               && event.target.closest('input, textarea, select'))) {
+               && event.target.closest('input, textarea, select, [data-keeps-enter] button'))) {
         event.preventDefault();
         close.current();
       }

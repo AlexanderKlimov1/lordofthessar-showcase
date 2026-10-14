@@ -78,6 +78,13 @@ public class PlayerEntity {
     @Column(name = "ai_objective")
     private AiObjective aiObjective;
 
+    /**
+     * Уровень игры этой империи ИИ — пункт 9 ({@code AiSkill}): обычно уровень партии, а прогоны
+     * сравнения уровней ставят его каждой империи свой. Пусто — обычный (и у опекуна человека).
+     */
+    @Column(name = "ai_skill", length = 16)
+    private String aiSkill;
+
     /** Код расы из справочника race (заглушка, расширяется в п. 5 и п. 7). */
     @Column(name = "race_code", nullable = false)
     private String raceCode;
@@ -118,6 +125,125 @@ public class PlayerEntity {
      */
     @Column(name = "account_id")
     private UUID accountId;
+
+    /**
+     * Ход, на котором человек признал поражение — field-backlog, пункт 81; пусто — не
+     * признавал. С этого хода его империю ведёт ИИ (род игрока становится AI), а вернуться за
+     * неё нельзя: признание — исход партии для него, а не уход.
+     */
+    @Column(name = "conceded_turn")
+    private Integer concededTurn;
+
+    /**
+     * Таймер жалости (backlog-promo, пункт 36): сколько разведанных подряд систем прошло без единой
+     * находки. Дорос до порога — следующая система с годной планетой приносит находку наверняка.
+     */
+    @Column(name = "dry_explorations", nullable = false)
+    private Integer dryExplorations = 0;
+
+    /**
+     * Глава партии этой империи — field-backlog, пункт 54 ({@code ChapterRules}): идёт только
+     * вперёд, и смену главы не с чем было бы сравнить, не помни её строка игрока.
+     */
+    @Column(name = "chapter", nullable = false)
+    private Integer chapter = 1;
+
+    /**
+     * Наставник — field-backlog, пункт 184: место в партии, которому УЧЕНИК показал свою империю.
+     * Называет его сам ученик; пусто — никому.
+     */
+    @Column(name = "mentor_player_id")
+    private UUID mentorPlayerId;
+
+    /**
+     * Чьи сообщения этот игрок не видит — field-backlog, пункт 16: идентификаторы мест партии через
+     * запятую; пусто — видит всех. Выключение своё у каждого и сказано только ему.
+     */
+    @Column(name = "muted_players", length = 512)
+    private String mutedPlayers;
+
+    public java.util.Set<UUID> mutedPlayerIds() {
+        java.util.Set<UUID> ids = new java.util.LinkedHashSet<>();
+        if (mutedPlayers != null && !mutedPlayers.isBlank()) {
+            for (String part : mutedPlayers.split(",")) {
+                ids.add(UUID.fromString(part.trim()));
+            }
+        }
+        return ids;
+    }
+
+    public void setMutedPlayerIds(java.util.Collection<UUID> ids) {
+        this.mutedPlayers = ids.isEmpty() ? null
+                : ids.stream().map(UUID::toString).collect(java.util.stream.Collectors.joining(","));
+    }
+
+    public Integer getChapter() {
+        return chapter;
+    }
+
+    public void setChapter(Integer chapter) {
+        this.chapter = chapter;
+    }
+
+    public UUID getMentorPlayerId() {
+        return mentorPlayerId;
+    }
+
+    public void setMentorPlayerId(UUID mentorPlayerId) {
+        this.mentorPlayerId = mentorPlayerId;
+    }
+
+    public Integer getDryExplorations() {
+        return dryExplorations;
+    }
+
+    public void setDryExplorations(Integer dryExplorations) {
+        this.dryExplorations = dryExplorations;
+    }
+
+    /**
+     * Отпуск — field-backlog, пункт 177: до этого мига империю ведёт ИИ, партия игрока не ждёт и
+     * не зовёт. В базе, а не в памяти присутствия ({@code PresenceService}): отпуск длится дни, и
+     * перезапуск сервера не должен его отменять. Пусто или в прошлом — отпуска нет.
+     */
+    @Column(name = "vacation_until")
+    private OffsetDateTime vacationUntil;
+
+    /** Пришёл по приглашению — field-backlog, пункт 15: сколько людей приводят ссылки. */
+    @Column(name = "invited", nullable = false)
+    private Boolean invited = Boolean.FALSE;
+
+    public OffsetDateTime getVacationUntil() {
+        return vacationUntil;
+    }
+
+    public void setVacationUntil(OffsetDateTime vacationUntil) {
+        this.vacationUntil = vacationUntil;
+    }
+
+    public Boolean getInvited() {
+        return invited;
+    }
+
+    public void setInvited(Boolean invited) {
+        this.invited = invited;
+    }
+
+    /**
+     * Когда человек последний раз действовал в партии — field-backlog, пункт 108: концом хода
+     * или входом в неё. Не каждым запросом: строка игрока держит версию, и запись из каждого
+     * действия роняла бы само действие на проверке версии (грабля PresenceService).
+     */
+    @Column(name = "last_action_at")
+    private java.time.OffsetDateTime lastActionAt;
+
+    /**
+     * Записка к партии — field-backlog, пункт 110: одна строка, которую игрок пишет себе сам
+     * («взять Сол к 80-му ходу»). Игра хранит состояние, но не намерение. Хранимый текст игрока:
+     * языка у него нет, словарь его не трогает, и видит его только он сам.
+     */
+    @Column(name = "note", length = 602)
+    private String note;
 
     @Column(name = "home_system_id")
     private UUID homeSystemId;
@@ -299,6 +425,21 @@ public class PlayerEntity {
         this.raceName = raceName;
     }
 
+    /**
+     * Очки эволюционной мутации, которые игрок ещё не потратил — п. 7 (перенос MOO II): после
+     * изучения технологии он выбирает новые стороны расы окном. Ноль — выбирать нечего.
+     */
+    @Column(name = "mutation_picks", nullable = false)
+    private Integer mutationPicks = 0;
+
+    public Integer getMutationPicks() {
+        return mutationPicks == null ? 0 : mutationPicks;
+    }
+
+    public void setMutationPicks(Integer mutationPicks) {
+        this.mutationPicks = mutationPicks == null ? 0 : mutationPicks;
+    }
+
     /** Коды особенностей расы; пустой список — раса без особенностей. */
     public List<String> getRaceTraitCodes() {
         return raceTraits == null || raceTraits.isBlank()
@@ -328,6 +469,42 @@ public class PlayerEntity {
 
     public UUID getAccountId() {
         return accountId;
+    }
+
+    public String getNote() {
+        return note;
+    }
+
+    public void setNote(String note) {
+        this.note = note;
+    }
+
+    public java.time.OffsetDateTime getLastActionAt() {
+        return lastActionAt;
+    }
+
+    public void setLastActionAt(java.time.OffsetDateTime lastActionAt) {
+        this.lastActionAt = lastActionAt;
+    }
+
+    public Integer getConcededTurn() {
+        return concededTurn;
+    }
+
+    public void setConcededTurn(Integer concededTurn) {
+        this.concededTurn = concededTurn;
+    }
+
+    /** Ответ на итог по могуществу: AGREE, REFUSE или пусто (09.10.2026, {@code MightConsentService}). */
+    @Column(name = "might_answer", length = 8)
+    private String mightAnswer;
+
+    public String getMightAnswer() {
+        return mightAnswer;
+    }
+
+    public void setMightAnswer(String mightAnswer) {
+        this.mightAnswer = mightAnswer;
     }
 
     public void setAccountId(UUID accountId) {
@@ -420,5 +597,13 @@ public class PlayerEntity {
 
     public void setVersion(Long version) {
         this.version = version;
+    }
+
+    public String getAiSkill() {
+        return aiSkill;
+    }
+
+    public void setAiSkill(String aiSkill) {
+        this.aiSkill = aiSkill;
     }
 }

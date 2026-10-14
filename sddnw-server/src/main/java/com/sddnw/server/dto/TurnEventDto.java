@@ -23,6 +23,9 @@ import java.util.UUID;
  * @param args     подстановки к ключу: имена, числа и ключи ярлыков перечислений
  * @param systemId система, которой касается событие; пусто — событие про всю империю
  * @param planetId планета, которой касается событие; пусто — событие не про планету
+ * @param success  это успех игрока — field-backlog, пункт 88: итоги хода ставят его своим разделом
+ *                 сразу после угроз. Правило одно с летописью ({@code MilestoneService.success});
+ *                 пусто — не успех
  */
 public record TurnEventDto(
         String code,
@@ -30,13 +33,14 @@ public record TurnEventDto(
         String key,
         List<String> args,
         UUID systemId,
-        UUID planetId
+        UUID planetId,
+        Boolean success
 ) {
 
     /** Событие, каким оно ложится в базу: ключ и подстановки, текста ещё нет. */
     public static TurnEventDto stored(String code, String key, List<String> args,
                                       UUID systemId, UUID planetId) {
-        return new TurnEventDto(code, null, key, args, systemId, planetId);
+        return new TurnEventDto(code, null, key, args, systemId, planetId, null);
     }
 
     /**
@@ -45,7 +49,8 @@ public record TurnEventDto(
      * Ключ и подстановки остаются: по ним видно, из чего собрана строка, а лишнего веса в
      * ответе они не дают — клиент читает {@code text}.
      */
-    public TurnEventDto shown(String ready) {
-        return new TurnEventDto(code, ready, key, args, systemId, planetId);
+    public TurnEventDto shown(String ready, Boolean success) {
+        return new TurnEventDto(code, ready, key, args, systemId, planetId,
+                Boolean.TRUE.equals(success) ? Boolean.TRUE : null);
     }
 }

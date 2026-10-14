@@ -1,11 +1,14 @@
 import { useState } from 'react';
-import type { Race } from '../../api/types';
+import type { Race, RaceTemplate } from '../../api/types';
 import { BannerSelectScreen } from './BannerSelectScreen';
-import type { BannerCode } from './banners';
+import { BANNERS, bannerTaken, type BannerCode } from './banners';
+import { gameApi } from '../../api/client';
+import { readAccount, writeAccount } from '../../state/session';
 import { RaceNameDialog, type RaceNames } from './RaceNameDialog';
 import { RacePicksScreen } from './RacePicksScreen';
 import { RaceSelectScreen } from './RaceSelectScreen';
 import { useT } from '../../i18n';
+import { chooseRaceTemplate } from '../../state/chosenRaceTemplate';
 
 export interface PlayerSetup {
   playerName: string;
@@ -72,10 +75,18 @@ export function RaceSetupFlow({
 }) {
   const { t } = useT();
   const [step, setStep] = useState<'select' | 'banner' | 'names' | 'picks'>('select');
-  const [chosenBanner, setChosenBanner] = useState<BannerCode | null>(banner);
+  // Своё знамя (пункт 144): не выбрано в этом сеансе — предлагается то, что игрок выбирает
+  // раз за разом, если оно свободно. Занятое знамя экран погасит сам.
+  const own = readAccount()?.account.banner as BannerCode | undefined;
+  const ownFree = own ? !bannerTaken(BANNERS.find((one) => one.code === own)?.hex ?? '', takenColors) : false;
+  const [chosenBanner, setChosenBanner] = useState<BannerCode | null>(banner ?? (ownFree ? own ?? null : null));
   const [names, setNames] = useState<RaceNames>({ raceName, playerName, homeStarName });
   // Выбранная готовая раса; null — игрок пошёл собирать свою.
   const [ready, setReady] = useState<Race | null>(null);
+  // Своя раса от готовой — пункт 123: стороны этой расы, с которых начнётся сборка.
+  const [base, setBase] = useState<Race | null>(null);
+  // Своя раса из записи — пункты 26 и 176: стороны и цены на миг сохранения.
+  const [owned, setOwned] = useState<RaceTemplate | null>(null);
 
   if (step === 'select') {
     return (
@@ -88,6 +99,23 @@ export function RaceSetupFlow({
         }}
         onCustom={() => {
           setReady(null);
+          setBase(null);
+          setOwned(null);
+          setStep('banner');
+        }}
+        onOwn={(template) => {
+          setReady(null);
+          setBase(null);
+          setOwned(template);
+          setNames((current) => ({ ...current, raceName: template.name }));
+          setStep('banner');
+        }}
+        onEdit={(race) => {
+          // Получившаяся раса — своя, с новым названием: имя готовой не переносится.
+          setReady(null);
+          setOwned(null);
+          setBase(race);
+          setNames((current) => ({ ...current, raceName: '' }));
           setStep('banner');
         }}
         onClose={onClose}
@@ -107,6 +135,15 @@ export function RaceSetupFlow({
           escapeActive={step === 'banner'}
           onPick={(picked) => {
             setChosenBanner(picked);
+            // Выбор знамени запоминает запись (пункт 144): в следующей партии оно предложится первым.
+            if (readAccount()?.account.banner !== picked) {
+              gameApi.saveBanner(picked).then((account) => {
+                const session = readAccount();
+                if (session) {
+                  writeAccount({ ...session, account });
+                }
+              }).catch(() => undefined);
+            }
             setStep('names');
           }}
           onBack={() => setStep('select')}
@@ -126,6 +163,7 @@ export function RaceSetupFlow({
                 return;
               }
               // Готовая раса собрана за игрока: стороны ей выдаст сервер по коду.
+              chooseRaceTemplate(null);
               onConfirm({
                 playerName: entered.playerName,
                 homeStarName: entered.homeStarName,
@@ -144,18 +182,27 @@ export function RaceSetupFlow({
   return (
     <RacePicksScreen
       raceName={names.raceName}
-      traits={raceTraits}
+      traits={owned ? owned.traits : base ? base.traits : raceTraits}
+      basedOn={base?.name}
+      saved={owned ? {
+        prices: Object.fromEntries((owned.details ?? [])
+          .filter((one) => one.savedPicks !== undefined).map((one) => [one.code, one.savedPicks!])),
+        free: owned.savedFree ?? 0,
+        templateId: owned.id,
+      } : undefined}
       confirmLabel={confirmLabel}
       onBack={() => setStep('names')}
-      onAccept={(traits) =>
+      onAccept={(traits) => {
+        // Раса из кабинета (пункт 99): заказ партии скажет серверу, какой расой она начата.
+        chooseRaceTemplate(owned?.id);
         onConfirm({
           playerName: names.playerName,
           homeStarName: names.homeStarName,
           raceName: names.raceName,
           raceTraits: traits,
           banner: chosenBanner ?? 'RED',
-        })
-      }
+        });
+      }}
     />
   );
 }

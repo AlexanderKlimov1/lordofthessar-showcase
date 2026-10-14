@@ -4,8 +4,13 @@ import { gameApi, GameApiError } from '../../api/client';
 import type { AccountSession, RegistrationChallenge } from '../../api/types';
 import { useT } from '../../i18n';
 import { markGuestPlay, writeAccount } from '../../state/session';
-import { LocaleSwitch } from '../LocaleSwitch';
-import { TextScaleSwitch } from '../TextScaleSwitch';
+import { funnelStep } from '../../state/funnel';
+import { CornerSwitches } from '../CornerSwitches';
+import { Logo } from '../brand/Logo';
+import { CoverGalaxy } from './CoverGalaxy';
+import { InstallButton } from '../InstallButton';
+import { pendingInvite } from '../../state/invite';
+import { ForgotPassword, ResetPassword } from './PasswordReset';
 
 /**
  * Вход в игру — п. 3.1: до партии игрок называет себя.
@@ -30,6 +35,9 @@ import { TextScaleSwitch } from '../TextScaleSwitch';
 export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSession) => void }) {
   const { t } = useT();
   const [mode, setMode] = useState<'login' | 'register'>('login');
+  /** Форма входа или регистрации раскрыта нажатием (редизайн экрана входа, 07.10.2026). */
+  // Гость, нажавший «войти» в главном меню, приходит сюда сразу к форме входа.
+  const [formOpen, setFormOpen] = useState(takeLoginFormRequest);
   /** Почта: она же логин — по ней и входят, и на неё приходит письмо. */
   const [email, setEmail] = useState('');
   /** Имя для интерфейса игры: на вход не влияет. */
@@ -38,8 +46,19 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  /** Запись боя на обложке нашлась: файла может не быть — он не в git. */
-  const [coverShown, setCoverShown] = useState(true);
+  /** Картинка обложки нашлась: файла может не быть — тогда обложкой остаётся Галактика. */
+  const [coverPhoto, setCoverPhoto] = useState(true);
+  /** Приглашение в партию друга (пункт 15): название партии — чтобы сказать, куда позвали. */
+  const [invited, setInvited] = useState<{ gameName?: string } | null>(pendingInvite() ? {} : null);
+  useEffect(() => {
+    const code = pendingInvite();
+    if (!code) {
+      return;
+    }
+    gameApi.invitePreview(code)
+      .then((preview) => setInvited({ gameName: preview.gameName }))
+      .catch(() => setInvited({}));
+  }, []);
   /**
    * Сколько секунд ждать, пока сервер не пускает к проверке пароля — п. 3.1.
    *
@@ -99,6 +118,18 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
     открытии, а из адреса стирается сразу — иначе перезагрузка страницы пыталась бы
     подтвердить почту повторно уже использованным кодом и пугала бы отказом.
   */
+  /**
+   * Ссылка сброса пароля (backlog-promo, пункт 45): `/?reset=<код>`. Код берётся из адреса один
+   * раз и тут же стирается — как у ссылки подтверждения.
+   */
+  const [resetToken, setResetToken] = useState<string | null>(() => {
+    const code = new URLSearchParams(window.location.search).get('reset');
+    if (code) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    return code;
+  });
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('confirm');
@@ -110,6 +141,7 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
     gameApi
       .confirmAccount(token)
       .then((session) => {
+        funnelStep('entry.confirm');
         writeAccount(session);
         onAuthorized(session);
       })
@@ -163,7 +195,13 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
       .guestAccount()
       .then((session) => {
         writeAccount(session);
-        markGuestPlay();
+        funnelStep('entry.guest');
+        // По приглашению (пункт 15) гость идёт за стол друга, а не в свою быструю партию.
+        if (pendingInvite() === null) {
+          markGuestPlay();
+        } else {
+          funnelStep('entry.invite');
+        }
         onAuthorized(session);
       })
       .catch((cause: unknown) => failure(cause, t('auth.error.guest')))
@@ -186,6 +224,7 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
         .loginAccount(email.trim(), password)
         .then((session) => {
           writeAccount(session);
+          funnelStep('entry.login');
           onAuthorized(session);
         })
         .catch(done)
@@ -197,6 +236,7 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
       .register(email.trim(), name.trim(), password, challenge?.id, challengeAnswer.trim())
       .then((result) => {
         // Регистрация не пускает в игру сама: пока почта не подтверждена, вход закрыт.
+        funnelStep('entry.register');
         setNotice(result.notice);
         setMode('login');
         setPassword('');
@@ -210,112 +250,121 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
       .finally(() => setBusy(false));
   };
 
+  // Форма открывается по «Войти» или «Регистрация»; сама — когда ей есть что сказать
+  // (ссылка сброса, ответ сервера после подтверждения почты, ошибка).
+  const showForm = formOpen || resetToken !== null || notice !== null || error !== null;
+
   return (
-    <div className="flex h-full w-full justify-center overflow-y-auto bg-space-950 p-4 lg:p-10">
+    /*
+      РЕДИЗАЙН ЭКРАНА ВХОДА (07.10.2026, решение хозяина проекта). Космонавт — во весь левый
+      край без рамки; справа знак, одна фраза о жанре и ДВЕ крупные кнопки: «Играть сейчас»
+      (гостем) и «Войти». Регистрация и сброс пароля — ссылками под ними, форма раскрывается по
+      нажатию, а не стоит стеной полей. Язык и размер текста — значками в углу.
+
+      Правило полноэкранных экранов этой игры то же: у страницы прокрутка скрыта ради карты,
+      поэтому правый столбец прокручивается сам (`overflow-y-auto` + `my-auto`, см. правила проекта).
+    */
+    <div className="relative flex h-full w-full bg-space-950">
       {/*
-        ДВА СТОЛБЦА: слева обложка, справа вход.
-
-        Прежде экран начинался прямо с формы входа, и человек, пришедший по ссылке, не
-        получал ни одного повода её заполнять: ни слова о том, что это за игра, ни
-        картинки. Нашлось это не чтением кода, а проходом по пути новичка (26.09.2026).
-
-        Обложка стоит РЯДОМ с формой, а не отдельным экраном с кнопкой «играть»: лишний
-        переход ничего не объясняет, зато отделяет пришедшего от входа. На узком окне
-        столбцы складываются в один — обложка сверху, форма под ней.
-
-        Внешняя пара `justify-center` + `overflow-y-auto` и `my-auto` у содержимого —
-        общее правило полноэкранных экранов этой игры: у страницы прокрутка скрыта ради
-        карты галактики, и то, что не поместилось, иначе не достать (см. правила проекта).
+        Обложка — космонавт на палубе корабля (05.10.2026). Берётся ПО АДРЕСУ, как портреты рас:
+        не нашёлся файл — обложкой остаётся медленно поворачивающаяся Галактика (CoverGalaxy).
+        На узком окне обложки нет: там важнее кнопки. Космонавт ВПИСАН, а не обрезан
+        (08.10.2026, решение хозяина проекта): `object-cover` на широком окне срезал его по колено.
+        Фон картинки чёрный, поэтому поля вокруг вписанной фигуры заливаются тем же чёрным.
       */}
-      <div className="my-auto flex w-full max-w-4xl flex-col gap-10 lg:flex-row lg:items-start">
-        <section className="w-full lg:flex-1">
-          <h1 className="text-2xl tracking-[0.3em] text-accent">{t('app.name')}</h1>
-          <p className="mt-1 text-xs uppercase tracking-[0.35em] text-ink-dim">
-            {t('app.tagline')}
-          </p>
-          {/*
-            На узком экране (телефон) колонки встают друг под друга, и «играть» уезжало под
-            описание и запись боя — до него приходилось листать (backlog-promo, пункт 21).
-            Здесь та же кнопка, видна только узкому экрану; на широком она стоит справа.
-          */}
-          <button
-            type="button"
-            className="mt-4 border border-accent px-4 py-2 text-accent lg:hidden"
-            disabled={busy || waitSeconds > 0}
-            onClick={playAsGuest}
-          >
-            ▸ {busy ? '…' : t('auth.guest.action')}
-          </button>
-          <div className="mt-6 space-y-3 text-sm leading-relaxed text-ink-soft">
-            <p>{t('cover.line1')}</p>
-            <p>{t('cover.line2')}</p>
-            <p>{t('cover.line3')}</p>
+      <figure className="relative hidden h-full w-1/2 overflow-hidden bg-black lg:block">
+        {coverPhoto ? (
+          <img
+            src="/brand/cover-astronaut.webp"
+            alt={t('cover.astronaut.alt')}
+            className="h-full w-full object-contain object-center"
+            onError={() => setCoverPhoto(false)}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <CoverGalaxy label={t('cover.galaxy.alt')} />
           </div>
+        )}
+        <div aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-24 bg-gradient-to-r from-transparent to-space-950" />
+      </figure>
+
+      <div className="absolute right-3 top-3 z-10 flex items-center gap-2">
+        <CornerSwitches />
+        {/* Установить игру — пункт 203: только где браузер это умеет. */}
+        <InstallButton className="text-13" />
+      </div>
+
+      <div className="flex flex-1 justify-center overflow-y-auto px-4 pb-6 pt-16">
+        <div className="my-auto w-full max-w-md">
+          <h1 className="flex justify-center">
+            <Logo height={3.25} mark="crown" />
+          </h1>
+          <p className="mt-3 text-center text-16 leading-relaxed text-ink-soft">{t('cover.short')}</p>
           {/*
-            Запись НАСТОЯЩЕГО боя этой игры, а не рисунок: показывать игру её собственным
-            кадром честнее всего, и кадр уже есть — его пишет tools/demo_battle_gif.py.
-
-            Берётся ПО АДРЕСУ, а не импортом в сборку. Анимации игре нужны, но в git их
-            пока нет (.gitignore, решение хозяина проекта), а импорт делал файл условием
-            сборки: свежий клон без GIF не собирался бы вовсе. Файл лежит в
-            sddnw-client/public/, Vite кладёт его в корень сборки, и сервер отдаёт его
-            рядом с игрой.
-
-            Нет файла — нет и рамки: пустой прямоугольник с подписью «бой, как его играет
-            сама игра» читался бы как поломка обложки, а без картинки обложка остаётся
-            тремя предложениями и ничего не теряет, кроме наглядности.
+            Пришёл по приглашению (пункты 15 и 61) — сказано первым делом: войти можно гостем,
+            без почты, и партия друга откроется сразу после входа.
           */}
-          {coverShown ? (
-            <figure className="mt-6">
-              <img
-                src="/demo-battle.gif"
-                alt={t('cover.battle.alt')}
-                className="w-full border border-space-600"
-                onError={() => setCoverShown(false)}
-              />
-              <figcaption className="mt-2 text-11 text-ink-faint">
-                {t('cover.battle.caption')}
-              </figcaption>
-            </figure>
+          {invited ? (
+            <p className="mt-4 border border-lamp/60 px-3 py-2 text-sm text-lamp">
+              {invited.gameName ? t('auth.invited', { game: invited.gameName }) : t('auth.invitedPlain')}
+            </p>
           ) : null}
-        </section>
 
-        <div className="w-full lg:max-w-md">
-        <header className="mb-6 flex items-start justify-end gap-4">
-          <div className="flex flex-col items-end gap-1">
-            <LocaleSwitch />
-            <TextScaleSwitch />
+          {/*
+            Две крупные кнопки. «Играть сейчас» — главное действие страницы (backlog-promo, пункты 1
+            и 29): пришедшему нужно сперва поиграть, а регистрироваться — когда появится что терять.
+          */}
+          <div className="mt-8 flex flex-col gap-3">
+            <button
+              type="button"
+              className="rounded-md border-2 border-accent bg-gradient-to-b from-space-700 to-space-800 px-5 py-3 text-20 uppercase tracking-[0.2em] text-ink-bright shadow-[0_0_18px_rgba(230,168,74,0.18)] hover:from-space-600 disabled:cursor-wait"
+              disabled={busy || waitSeconds > 0}
+              onClick={playAsGuest}
+            >
+              {busy && !showForm ? '…' : t('auth.guest.action')}
+            </button>
+            <button
+              type="button"
+              className={'rounded-md border-2 px-5 py-3 text-20 uppercase tracking-[0.2em] hover:border-accent hover:text-accent '
+                + (showForm && mode === 'login' ? 'border-accent text-accent' : 'border-space-600 text-ink')}
+              disabled={busy}
+              onClick={() => {
+                setMode('login');
+                setFormOpen(true);
+              }}
+            >
+              {t('auth.submit.login')}
+            </button>
           </div>
-        </header>
+          <p className="mt-2 text-center text-13 text-ink-faint">{t('auth.guest.hint')}</p>
 
-        {/*
-          ИГРА БЕЗ РЕГИСТРАЦИИ — backlog-promo, пункт 1. Стоит ВЫШЕ формы входа нарочно:
-          пришедшему по ссылке нужно сперва поиграть, а регистрироваться — тогда, когда
-          появится что терять. Четыре шага до первой партии (форма, задачка, письмо,
-          ссылка) отсекали людей раньше, чем они видели игру.
-        */}
-        <section className="panel mb-4">
-          <div className="panel-title">{t('auth.guest.title')}</div>
-          <p className="mb-3 text-xs text-ink-soft">{t('auth.guest.hint')}</p>
-          {/* Кнопкой, а не ссылкой (backlog-promo, пункт 29): это главное действие страницы,
-              и весом оно не должно равняться «Войти» под ним. */}
-          <button
-            type="button"
-            className="border border-accent bg-space-800 px-5 py-2 text-15 uppercase tracking-[0.2em] text-accent hover:bg-space-700 disabled:cursor-wait"
-            disabled={busy || waitSeconds > 0}
-            onClick={playAsGuest}
-          >
-            ▸ {busy ? '…' : t('auth.guest.action')}
-          </button>
-        </section>
-
-        <section className="panel">
-          <div className="panel-title">
-            {mode === 'login' ? t('auth.title.login') : t('auth.title.register')}
+          <div className="mt-4 flex flex-wrap items-baseline justify-center gap-x-6 gap-y-2 text-14">
+            <button
+              type="button"
+              className="link"
+              disabled={busy}
+              onClick={() => {
+                setMode('register');
+                setFormOpen(true);
+                setError(null);
+                setNotice(null);
+              }}
+            >
+              {t('auth.switch.register')}
+            </button>
+            {/* Забыли пароль (пункт 45) — ссылкой рядом с регистрацией. */}
+            {!resetToken ? <ForgotPassword disabled={busy} /> : null}
           </div>
 
+          {showForm ? (
+            <section className="panel mt-6">
+              <div className="panel-title">
+                {mode === 'login' ? t('auth.title.login') : t('auth.title.register')}
+              </div>
+              <div>
           {error ? (
             <div className="mb-3 border border-red-800 bg-red-950/40 px-3 py-2 text-xs text-danger">
+              <span aria-hidden className="mr-1">⚠</span>
               {error}
             </div>
           ) : null}
@@ -325,6 +374,10 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
             </div>
           ) : null}
 
+          {/* Новый пароль по ссылке из письма (backlog-promo, пункт 45) — вместо формы входа. */}
+          {resetToken ? (
+            <ResetPassword token={resetToken} onAuthorized={onAuthorized} onCancel={() => setResetToken(null)} />
+          ) : (
           <form onSubmit={submit}>
             <label className="mb-3 block text-xs text-ink-soft">
               {mode === 'login' ? t('auth.email.login') : t('auth.email.register')}{' '}
@@ -431,6 +484,7 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
               </button>
             </div>
           </form>
+          )}
 
           {/*
             Повторная отправка стоит на форме входа, а не регистрации: сюда приходит тот,
@@ -450,11 +504,35 @@ export function AuthScreen({ onAuthorized }: { onAuthorized: (session: AccountSe
               </button>
             </p>
           ) : null}
-        </section>
-
-        <p className="mt-4 text-11 leading-relaxed text-ink-faint">{t('auth.footer')}</p>
+              </div>
+              {mode === 'register' ? (
+                <p className="mt-3 text-11 leading-relaxed text-ink-faint">{t('auth.footer')}</p>
+              ) : null}
+            </section>
+          ) : null}
         </div>
       </div>
     </div>
   );
+}
+
+const LOGIN_FORM_KEY = 'sddnw.auth.loginForm';
+
+/** Гость просит войти в свою запись (главное меню): экран входа откроется формой входа. */
+export function requestLoginForm(): void {
+  try {
+    window.sessionStorage.setItem(LOGIN_FORM_KEY, '1');
+  } catch {
+    // Без хранилища экран откроется обычным — с кнопкой входа, до неё один щелчок.
+  }
+}
+
+function takeLoginFormRequest(): boolean {
+  try {
+    const asked = window.sessionStorage.getItem(LOGIN_FORM_KEY) === '1';
+    window.sessionStorage.removeItem(LOGIN_FORM_KEY);
+    return asked;
+  } catch {
+    return false;
+  }
 }

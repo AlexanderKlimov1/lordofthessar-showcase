@@ -7,6 +7,7 @@ import com.sddnw.server.dto.ColonyProjectDto;
 
 import java.util.Collection;
 import java.util.Map;
+import java.util.function.ToIntFunction;
 
 /**
  * Что колония возьмёт строить сама — кнопка {@code AUTO BUILD} оригинала, п. 10.
@@ -41,12 +42,25 @@ public final class AutoBuildRules {
                                     PopulationJobs jobs,
                                     Collection<ColonyProjectDto> available,
                                     Integer horizon) {
+        return worthwhile(catalog, jobs, available, horizon, building -> 0);
+    }
+
+    /**
+     * То же с пользой здания на ЭТОЙ колонии сверх прямой выработки — {@code relief}
+     * ({@code ColonyService.reliefGain}: снятая уборка грязи, штраф тяжести, налог; 14.10.2026).
+     */
+    public static String worthwhile(Map<String, Building> catalog,
+                                    PopulationJobs jobs,
+                                    Collection<ColonyProjectDto> available,
+                                    Integer horizon,
+                                    ToIntFunction<Building> relief) {
         String best = null;
         Integer bestTurns = null;
         Integer bestCost = null;
         for (ColonyProjectDto project : available) {
             Building building = catalog.get(project.code());
-            Integer turns = AiEmpireService.paybackTurns(building, jobs);
+            Integer turns = AiEmpireService.paybackTurns(building, jobs,
+                    building == null ? 0 : relief.applyAsInt(building));
             if (turns == null || (horizon != null && turns > horizon)) {
                 continue;
             }
@@ -77,11 +91,19 @@ public final class AutoBuildRules {
     public static String next(Map<String, Building> catalog,
                               PopulationJobs jobs,
                               Collection<ColonyProjectDto> available) {
+        return next(catalog, jobs, available, building -> 0);
+    }
+
+    /** То же с пользой здания на этой колонии — {@link #worthwhile(Map, PopulationJobs, Collection, Integer, ToIntFunction)}. */
+    public static String next(Map<String, Building> catalog,
+                              PopulationJobs jobs,
+                              Collection<ColonyProjectDto> available,
+                              ToIntFunction<Building> relief) {
         Collection<ColonyProjectDto> buildings = available.stream()
                 .filter(project -> catalog.containsKey(project.code()))
                 .filter(project -> !Boolean.TRUE.equals(ColonyProject.endless(project.code())))
                 .toList();
-        String payback = worthwhile(catalog, jobs, buildings, null);
+        String payback = worthwhile(catalog, jobs, buildings, null, relief);
         if (payback != null) {
             return payback;
         }

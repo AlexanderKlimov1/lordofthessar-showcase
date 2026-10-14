@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Личный кабинет: уникальный игровой код записи — обычный счётчик по порядку заведения.
+        Существующим записям номера раздаются тем же порядком (по дате заведения), затем
+        счётчик продолжает с последнего. Номер не переиспользуется: последовательность не
+        откатывается и после удаления записи.
+    -->
+    <changeSet id="128-account-player-code" author="sddnw">
+        <createSequence sequenceName="account_code_seq" startValue="1" incrementBy="1"/>
+        <addColumn tableName="account">
+            <column name="player_code" type="bigint"/>
+        </addColumn>
+        <sql>
+            UPDATE account SET player_code = numbered.n
+            FROM (SELECT id, row_number() OVER (ORDER BY created_at, id) AS n FROM account) numbered
+            WHERE account.id = numbered.id;
+            SELECT setval('account_code_seq', COALESCE((SELECT max(player_code) FROM account), 0) + 1, false);
+        </sql>
+        <addDefaultValue tableName="account" columnName="player_code" defaultValueSequenceNext="account_code_seq"/>
+        <addNotNullConstraint tableName="account" columnName="player_code" columnDataType="bigint"/>
+        <addUniqueConstraint tableName="account" columnNames="player_code" constraintName="uq_account_player_code"/>
+    </changeSet>
+
+    <!-- Советник (пункт 23) и сцены, увиденные целиком (пункт 163). -->
+    <changeSet id="128-account-advisor-scenes" author="sddnw">
+        <addColumn tableName="account">
+            <column name="advisor" type="boolean"/>
+            <column name="seen_scenes" type="varchar(512)"/>
+        </addColumn>
+    </changeSet>
+
+    <!-- Снимок справочника у проекта библиотеки (пункт 176): что поменяла балансировка. -->
+    <changeSet id="128-ship-template-specs" author="sddnw">
+        <addColumn tableName="ship_template">
+            <column name="specs" type="varchar(8000)"/>
+        </addColumn>
+    </changeSet>
+
+    <!--
+        Свои расы (пункты 26 и 176): составом и со снимком цен на миг сохранения. Внешнего ключа
+        на запись нет — как у библиотеки проектов (миграция 127).
+    -->
+    <changeSet id="128-race-template" author="sddnw">
+        <createTable tableName="race_template">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="traits" type="varchar(1000)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="prices" type="varchar(2000)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="spent" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="budget" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="race_template" indexName="idx_race_template_account">
+            <column name="account_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!--
+        Своё — на виду (пункт 98): сколько кораблей построено по проекту и свои проекты в
+        истории партий — «ваш лучший проект».
+    -->
+    <changeSet id="128-ship-design-built" author="sddnw">
+        <addColumn tableName="ship_design">
+            <column name="built" type="int" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="128-game-record-designs" author="sddnw">
+        <addColumn tableName="game_record">
+            <column name="designs" type="varchar(1000)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

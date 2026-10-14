@@ -5,9 +5,13 @@ import { readAccount } from '../state/session';
 import { locale, t, tf, useT } from '../i18n';
 import { Figure } from './Figure';
 import { figureLabelClass } from './accent';
+import { galaxySizeName } from './planetLabels';
+import { ActionError } from './feedback/ActionError';
 
 interface LoadGameDialogProps {
   onLoad: (saveId: string) => void;
+  /** Партия из файла — field-backlog, пункт 160: содержимое файла, выгруженного игроком. */
+  onImport?: (content: string) => void;
   onClose: () => void;
 }
 
@@ -32,7 +36,7 @@ interface LoadGameDialogProps {
  * нет — слепок партии стирается насовсем, и переспросить об этом дешевле, чем потерять
  * партию от одного промаха.
  */
-export function LoadGameDialog({ onLoad, onClose }: LoadGameDialogProps) {
+export function LoadGameDialog({ onLoad, onImport, onClose }: LoadGameDialogProps) {
   const [saves, setSaves] = useState<GameSave[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +136,7 @@ export function LoadGameDialog({ onLoad, onClose }: LoadGameDialogProps) {
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {saves === null ? <p className="text-xs text-ink-dim">{t('load.loading')}</p> : null}
 
-          {error ? <p className="text-xs text-danger">{error}</p> : null}
+          {error ? <ActionError className="text-xs" message={error} /> : null}
 
           {saves !== null && saves.length === 0 && !error ? (
             <p className="text-xs text-ink-dim">
@@ -170,7 +174,7 @@ export function LoadGameDialog({ onLoad, onClose }: LoadGameDialogProps) {
                     </td>
                     <td className="py-1">{turnLabel(save.turn)}</td>
                     <td className={`py-1 ${figureLabelClass('value')}`}>
-                      {tf('load.galaxy', { size: save.galaxySize, w: <Figure accent="value">{save.widthParsecs}</Figure>, h: <Figure accent="value">{save.heightParsecs}</Figure>, stars: <Figure accent="value">{save.starCount}</Figure> })}
+                      {tf('load.galaxy', { size: galaxySizeName(save.galaxySize), w: <Figure accent="value">{save.widthParsecs}</Figure>, h: <Figure accent="value">{save.heightParsecs}</Figure>, stars: <Figure accent="value">{save.starCount}</Figure> })}
                     </td>
                     <td className={`py-1 ${figureLabelClass('value')}`}>
                       {tf('load.players', { humans: <Figure accent="value">{save.humanPlayers}</Figure>, total: <Figure accent="value">{save.totalPlayers}</Figure> })}
@@ -208,6 +212,27 @@ export function LoadGameDialog({ onLoad, onClose }: LoadGameDialogProps) {
             {admin ? t('load.footer.admin') : ''}
           </span>
           <div className="flex gap-4">
+            {/*
+              Из файла (пункт 160): только одиночная партия, и в историю партий она не идёт — файл
+              мог быть поправлен руками. Это сказано подсказкой у кнопки.
+            */}
+            {/* Из файла — только администратору и модератору (08.10.2026, решение хозяина проекта). */}
+            {onImport && ['ADMIN', 'MODERATOR'].includes(readAccount()?.account.role ?? '') ? (
+              <label className="link cursor-pointer text-xs" title={t('load.file.hint')}>
+                {t('load.file')}
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                      void file.text().then(onImport);
+                    }
+                  }}
+                />
+              </label>
+            ) : null}
             <button type="button" className="link text-xs" onClick={onClose}>
               {t('common.cancel')}
             </button>

@@ -31,6 +31,8 @@ export function BattleBar({
   onPass,
   onRetreat,
   onSelfDestruct,
+  boarding,
+  onBoard,
   onScan,
   onOptions,
   onClose,
@@ -50,13 +52,21 @@ export function BattleBar({
   onRetreat: () => void;
   /** Самоподрыв — п. 8: гарантированный взрыв своего корабля по воле игрока. */
   onSelfDestruct: () => void;
+  /** Включённый режим — абордаж или рейд — и переключатель его (п. 8, кнопка BOARD оригинала). */
+  boarding: 'BOARD' | 'RAID' | null;
+  onBoard: (mode: 'BOARD' | 'RAID') => void;
   onScan: () => void;
   onOptions: () => void;
   onClose: () => void;
 }) {
   useT();
   return (
-    <footer className="flex flex-none gap-2 border-t-2 border-space-700 bg-space-900/50 p-2">
+    /*
+      На узком окне полоса ПЕРЕНОСИТСЯ (`flex-wrap`), а не сжимает оружие: прочие сегменты
+      фиксированной ширины, и колонка оружия (`flex-1`) сжималась до нуля — выбрать стволы
+      перед залпом было нельзя. Так же устроена нижняя полоса карты (правила проекта).
+    */
+    <footer className="flex flex-none flex-wrap gap-2 border-t-2 border-space-700 bg-space-900/50 p-2">
       <ShipCard ship={ship} mine={mine} demo={demo} />
       <Loadout ship={ship} rows={weaponRows} canChoose={mine && !busy && !ship?.fired}
                onToggle={onToggleWeapon} />
@@ -68,7 +78,11 @@ export function BattleBar({
         canScan={ship !== null}
         onPass={onPass}
         onRetreat={onRetreat}
+        canRetreat={ship !== null && !ship.platform && !ship.immobile && !ship.engineWrecked}
         onSelfDestruct={onSelfDestruct}
+        boarding={boarding}
+        canBoard={(ship?.marines ?? 0) > 0}
+        onBoard={onBoard}
         onScan={onScan}
         onOptions={onOptions}
         onClose={onClose}
@@ -123,6 +137,10 @@ function ShipCard({ ship, mine, demo }: { ship: BattleShip | null; mine: boolean
       <span className="truncate px-2 text-12 text-ink-dim">
         {demo ? ship.ownerName : mine ? t('battle.bar.yourTurn') : t('battle.bar.theirTurn')}
       </span>
+      {/* Своё — на виду (пункт 98): проект, собранный самим игроком, назван так прямо в бою. */}
+      {!demo && ship.yours && ship.crafted ? (
+        <span className="truncate px-2 text-12 text-lamp">✎ {t('battle.bar.yourDesign')}</span>
+      ) : null}
       {/*
         Сделан ли залп этим кораблём: стрелять он может раз за ход, и без этой строки
         игрок узнавал бы об этом отказом сервера. Остаток хода стоит рядом, в ящике систем.
@@ -130,8 +148,14 @@ function ShipCard({ ship, mine, demo }: { ship: BattleShip | null; mine: boolean
       <span className="truncate px-2 text-12 text-ink-faint">
         {ship.fired ? t('battle.bar.fired') : t('battle.bar.ready')}
       </span>
+      {/* Пехота на борту — ею берут на абордаж и ею же отбиваются (п. 8). */}
+      <span className="truncate px-2 text-12 text-ink-faint">
+        {ship.captured
+          ? t('battle.bar.capturedMarines', { n: ship.marines })
+          : t('battle.bar.marines', { n: ship.marines })}
+      </span>
       <div className="space-y-0.5 p-1">
-        <Bar value={ship.shield} max={Math.max(ship.shield, 1)} color="#7dd3fc" />
+        <Bar value={ship.shield} max={Math.max(ship.maxShield ?? ship.shield, 1)} color="#7dd3fc" />
         <Bar value={ship.armour} max={Math.max(ship.maxArmour, 1)} color="#fbbf24" />
         <Bar value={ship.structure} max={Math.max(ship.maxStructure, 1)} color="#f87171" />
       </div>
@@ -181,7 +205,7 @@ function Loadout({ ship, rows, canChoose, onToggle }: {
   const weapons = ship?.weapons ?? [];
   const specials = ship?.specials ?? [];
   return (
-    <Segment className="min-w-0 flex-1">
+    <Segment className="min-w-64 flex-1">
       <span className="flex border-b border-space-800 text-13">
         <Tab active={tab === 'WEAPON'} onClick={() => setTab('WEAPON')}>
           {t('battle.bar.weapons')}
@@ -296,7 +320,11 @@ function Actions({
   canScan,
   onPass,
   onRetreat,
+  canRetreat,
   onSelfDestruct,
+  boarding,
+  canBoard,
+  onBoard,
   onScan,
   onOptions,
   onClose,
@@ -308,7 +336,12 @@ function Actions({
   canScan: boolean;
   onPass: () => void;
   onRetreat: () => void;
+  /** Кораблю есть чем уйти: не платформа и не обездвижен. */
+  canRetreat: boolean;
   onSelfDestruct: () => void;
+  boarding: 'BOARD' | 'RAID' | null;
+  canBoard: boolean;
+  onBoard: (mode: 'BOARD' | 'RAID') => void;
   onScan: () => void;
   onOptions: () => void;
   onClose: () => void;
@@ -321,13 +354,29 @@ function Actions({
         <Action onClick={onScan} disabled={!canScan}>
           {t('battle.action.scan')}
         </Action>
-        <Action onClick={onRetreat} disabled={demo || !mine || busy || over}>
+        {/*
+          Отход — приказ ЭТОМУ кораблю (п. 8): он разворачивается и уйдёт в свой следующий ход.
+          Неподвижному и платформе уходить нечем — кнопка гаснет, а не отказывает после нажатия.
+        */}
+        <Action onClick={onRetreat}
+                disabled={demo || !mine || busy || over || !canRetreat}>
           {t('battle.action.retreat')}
         </Action>
         <Action onClick={onPass} disabled={busyNow}>
           {t('battle.action.done')}
         </Action>
         <Action onClick={onOptions}>{t('battle.action.options')}</Action>
+        {/*
+          Абордаж и рейд — п. 8, кнопка BOARD оригинала («to either raid or attempt to capture»):
+          включают выбор цели, и щелчок по чужому кораблю в досягаемости отправляет на него
+          пехоту. Повторное нажатие выбор снимает.
+        */}
+        <Action danger={boarding === 'BOARD'} disabled={busyNow || !canBoard} onClick={() => onBoard('BOARD')}>
+          {boarding === 'BOARD' ? t('battle.action.boardPick') : t('battle.action.board')}
+        </Action>
+        <Action danger={boarding === 'RAID'} disabled={busyNow || !canBoard} onClick={() => onBoard('RAID')}>
+          {boarding === 'RAID' ? t('battle.action.raidPick') : t('battle.action.raid')}
+        </Action>
         <span className="col-span-2">
           <Action
             wide
@@ -467,7 +516,7 @@ function Row({
  * расстановку.
  */
 function MiniMap({ battle }: { battle: Battle }) {
-  const alive = battle.ships.filter((ship) => !ship.destroyed);
+  const alive = battle.ships.filter((ship) => !ship.destroyed && !ship.retreated);
   return (
     <Segment className="w-56 flex-none">
       <svg viewBox={`0 0 ${battle.width} ${battle.height}`} className="min-h-0 flex-1 bg-space-950">

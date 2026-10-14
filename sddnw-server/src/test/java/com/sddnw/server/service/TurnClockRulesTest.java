@@ -30,6 +30,22 @@ class TurnClockRulesTest {
     }
 
     @Test
+    @DisplayName("ИИ берёт империю по безделью, а на последнем пропущенном сроке — раньше, если он ближе")
+    void takeoverAt() {
+        OffsetDateTime acted = START.plusSeconds(30);
+        assertEquals(acted.plus(TurnClockRules.IDLE), TurnClockRules.takeoverAt(acted, 0, START, null),
+                "без срока хода — только безделье");
+        assertEquals(acted.plus(TurnClockRules.IDLE), TurnClockRules.takeoverAt(acted, 0, START, 90),
+                "срок не последний: пропуск не передаёт империю");
+        assertEquals(START.plusSeconds(90),
+                TurnClockRules.takeoverAt(acted, TurnClockRules.MISSED_LIMIT - 1, START, 90),
+                "последний пропущенный срок ближе безделья — он и решает");
+        assertEquals(acted.plus(TurnClockRules.IDLE),
+                TurnClockRules.takeoverAt(acted, TurnClockRules.MISSED_LIMIT - 1, START, 600),
+                "срок дальше безделья — решает безделье");
+    }
+
+    @Test
     @DisplayName("Срок истекает ровно через назначенное число секунд от начала хода")
     void expiresOnTime() {
         assertFalse(TurnClockRules.expired(START, 90, START.plusSeconds(89)));
@@ -41,8 +57,13 @@ class TurnClockRulesTest {
     @Test
     @DisplayName("Три минуты без действия — ушёл")
     void idleAfterThreeMinutes() {
-        assertFalse(TurnClockRules.idle(START, START.plusSeconds(179)));
-        assertTrue(TurnClockRules.idle(START, START.plusSeconds(180)));
+        assertFalse(TurnClockRules.idle(START, START.plusSeconds(179), null));
+        assertTrue(TurnClockRules.idle(START, START.plusSeconds(180), null));
+        // Медленная партия (пункт 64): ушедшим называют только пропущенные сроки, а не три минуты.
+        assertFalse(TurnClockRules.idle(START, START.plusSeconds(7200), 4 * 3600));
+        assertNull(TurnClockRules.takeoverAt(START, 0, START, 4 * 3600));
+        assertEquals(START.plusSeconds(24 * 3600),
+                TurnClockRules.takeoverAt(START, TurnClockRules.MISSED_LIMIT - 1, START, 24 * 3600));
     }
 
     @Test

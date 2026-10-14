@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -79,6 +80,7 @@ public class EspionageService {
     private final RaceService raceService;
     private final DiplomacyService diplomacyService;
     private final LeaderBonusService leaderBonuses;
+    private final ResearchCatalog researchCatalog;
 
     public EspionageService(Messages messages,
                             SpyRepository spyRepository,
@@ -88,8 +90,10 @@ public class EspionageService {
                             RaceService raceService,
                             DiplomacyService diplomacyService,
                             LeaderBonusService leaderBonuses,
-                            EmpireActivityService activity) {
+                            EmpireActivityService activity,
+                            ResearchCatalog researchCatalog) {
         this.messages = messages;
+        this.researchCatalog = researchCatalog;
         this.leaderBonuses = leaderBonuses;
         this.activity = activity;
         this.spyRepository = spyRepository;
@@ -128,14 +132,41 @@ public class EspionageService {
      * империи — п. 6. Пустой конторе они не помогают: процент от нуля — ноль, и в MOO II
      * защищаться без агентов офицер тоже не может.
      */
-    public Integer defense(PlayerEntity player, List<SpyEntity> ownSpies, Integer leaderPercent) {
+    public Integer defense(PlayerEntity player, List<SpyEntity> ownSpies, Integer leaderPercent,
+                           Integer techPoints) {
         long counters = ownSpies.stream().filter(spy -> spy.getMission() == SpyMission.COUNTER).count();
         RaceEffects race = raceService.effects(player);
         // Правительство добавляет только к обороне — п. 14: диктатура и объединение
         // крепче держат своё, демократия слабее, но воровать чужое это никому не помогает.
         // Ниже нуля контрразведка не опускается: слабый строй просто не мешает шпионам.
-        int perCounter = POINTS_PER_SPY + Math.max(0, race.espionagePoints()) + race.espionageDefensePoints();
+        // Подготовка от технологий идёт и сюда: в MOO II она «for both Spies and Agents».
+        int perCounter = POINTS_PER_SPY + Math.max(0, race.espionagePoints()) + race.espionageDefensePoints()
+                + techPoints;
         return (int) counters * Math.max(0, perCounter) * (100 + leaderPercent) / 100;
+    }
+
+    /**
+     * Подготовка разведки от изученного — п. 13 (13.10.2026, перенос MOO II): нейросканер и
+     * сеть кибербезопасности дают по +10, псионика +10, телепатическая подготовка +5 «for
+     * both Spies and Agents».
+     * <p>
+     * Шкалы у нас нет процентной — агент набирает очки, — и единицы оригинала переводятся тем
+     * же курсом, что и расовые стороны: «хорошие шпионы» MOO II (+10) у нас одно очко. Десять
+     * единиц — очко, остаток округляется до ближайшего (реконструкция): без этого
+     * телепатическая подготовка с её +5 не давала бы ничего вовсе.
+     */
+    public Integer techPoints(Collection<String> technologyCodes) {
+        int units = researchCatalog.effectsOf(technologyCodes).espionageTraining();
+        return Math.max(0, (units + TRAINING_UNITS_PER_POINT / 2) / TRAINING_UNITS_PER_POINT);
+    }
+
+    /** Единиц подготовки MOO II на очко нашей разведки — тот же курс, что у расовых сторон. */
+    static final int TRAINING_UNITS_PER_POINT = 10;
+
+    private Integer techPoints(UUID playerId) {
+        return techPoints(technologyRepository.findAllByPlayerIdIn(List.of(playerId)).stream()
+                .map(PlayerTechnologyEntity::getOptionCode)
+                .toList());
     }
 
     /** Состояние разведки игрока для клиента — п. 13. */
@@ -150,7 +181,7 @@ public class EspionageService {
                 pointsPerTurn(race, atHome(spies).size(), bonuses.empireValue("SPY_MASTER")),
                 race.espionagePoints(),
                 spies.size(),
-                defense(player, spies, espionageDefence(bonuses)),
+                defense(player, spies, espionageDefence(bonuses), techPoints(player.getId())),
                 spies.stream()
                         .sorted(Comparator.comparing(SpyEntity::getCreatedTurn))
                         .map(spy -> toDto(spy, targets))
@@ -232,12 +263,21 @@ public class EspionageService {
         // хода заставляет Hibernate сбрасывать в базу всё, что ход успел изменить.
         Map<UUID, LeaderBonusService.Bonuses> officers = leaderBonuses.of(byId.keySet());
 
+        // Подготовка от изученного — одной выборкой на всех: изнутри посчитанного хода запрос
+        // «на игрока» сбрасывал бы в базу всё, что ход успел изменить.
+        Map<UUID, Integer> training = new java.util.HashMap<>();
+        technologyRepository.findAllByPlayerIdIn(byId.keySet()).stream()
+                .collect(Collectors.groupingBy(PlayerTechnologyEntity::getPlayerId,
+                        Collectors.mapping(PlayerTechnologyEntity::getOptionCode, Collectors.toList())))
+                .forEach((id, codes) -> training.put(id, techPoints(codes)));
+
         // Контрразведка считается один раз на всех: она у империи общая — п. 13.
         Map<UUID, Integer> defenceByPlayer = players.stream()
                 .collect(Collectors.toMap(PlayerEntity::getId,
                         player -> defense(player, byOwner.getOrDefault(player.getId(), List.of()),
                                 espionageDefence(officers.getOrDefault(player.getId(),
-                                        LeaderBonusService.Bonuses.empty())))));
+                                        LeaderBonusService.Bonuses.empty())),
+                                training.getOrDefault(player.getId(), 0))));
 
         List<SpyEntity> caught = new ArrayList<>();
         for (PlayerEntity player : players) {
@@ -257,7 +297,8 @@ public class EspionageService {
                     continue;
                 }
                 Integer defence = defenceByPlayer.getOrDefault(spy.getTargetPlayerId(), 0);
-                Integer attack = POINTS_PER_SPY + Math.max(0, race.espionagePoints());
+                Integer attack = POINTS_PER_SPY + Math.max(0, race.espionagePoints())
+                        + training.getOrDefault(player.getId(), 0);
                 spy.setPoints(spy.getPoints() + attack - defence);
 
                 if (spy.getPoints() < 0) {

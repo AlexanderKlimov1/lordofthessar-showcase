@@ -9,6 +9,7 @@ import com.sddnw.server.dto.LoginRequest;
 import com.sddnw.server.dto.RegisterRequest;
 import com.sddnw.server.dto.RegisterResultDto;
 import com.sddnw.server.dto.SessionDto;
+import com.sddnw.server.dto.SoundRequest;
 import com.sddnw.server.dto.TextScaleRequest;
 import com.sddnw.server.service.AccountService;
 import com.sddnw.server.service.RegistrationChallenge;
@@ -43,9 +44,12 @@ public class AuthController {
 
     private final AccountService accountService;
     private final RegistrationChallenge registrationChallenge;
+    private final com.sddnw.server.service.EntitlementService entitlementService;
 
     public AuthController(AccountService accountService,
-                          RegistrationChallenge registrationChallenge) {
+                          RegistrationChallenge registrationChallenge,
+                          com.sddnw.server.service.EntitlementService entitlementService) {
+        this.entitlementService = entitlementService;
         this.accountService = accountService;
         this.registrationChallenge = registrationChallenge;
     }
@@ -107,6 +111,72 @@ public class AuthController {
         return accountService.guest(clientAddress(http));
     }
 
+    /**
+     * Гость регистрируется, не теряя партий, — field-backlog, пункт 1: та же запись получает
+     * почту и пароль, а игроком становится по ссылке из письма.
+     */
+    @PostMapping("/guest/register")
+    public RegisterResultDto upgradeGuest(@Valid @RequestBody RegisterRequest request,
+                                          @AccountToken String accountToken,
+                                          HttpServletRequest http) {
+        return accountService.upgradeGuest(accountToken, request, clientAddress(http));
+    }
+
+    /** Попросить ссылку сброса пароля — backlog-promo, пункт 45; ответ один, есть запись или нет. */
+    @PostMapping("/reset/request")
+    public java.util.Map<String, String> requestReset(@Valid @RequestBody com.sddnw.server.dto.PasswordResetRequest request,
+                                                      HttpServletRequest http) {
+        return java.util.Map.of("notice", accountService.requestReset(request.email(), clientAddress(http)));
+    }
+
+    /** Сбросить пароль по ссылке из письма — пункт 45; отвечает новым пропуском. */
+    @PostMapping("/reset")
+    public SessionDto reset(@Valid @RequestBody com.sddnw.server.dto.PasswordResetRequest request) {
+        return accountService.resetPassword(request.token(), request.newPassword());
+    }
+
+    /** Сменить пароль из настроек — пункт 45. */
+    @PostMapping("/password")
+    public void changePassword(@AccountToken String accountToken,
+                               @Valid @RequestBody com.sddnw.server.dto.PasswordResetRequest request) {
+        accountService.changePassword(accountToken, request.password(), request.newPassword());
+    }
+
+    /** Сменить почту — пункт 45: новая становится логином после ссылки из письма на неё. */
+    @PostMapping("/email")
+    public RegisterResultDto changeEmail(@AccountToken String accountToken,
+                                         @Valid @RequestBody com.sddnw.server.dto.PasswordResetRequest request) {
+        return accountService.changeEmail(accountToken, request.password(), request.email());
+    }
+
+    /** Удалить свою запись — пункт 45, с паролем. */
+    @PostMapping("/delete")
+    public void deleteSelf(@AccountToken String accountToken,
+                           @Valid @RequestBody com.sddnw.server.dto.PasswordResetRequest request) {
+        accountService.deleteSelf(accountToken, request.password());
+    }
+
+    /** Права записи со всей историей — администратору (backlog-promo, пункт 41). */
+    @GetMapping("/accounts/{accountId}/entitlements")
+    public java.util.List<com.sddnw.server.dto.EntitlementDto> entitlements(@AccountToken String accountToken,
+                                                                             @PathVariable UUID accountId) {
+        return entitlementService.list(accountToken, accountId);
+    }
+
+    /** Выдать право руками — администратору (пункт 41). */
+    @PostMapping("/accounts/{accountId}/entitlements")
+    public com.sddnw.server.dto.EntitlementDto grant(@AccountToken String accountToken, @PathVariable UUID accountId,
+                                                     @Valid @RequestBody com.sddnw.server.dto.GrantEntitlementRequest request) {
+        return entitlementService.grant(accountToken, accountId, request.kind(), request.days(), request.note());
+    }
+
+    /** Отозвать право — администратору (пункт 41): строка остаётся, отмечается отзыв. */
+    @DeleteMapping("/entitlements/{entitlementId}")
+    public com.sddnw.server.dto.EntitlementDto revoke(@AccountToken String accountToken,
+                                                      @PathVariable UUID entitlementId) {
+        return entitlementService.revoke(accountToken, entitlementId);
+    }
+
     /** Вход по логину или почте — п. 3.1. */
     @PostMapping("/login")
     public SessionDto login(@Valid @RequestBody LoginRequest request, HttpServletRequest http) {
@@ -158,6 +228,19 @@ public class AuthController {
      * не освобождается сама. Сыгранное при этом остаётся: запись ни на что в партии не
      * ссылается. Свою запись удалить нельзя — см. {@code AccountService.deleteByAdmin}.
      */
+    /** Назначить или снять модератора — 08.10.2026, администратором. */
+    @org.springframework.web.bind.annotation.PutMapping("/accounts/{accountId}/role")
+    public AccountSummaryDto changeRole(@PathVariable UUID accountId, @AccountToken String accountToken,
+                                        @RequestBody java.util.Map<String, String> request) {
+        com.sddnw.server.domain.enums.AccountRole role;
+        try {
+            role = com.sddnw.server.domain.enums.AccountRole.valueOf(request.getOrDefault("role", ""));
+        } catch (IllegalArgumentException unknown) {
+            throw new com.sddnw.server.web.error.ConflictException("auth.roleNotAssignable");
+        }
+        return accountService.changeRoleByAdmin(accountToken, accountId, role);
+    }
+
     @DeleteMapping("/accounts/{accountId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteAccount(@PathVariable UUID accountId, @AccountToken String accountToken) {
@@ -204,6 +287,16 @@ public class AuthController {
     }
 
     /**
+     * Запомнить громкость музыки и звуковых эффектов: обе ступени разом — переключатели
+     * стоят рядом, и настройка у них одна.
+     */
+    @PutMapping("/sound")
+    public AccountDto sound(@Valid @RequestBody SoundRequest request,
+                            @AccountToken String accountToken) {
+        return accountService.changeSound(accountToken, request.musicVolume(), request.sfxVolume());
+    }
+
+    /**
      * Запомнить раскладку горячих клавиш карты — п. 11.1.
      * <p>
      * Уходит она ЦЕЛИКОМ, с экрана настроек: раскладку правят разом и сохраняют одним
@@ -214,5 +307,68 @@ public class AuthController {
     public AccountDto hotkeys(@Valid @RequestBody HotkeysRequest request,
                               @AccountToken String accountToken) {
         return accountService.changeHotkeys(accountToken, request.hotkeys());
+    }
+
+    /**
+     * Запомнить подсказки — field-backlog, пункты 30 и 130: нужны ли подсказки новичку и какие
+     * отклонены насовсем. Уходят целиком; пустой список — «вернуть все подсказки».
+     */
+    @PutMapping("/hints")
+    public AccountDto hints(@Valid @RequestBody com.sddnw.server.dto.HintsRequest request,
+                            @AccountToken String accountToken) {
+        return accountService.changeHints(accountToken, request.noviceHints(), request.dismissedHints());
+    }
+
+    /**
+     * Окна, которые не открываются сами, — field-backlog, пункт 164. Уходят целиком; пустой
+     * список — «открывать все».
+     */
+    @PutMapping("/windows")
+    public AccountDto windows(@Valid @RequestBody com.sddnw.server.dto.QuietWindowsRequest request,
+                              @AccountToken String accountToken) {
+        return accountService.changeQuietWindows(accountToken, request.quietWindows());
+    }
+
+    /** Своё знамя — field-backlog, пункт 144: предлагается первым в новой партии, если свободно. */
+    @PutMapping("/banner")
+    public AccountDto banner(@RequestBody com.sddnw.server.dto.BannerRequest request,
+                             @AccountToken String accountToken) {
+        return accountService.changeBanner(accountToken, request.banner());
+    }
+
+    /** Знаки знамён у хозяев на карте — field-backlog, пункт 202. */
+    @PutMapping("/glyphs")
+    public AccountDto glyphs(@RequestBody com.sddnw.server.dto.GlyphsRequest request,
+                             @AccountToken String accountToken) {
+        return accountService.changeGlyphs(accountToken, request.bannerGlyphs());
+    }
+
+    /** Меньше движения — field-backlog, пункт 170: пусто — как в системе. */
+    @PutMapping("/motion")
+    public AccountDto motion(@RequestBody com.sddnw.server.dto.MotionRequest request,
+                             @AccountToken String accountToken) {
+        return accountService.changeMotion(accountToken, request.reduceMotion());
+    }
+
+    /** Советник — field-backlog, пункт 23: пусто — по умолчанию. */
+    @PutMapping("/advisor")
+    public AccountDto advisor(@RequestBody com.sddnw.server.dto.AdvisorRequest request,
+                              @AccountToken String accountToken) {
+        return accountService.changeAdvisor(accountToken, request.advisor());
+    }
+
+    /** Сцены, увиденные целиком, — field-backlog, пункт 163. Уходят целиком. */
+    @PutMapping("/scenes")
+    public AccountDto scenes(@RequestBody com.sddnw.server.dto.SeenScenesRequest request,
+                             @AccountToken String accountToken) {
+        return accountService.changeSeenScenes(accountToken,
+                request.seenScenes() == null ? java.util.List.of() : request.seenScenes());
+    }
+
+    /** Игровой псевдоним по умолчанию — личный кабинет. */
+    @PutMapping("/name")
+    public AccountDto name(@RequestBody com.sddnw.server.dto.NameRequest request,
+                           @AccountToken String accountToken) {
+        return accountService.changeName(accountToken, request.name());
     }
 }

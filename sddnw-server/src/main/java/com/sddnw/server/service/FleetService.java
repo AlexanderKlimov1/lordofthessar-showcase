@@ -96,6 +96,11 @@ public class FleetService {
     private final LeaderBonusService leaderBonuses;
     /** Кто из людей ушёл из-за стола — его империю ведёт ИИ (backlog-promo, пункт 11). */
     private final PresenceService presence;
+    private final Messages messages;
+    private final IntelService intelService;
+    /** Постройки колоний — чужой варп-перехватчик в системе цели (п. 8). */
+    private final com.sddnw.server.repository.PlanetBuildingRepository planetBuildingRepository;
+    private final BuildingCatalog buildingCatalog;
 
     public FleetService(FleetRepository fleetRepository,
                         FleetShipRepository fleetShipRepository,
@@ -112,8 +117,16 @@ public class FleetService {
                         EmpireActivityService activity,
                         DiplomacyService diplomacyService,
                         PlanetFindReward findReward,
-                        PresenceService presence) {
+                        PresenceService presence,
+                        Messages messages,
+                        IntelService intelService,
+                        com.sddnw.server.repository.PlanetBuildingRepository planetBuildingRepository,
+                        BuildingCatalog buildingCatalog) {
+        this.planetBuildingRepository = planetBuildingRepository;
+        this.buildingCatalog = buildingCatalog;
+        this.intelService = intelService;
         this.presence = presence;
+        this.messages = messages;
         this.diplomacyService = diplomacyService;
         this.findReward = findReward;
         this.leaderBonuses = leaderBonuses;
@@ -152,10 +165,11 @@ public class FleetService {
         // Топливо империи спрашивается ОДИН раз на все её флоты: у каждого к нему
         // прибавляются только проценты его собственных баков — п. 8.
         Set<String> technologies = technologies(player);
+        Reach reach = new Reach(player.getGame().getId(), player.getId(), technologies);
 
         return fleets.stream()
                 .map(fleet -> toDto(fleet, composition.getOrDefault(fleet.getId(), List.of()), combat,
-                        names, technologies))
+                        names, technologies, reach))
                 .sorted(Comparator.comparing(FleetGroupDto::systemName))
                 .toList();
     }
@@ -163,6 +177,12 @@ public class FleetService {
     /** Флот для клиента: состав, боевые числа и маршрут, если флот в пути. */
     private FleetGroupDto toDto(FleetEntity fleet, List<FleetShipEntity> rows, Combat combat,
                                 Map<UUID, String> names, Set<String> technologies) {
+        return toDto(fleet, rows, combat, names, technologies,
+                new Reach(fleet.getGameId(), fleet.getOwnerPlayerId(), technologies));
+    }
+
+    private FleetGroupDto toDto(FleetEntity fleet, List<FleetShipEntity> rows, Combat combat,
+                                Map<UUID, String> names, Set<String> technologies, Reach reach) {
         Integer power = combat.power(rows, fleet.getShips());
         return new FleetGroupDto(
                 fleet.getId(),
@@ -178,7 +198,96 @@ public class FleetService {
                 fleet.getTargetSystemId() == null ? null : names.get(fleet.getTargetSystemId()),
                 fleet.getDepartureTurn(),
                 fleet.getArrivalTurn(),
-                fleet.getAutoExplore());
+                fleet.getAutoExplore(),
+                fleet.getName(),
+                fleet.getBattlesWon(),
+                fleet.getBattlesLost(),
+                Boolean.TRUE.equals(fleet.isInFlight()) ? reach.orderable(fleet) : null);
+    }
+
+    /**
+     * Досягаемость приказа для флотов одного игрока — п. 8 ({@link FlightRules#canOrder}). Базы,
+     * системы и ход читаются лениво и один раз: с гиперпространственной связью или без флотов в пути
+     * выборок нет вовсе. Только для запросов игрока, не изнутри хода.
+     */
+    private final class Reach {
+        private final UUID gameId;
+        private final UUID playerId;
+        private final Set<String> technologies;
+        private List<StarSystemEntity> bases;
+        private Map<UUID, StarSystemEntity> systems;
+        private Integer turn;
+
+        Reach(UUID gameId, UUID playerId, Set<String> technologies) {
+            this.gameId = gameId;
+            this.playerId = playerId;
+            this.technologies = technologies;
+        }
+
+        Boolean orderable(FleetEntity fleet) {
+            if (Boolean.TRUE.equals(flightRules.canRedirect(technologies))) {
+                return Boolean.TRUE;
+            }
+            load();
+            StarSystemEntity from = systems.get(fleet.getOriginSystemId());
+            StarSystemEntity to = systems.get(fleet.getTargetSystemId());
+            if (from == null || to == null || bases.isEmpty()) {
+                return Boolean.FALSE;
+            }
+            double[] at = FlightRules.point(from.getXParsec(), from.getYParsec(), to.getXParsec(), to.getYParsec(),
+                    fleet.getDepartureTurn(), fleet.getArrivalTurn(), turn);
+            double nearest = bases.stream()
+                    .mapToDouble(base -> Math.hypot(base.getXParsec() - at[0], base.getYParsec() - at[1]))
+                    .min()
+                    .orElse(Double.MAX_VALUE);
+            return flightRules.canOrder(technologies, nearest);
+        }
+
+        private void load() {
+            if (systems != null) {
+                return;
+            }
+            List<StarSystemEntity> all = starSystemRepository.findAllByGameIdWithPlanets(gameId);
+            systems = all.stream().collect(Collectors.toMap(StarSystemEntity::getId, system -> system));
+            Map<UUID, StarSystemEntity> byPlanet = new java.util.HashMap<>();
+            for (StarSystemEntity system : all) {
+                for (com.sddnw.server.domain.entity.PlanetEntity planet : system.getPlanets()) {
+                    if (playerId.equals(planet.getOwnerPlayerId())) {
+                        byPlanet.put(planet.getId(), system);
+                    }
+                }
+            }
+            bases = byPlanet.isEmpty() ? List.of() : planetBuildingRepository.findAllByPlanetIdIn(byPlanet.keySet()).stream()
+                    .filter(building -> Boolean.TRUE.equals(OrbitalDefenceRules.orbital(building.getBuildingCode())))
+                    .map(building -> byPlanet.get(building.getPlanetId()))
+                    .distinct()
+                    .toList();
+            turn = gameRepository.findById(gameId).orElseThrow().getTurn();
+        }
+    }
+
+    /** Ход партии — для точки флота в пути (п. 8); выборка на запрос игрока. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.sddnw.server.repository.GameRepository gameRepository;
+
+    /** Самое длинное имя флота: строка на значке и в окне флота, а не заголовок статьи. */
+    public static final int FLEET_NAME_MAX = 48;
+
+    /**
+     * Дать флоту имя — field-backlog, пункт 141. Пустое имя снимает его. Хранимый текст игрока:
+     * словарь его не трогает, и показывается он как есть.
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void rename(PlayerEntity player, UUID fleetId, String name) {
+        FleetEntity fleet = fleetRepository.findById(fleetId)
+                .filter(found -> found.getOwnerPlayerId().equals(player.getId()))
+                .orElseThrow(() -> new NotFoundException("fleet.notFound", fleetId));
+        String clean = name == null ? "" : name.strip();
+        if (clean.length() > FLEET_NAME_MAX) {
+            throw new com.sddnw.server.web.error.BadRequestException("fleet.nameTooLong", String.valueOf(FLEET_NAME_MAX));
+        }
+        fleet.setName(clean.isEmpty() ? null : clean);
+        fleetRepository.save(fleet);
     }
 
     /**
@@ -229,7 +338,9 @@ public class FleetService {
                 if (!Boolean.TRUE.equals(combatShip(row.getDesignId()))) {
                     continue;
                 }
-                total += shipPower(row.getDesignId()) * row.getShips();
+                // Звание экипажа (п. 8, CrewRules) прибавляет меткости и защиты — в силе это процент.
+                total += shipPower(row.getDesignId()) * row.getShips()
+                        * (100 + CrewRules.bonus(row.getExperience())) / 100;
             }
             return total;
         }
@@ -292,7 +403,8 @@ public class FleetService {
 
         String designName(UUID designId) {
             ShipDesignEntity design = designs.get(designId);
-            return design == null ? "неизвестный проект" : design.getName();
+            // Строки флота без проекта не бывает; запасное имя — код, а не слово на одном языке.
+            return design == null ? String.valueOf(designId) : design.getName();
         }
 
         Boolean obsolete(UUID designId) {
@@ -366,7 +478,7 @@ public class FleetService {
             ShipHull hull = combat.hull(row.getDesignId());
             ships.add(new FleetShipDto(
                     row.getDesignId(),
-                    combat.designName(row.getDesignId()),
+                    messages.shown(combat.designName(row.getDesignId())),
                     design == null ? null : design.getHullCode(),
                     hull == null ? null : hull.name(),
                     hull == null ? null : hull.sortOrder(),
@@ -378,7 +490,10 @@ public class FleetService {
                     combat.specials(row.getDesignId()),
                     combat.obsolete(row.getDesignId()),
                     design == null ? ShipRole.WARSHIP.name() : design.getRole().name(),
-                    row.getColonists()));
+                    row.getColonists(),
+                    stats == null ? 0 : stats.rangePercent(),
+                    CrewRules.level(row.getExperience()),
+                    CrewRules.bonus(row.getExperience())));
         }
         return ships;
     }
@@ -418,6 +533,17 @@ public class FleetService {
     @Transactional
     public FleetEntity addShip(UUID gameId, UUID ownerPlayerId, UUID starSystemId, Integer turn,
                                UUID designId, Integer colonists) {
+        return addShip(gameId, ownerPlayerId, starSystemId, turn, designId, colonists, 0);
+    }
+
+    /**
+     * Новый корабль с опытом экипажа — п. 8: построенный колонией с космической академией
+     * начинает обученным ({@link CrewRules#ACADEMY_START_XP}); со строкой того же проекта опыт
+     * усредняется.
+     */
+    @Transactional
+    public FleetEntity addShip(UUID gameId, UUID ownerPlayerId, UUID starSystemId, Integer turn,
+                               UUID designId, Integer colonists, Integer experience) {
         FleetEntity fleet = fleetRepository
                 .findByOwnerPlayerIdAndStarSystemIdAndTargetSystemIdIsNull(ownerPlayerId, starSystemId)
                 .orElseGet(() -> {
@@ -440,6 +566,7 @@ public class FleetService {
                     created.setShips(0);
                     return created;
                 });
+        row.setExperience(CrewRules.merged(row.getExperience(), row.getShips(), experience, 1));
         row.setShips(row.getShips() + 1);
         row.setColonists(row.getColonists() + colonists);
         fleetShipRepository.save(row);
@@ -556,9 +683,8 @@ public class FleetService {
             FleetShipEntity row = fleetShipRepository
                     .findByFleetIdAndDesignId(fleet.getId(), entry.getKey())
                     .orElseThrow(() -> new ConflictException("fleet.noSuchDesign"));
-            Integer left = row.getShips() - entry.getValue();
-            if (left > 0) {
-                row.setShips(left);
+            row.lose(entry.getValue());
+            if (row.getShips() > 0) {
                 fleetShipRepository.save(row);
             } else {
                 fleetShipRepository.delete(row);
@@ -576,6 +702,15 @@ public class FleetService {
 
         log.info("Игрок {} списал {} кораблей флота {}", player.getName(), removed, fleetId);
         return fleetsOf(player);
+    }
+
+    /** Где стоит флот; пусто — летит или его нет. Для журнала отмены списания (пункт 74). */
+    @Transactional(readOnly = true)
+    public UUID standingSystemOf(UUID fleetId) {
+        return fleetRepository.findById(fleetId)
+                .filter(fleet -> fleet.getTargetSystemId() == null)
+                .map(FleetEntity::getStarSystemId)
+                .orElse(null);
     }
 
     /** Состав флота: строки по проектам кораблей — их спрашивают высадка и десант. */
@@ -617,7 +752,9 @@ public class FleetService {
     }
 
     /**
-     * Смена курса на полпути — п. 8: доступна только с Hyperspace Communications.
+     * Смена курса на полпути — п. 8: с гиперпространственной связью везде, иначе только у своей
+     * орбитальной базы ({@link FlightRules#canOrder}: связь тахионная — 3 пк, подпространственная —
+     * 6, без связи — меньше парсека).
      * <p>
      * Путь считается заново от системы вылета: координат у флота в пути нет, есть только
      * маршрут и сроки. Это упрощение — приказ как будто догоняет корабли в точке входа в
@@ -625,8 +762,8 @@ public class FleetService {
      */
     private FleetGroupDto redirect(GameEntity game, FleetEntity fleet, StarSystemEntity target,
                                    Set<String> technologies, Combat combat) {
-        if (!Boolean.TRUE.equals(flightRules.canRedirect(technologies))) {
-            throw new ConflictException("fleet.noCourseChange");
+        if (!Boolean.TRUE.equals(new Reach(game.getId(), fleet.getOwnerPlayerId(), technologies).orderable(fleet))) {
+            throw new ConflictException("fleet.outOfReach");
         }
         FleetEntity flying = depart(game, fleet, target, combat);
         log.info("Флот {} перенаправлен в систему {}", fleet.getId(), target.getName());
@@ -713,9 +850,8 @@ public class FleetService {
             FleetShipEntity row = fleetShipRepository
                     .findByFleetIdAndDesignId(fleet.getId(), entry.getKey())
                     .orElseThrow(() -> new ConflictException("fleet.noSuchDesign"));
-            Integer left = row.getShips() - entry.getValue();
-            if (left > 0) {
-                row.setShips(left);
+            int carried = row.lose(entry.getValue());
+            if (row.getShips() > 0) {
                 fleetShipRepository.save(row);
             } else {
                 fleetShipRepository.delete(row);
@@ -723,6 +859,9 @@ public class FleetService {
             FleetShipEntity gone = new FleetShipEntity();
             gone.setDesignId(entry.getKey());
             gone.setShips(entry.getValue());
+            // Десант и поселенцы улетают на своих кораблях: прежде отделившийся отряд
+            // транспортов уходил пустым, а весь груз оставался на месте.
+            gone.setColonists(carried);
             leaving.add(gone);
         }
         fleet.setShips(fleet.getShips() - moved);
@@ -762,8 +901,11 @@ public class FleetService {
                 .orElseThrow(() -> new NotFoundException("system.notFound", fleet.getStarSystemId()));
         Double distance = flightRules.distanceParsecs(origin.getXParsec(), origin.getYParsec(),
                 target.getXParsec(), target.getYParsec());
-        Integer turns = flightRules.travelTurns(distance,
-                combat.speed(leaving) + navigatorParsecs);
+        // Врата (Physics, перенос MOO II) — у каждой колонии владельца: звёздные дают ход между
+        // колониями, прыжковые — разгон от своей колонии.
+        Integer turns = flightRules.travelTurns(distance, combat.speed(leaving) + navigatorParsecs,
+                technologies(fleet.getOwnerPlayerId()), colonyIn(origin, fleet.getOwnerPlayerId()),
+                colonyIn(target, fleet.getOwnerPlayerId()), interdictor(target, fleet.getOwnerPlayerId()));
 
         fleet.setOriginSystemId(origin.getId());
         fleet.setTargetSystemId(target.getId());
@@ -793,7 +935,11 @@ public class FleetService {
      */
     @Transactional(readOnly = true)
     public Map<UUID, Integer> designSpeeds(UUID gameId, Map<UUID, RaceEffects> races) {
-        Collection<ShipDesignEntity> designs = shipDesignService.designsOfGame(gameId).values();
+        return designSpeeds(shipDesignService.designsOfGame(gameId).values(), races);
+    }
+
+    /** То же по проектам, уже вычитанным вызывающим, — фаза ИИ берёт их своей выборкой. */
+    public Map<UUID, Integer> designSpeeds(Collection<ShipDesignEntity> designs, Map<UUID, RaceEffects> races) {
         Map<UUID, List<ShipDesignRules.Item>> items = shipDesignService.itemsOf(designs);
 
         Map<UUID, Integer> speeds = new HashMap<>(designs.size());
@@ -809,6 +955,35 @@ public class FleetService {
     }
 
     /**
+     * Отправляет ЧАСТЬ флота — п. 8, п. 12: отобранные корабли уходят своим флотом, остальные
+     * остаются. Так ИИ уводит транспорты к цели десанта, не забирая гарнизон: новый транспорт
+     * встаёт в стоящий флот системы, и прежде с ним улетал весь гарнизон (проверка наземного
+     * боя ИИ, 03.10.2026). Груз уходит вместе с кораблями ({@code FleetShipEntity.lose}).
+     * <p>
+     * Приказ сверяется с тем, что во флоте есть СЕЙЧАС: ИИ отдаёт его по составу, прочитанному
+     * в начале хода, а тем же ходом транспорты могли уже высадиться и уйти из флота. Без
+     * сверки отделение несуществующих транспортов роняло конец хода целиком (партии ИИ,
+     * 03.10.2026). Отделять нечего — {@code null}, и решает вызывающий.
+     */
+    @Transactional
+    public FleetEntity dispatchPart(GameEntity game, PlayerEntity player, FleetEntity fleet,
+                                    StarSystemEntity target, Map<UUID, Integer> taken) {
+        Map<UUID, Integer> present = fleetShipRepository.findAllByFleetIdOrderByIdAsc(fleet.getId()).stream()
+                .collect(Collectors.toMap(FleetShipEntity::getDesignId, FleetShipEntity::getShips, Integer::sum));
+        Map<UUID, Integer> real = new LinkedHashMap<>();
+        taken.forEach((design, ships) -> {
+            int have = present.getOrDefault(design, 0);
+            if (have > 0) {
+                real.put(design, Math.min(have, ships));
+            }
+        });
+        if (real.isEmpty()) {
+            return null;
+        }
+        return detach(game, player, fleet, target, real, combat(player));
+    }
+
+    /**
      * Приказ флоту из конца хода — п. 15: тем же курсом, что и приказ игрока, но по уже
      * загруженным данным.
      * <p>
@@ -821,11 +996,14 @@ public class FleetService {
      */
     @Transactional
     public void dispatch(GameEntity game, FleetEntity fleet, StarSystemEntity origin,
-                         StarSystemEntity target, Integer speedParsecs) {
+                         StarSystemEntity target, Integer speedParsecs, Set<String> technologies,
+                         Integer interdictorRadius) {
         Double distance = flightRules.distanceParsecs(origin.getXParsec(), origin.getYParsec(),
                 target.getXParsec(), target.getYParsec());
         Integer turns = flightRules.travelTurns(distance,
-                speedParsecs + navigator(fleet.getOwnerPlayerId(), fleet.getId()));
+                speedParsecs + navigator(fleet.getOwnerPlayerId(), fleet.getId()), technologies,
+                colonyIn(origin, fleet.getOwnerPlayerId()), colonyIn(target, fleet.getOwnerPlayerId()),
+                interdictorRadius);
 
         fleet.setOriginSystemId(origin.getId());
         fleet.setTargetSystemId(target.getId());
@@ -940,6 +1118,8 @@ public class FleetService {
             activity.record(context.game().getId(), owner.getId(), EmpireActivityService.MONSTER);
             log.info("Флот империи {} убил чудище {} в системе {}, потеряв {} кораблей",
                     owner.getName(), kind.getLabel(), target.getName(), lost);
+            // Видел своими глазами, что сторожа больше нет (п. 15, туман войны).
+            intelService.sawMonster(context.game().getId(), owner.getId(), target, context.turn());
             return fleet.getShips() <= 0;
         }
 
@@ -960,7 +1140,10 @@ public class FleetService {
         // его флот садится, разведывает и только потом дерётся на поле (фаза прибытия), —
         // правило теперь одно на обоих. Разведанную систему разведка не выбирает
         // ({@code AiEmpireService.unexplored}), а селиться под сторожем и так нельзя.
-        explore(context.game(), owner, target);
+        explore(context.game(), owner, target, Boolean.FALSE);
+        // И сторожа запомнил таким, каким застал (п. 15): глаз в системе к концу хода у
+        // разбитого флота не остаётся, и без этой записи чудище исчезло бы с его карты.
+        intelService.sawMonster(context.game().getId(), owner.getId(), target, context.turn());
         return fleet.getShips() <= 0;
     }
 
@@ -1178,6 +1361,7 @@ public class FleetService {
      */
     private void land(TurnContext context, FleetEntity fleet, StarSystemEntity target, PlayerEntity owner) {
         Integer ships = fleet.getShips();
+        Boolean scouting = Boolean.TRUE.equals(fleet.getAutoExplore());
         FleetEntity standing = fleetRepository
                 .findByOwnerPlayerIdAndStarSystemIdAndTargetSystemIdIsNull(owner.getId(), target.getId())
                 .orElse(null);
@@ -1186,12 +1370,19 @@ public class FleetService {
             fleetRepository.saveAndFlush(fleet);
         } else {
             standing.setShips(standing.getShips() + ships);
+            // Имя и счёт — того, к кому присоединились (пункт 141); безымянный гарнизон берёт
+            // имя пришедшего, иначе история названного флота пропала бы у первой же своей звезды.
+            if (standing.getName() == null && fleet.getName() != null) {
+                standing.setName(fleet.getName());
+                standing.setBattlesWon(fleet.getBattlesWon());
+                standing.setBattlesLost(fleet.getBattlesLost());
+            }
             fleetRepository.saveAndFlush(standing);
             merge(fleet, standing);
             fleetRepository.delete(fleet);
         }
 
-        explore(context.game(), owner, target);
+        explore(context.game(), owner, target, scouting);
         context.report().add(owner.getId(), "FLEET_ARRIVED",
                 new MessageKey("turn.fleet.arrived", ships, target.getName()),
                 target.getId(), null);
@@ -1202,18 +1393,24 @@ public class FleetService {
     /**
      * Приход в неизвестную систему — единственный способ её разведать (п. 15). Знакомства
      * он не даёт: в MOO II контакт возникает только по дальности (DiplomacyService).
+     * <p>
+     * Разведку флота на приказе «разведывать самим» событие называет своим ключом
+     * ({@code turn.fleet.exploredAuto}, field-backlog, пункт 164): по нему клиент не открывает
+     * экран системы сам — приказ и значит «не хочу следить», — а оставляет строку итогов.
      */
-    private void explore(GameEntity game, PlayerEntity player, StarSystemEntity target) {
+    private void explore(GameEntity game, PlayerEntity player, StarSystemEntity target, Boolean scouting) {
         if (Boolean.TRUE.equals(explorationService.isExplored(player, target.getId()))) {
             return;
         }
         explorationService.exploreBy(player, target, game.getTurn());
         playerEvents.record(game.getId(), player.getId(), game.getTurn(), "EXPLORATION",
-                new MessageKey("turn.fleet.explored", target.getName()), target.getId(), null);
+                new MessageKey(Boolean.TRUE.equals(scouting) ? "turn.fleet.exploredAuto" : "turn.fleet.explored",
+                        target.getName()), target.getId(), null);
         // Наследие ушедшей цивилизации достаётся тому, кто ДОЛЕТЕЛ, а не тому, кто
         // поселился (п. 4.1), поэтому награда стоит здесь — в единственном месте, где
         // система становится разведанной.
-        findReward.claim(game, player, target);
+        // Там же таймер жалости и весть о находке (backlog-promo, пункты 36 и 33).
+        findReward.explored(game, player, target);
     }
 
     /** Переносит состав улетающего флота в тот, к которому он присоединился. */
@@ -1227,7 +1424,9 @@ public class FleetService {
                 fleetShipRepository.save(row);
                 continue;
             }
-            target.setShips(target.getShips() + row.getShips());
+            // Вместе с кораблями — их груз: прежде слияние прибавляло только корабли, и
+            // шесть транспортов, вставших к двум, давали восемь кораблей с десантом двух.
+            target.absorb(row);
             fleetShipRepository.save(target);
             fleetShipRepository.delete(row);
         }
@@ -1252,6 +1451,52 @@ public class FleetService {
     @Transactional(readOnly = true)
     public Integer power(FleetEntity fleet, PlayerEntity owner) {
         return combat(owner).power(fleetShipRepository.findAllByFleetIdOrderByIdAsc(fleet.getId()), fleet.getShips());
+    }
+
+    /**
+     * Сторона боя слагаемыми силы — field-backlog, пункт 102: корабли (и платформы обороны),
+     * залп, прочность, сильнейший щит и сильнейший выстрел — из тех же характеристик проектов,
+     * из которых {@link #power} считает силу. Гражданские корабли в бой не выходят и здесь не
+     * считаются. Сама сила передаётся готовой: она уже посчитана для боя, и второго подсчёта
+     * быть не должно.
+     */
+    @Transactional(readOnly = true)
+    public BattleLeverRules.Side side(PlayerEntity owner, FleetEntity fleet, List<UUID> platforms, Integer power) {
+        Combat combat = combat(owner);
+        Map<UUID, Integer> units = new java.util.LinkedHashMap<>();
+        if (fleet != null) {
+            for (FleetShipEntity row : fleetShipRepository.findAllByFleetIdOrderByIdAsc(fleet.getId())) {
+                if (Boolean.TRUE.equals(combat.combatShip(row.getDesignId())) && row.getShips() > 0) {
+                    units.merge(row.getDesignId(), row.getShips(), Integer::sum);
+                }
+            }
+        }
+        platforms.forEach(platform -> units.merge(platform, 1, Integer::sum));
+        int ships = 0;
+        int attack = 0;
+        int endurance = 0;
+        int shield = 0;
+        int best = 0;
+        for (Map.Entry<UUID, Integer> unit : units.entrySet()) {
+            ShipStats stats = combat.stats().get(unit.getKey());
+            if (stats == null) {
+                continue;
+            }
+            int count = unit.getValue();
+            ships += count;
+            attack += stats.attack() * count;
+            endurance += (stats.structure() + stats.armour() + stats.shield()) * count;
+            // Разбор поражения сравнивает с лучшим выстрелом класс щита — то, что щит срезает
+            // с КАЖДОГО удара, а не его запас (п. 8).
+            shield = Math.max(shield, stats.shieldClass() == null ? 0 : stats.shieldClass());
+            for (ShipDesignRules.Item item : combat.items().getOrDefault(unit.getKey(), List.of())) {
+                if (item.component().slot() == ShipComponentSlot.WEAPON
+                        && item.component().weaponKind() != com.sddnw.server.domain.enums.WeaponKind.BOMB) {
+                    best = Math.max(best, item.damage());
+                }
+            }
+        }
+        return new BattleLeverRules.Side(ships, attack, endurance, shield, best, power);
     }
 
     /**
@@ -1316,6 +1561,16 @@ public class FleetService {
                 .filter(fleet -> fleet.getShips() > 0)
                 .collect(Collectors.groupingBy(FleetEntity::getOwnerPlayerId));
 
+        // Проекты, их составы и состав флотов — ОДНОЙ выборкой на партию каждое (12.10.2026):
+        // прежде боевой контекст собирался на каждую империю своими тремя запросами, и ещё один
+        // уходил за составом её флотов. Изнутри посчитанного хода каждый запрос заставляет
+        // Hibernate сбросить в базу накопленное, и на восьми империях этот замер мощи был
+        // половиной фазы ИИ (32–43 мс из 80 на огромной галактике к сотому ходу).
+        Map<UUID, ShipDesignEntity> designs = shipDesignService.designsOfGame(gameId);
+        Map<UUID, List<ShipDesignRules.Item>> items = shipDesignService.itemsOf(designs.values());
+        Map<UUID, List<FleetShipEntity>> composition = composition(
+                byOwner.values().stream().flatMap(List::stream).toList());
+
         Map<UUID, Integer> power = new HashMap<>();
         for (PlayerEntity player : players) {
             List<FleetEntity> fleets = byOwner.getOrDefault(player.getId(), List.of());
@@ -1323,14 +1578,67 @@ public class FleetService {
                 power.put(player.getId(), 0);
                 continue;
             }
-            Combat combat = combat(player);
-            Map<UUID, List<FleetShipEntity>> composition = composition(fleets);
+            Combat combat = combat(player, designs, items);
             power.put(player.getId(), fleets.stream()
                     .mapToInt(fleet -> combat.power(
                             composition.getOrDefault(fleet.getId(), List.of()), fleet.getShips()))
                     .sum());
         }
         return power;
+    }
+
+    /**
+     * Очки исследований разведлабораторий по империям — п. 8, п. 9 (13.10.2026, перенос MOO II):
+     * «generates RPs depending on the ship's size (RPs = 1, 2, 4, 8, 16, or 32)» — от фрегата до
+     * Левиафана, удвоением на каждый корпус. Флоты, проекты и составы берутся одной выборкой на
+     * партию: зовёт это фаза науки изнутри посчитанного хода. Лаборатория в полёте работает тоже.
+     */
+    public Map<UUID, Integer> scoutLabPoints(UUID gameId) {
+        List<FleetEntity> fleets = fleetRepository.findAllByGameId(gameId).stream()
+                .filter(fleet -> fleet.getShips() > 0)
+                .toList();
+        if (fleets.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, ShipDesignEntity> designs = shipDesignService.designsOfGame(gameId);
+        Map<UUID, List<ShipDesignRules.Item>> items = shipDesignService.itemsOf(designs.values());
+        Map<UUID, List<FleetShipEntity>> composition = composition(fleets);
+        Map<UUID, Integer> points = new HashMap<>();
+        for (FleetEntity fleet : fleets) {
+            for (FleetShipEntity row : composition.getOrDefault(fleet.getId(), List.of())) {
+                int labs = items.getOrDefault(row.getDesignId(), List.of()).stream()
+                        .mapToInt(item -> item.component().amount(ShipEffectType.SCOUT_LAB) * item.count())
+                        .sum();
+                ShipDesignEntity design = designs.get(row.getDesignId());
+                if (labs <= 0 || design == null) {
+                    continue;
+                }
+                int hullClass = Math.min(6, Math.max(1, shipCatalog.hull(design.getHullCode()).sortOrder()));
+                points.merge(fleet.getOwnerPlayerId(), labs * (1 << (hullClass - 1)) * row.getShips(), Integer::sum);
+            }
+        }
+        return points;
+    }
+
+    /**
+     * Боевой контекст из проектов, уже вычитанных на всю партию, — тот же, что
+     * {@link #combat(PlayerEntity)}: все проекты игрока, и действующие, и вытесненные.
+     */
+    private Combat combat(PlayerEntity player, Map<UUID, ShipDesignEntity> designsOfGame,
+                          Map<UUID, List<ShipDesignRules.Item>> itemsOfGame) {
+        Map<UUID, ShipDesignEntity> designs = designsOfGame.values().stream()
+                .filter(design -> player.getId().equals(design.getOwnerPlayerId()))
+                .collect(Collectors.toMap(ShipDesignEntity::getId, design -> design));
+        Map<UUID, List<ShipDesignRules.Item>> items = new HashMap<>(designs.size());
+        for (UUID id : designs.keySet()) {
+            // Проект без единой части в выборке отсутствует — так же, как у itemsOf игрока.
+            if (itemsOfGame.containsKey(id)) {
+                items.put(id, itemsOfGame.get(id));
+            }
+        }
+        RaceEffects race = raceService.effects(player);
+        return new Combat(shipDesignService.statsFromItems(designs.values(), items, race),
+                designs, items, shipCatalog, shipDesignRules, race);
     }
 
     /**
@@ -1534,6 +1842,131 @@ public class FleetService {
     }
 
     /** Есть ли у игрока колония в этой системе: из таких и меряется дальность полёта. */
+    /**
+     * Отход из боя — п. 8 (06.10.2026, решение хозяина проекта): флот, все корабли которого
+     * ушли с поля или погибли, летит к БЛИЖАЙШЕЙ своей колонии или заставе. Дальность не
+     * спрашивается: цель — своя опора, а дальность и меряется от опор. Своих миров нет —
+     * к родной звезде; нет и её — флот остаётся, где стоял.
+     *
+     * @return улетевший флот или {@code null}, если улетать некому или некуда
+     */
+    @Transactional
+    public FleetEntity fallBack(PlayerEntity player, UUID fromSystemId) {
+        FleetEntity fleet = fleetAt(player.getId(), fromSystemId);
+        if (fleet == null || fleet.getShips() <= 0) {
+            return null;
+        }
+        StarSystemEntity from = starSystemRepository.findById(fromSystemId).orElse(null);
+        if (from == null) {
+            return null;
+        }
+        GameEntity game = from.getGame();
+        List<StarSystemEntity> systems = starSystemRepository.findAllByGameIdWithPlanets(game.getId()).stream()
+                .filter(system -> !system.getId().equals(fromSystemId))
+                .sorted(GameOrder.SYSTEMS)
+                .toList();
+        Comparator<StarSystemEntity> nearest = Comparator.comparingDouble(system ->
+                flightRules.distanceParsecs(from.getXParsec(), from.getYParsec(),
+                        system.getXParsec(), system.getYParsec()));
+        StarSystemEntity target = systems.stream()
+                .filter(system -> owns(system, player.getId()))
+                .min(nearest)
+                .orElseGet(() -> systems.stream()
+                        .filter(system -> system.getId().equals(player.getHomeSystemId()))
+                        .findFirst()
+                        .orElse(null));
+        if (target == null) {
+            return null;
+        }
+        fleet.setAutoExplore(Boolean.FALSE);
+        FleetEntity flying = depart(game, fleet, target, combat(player));
+        log.info("Флот игрока {} отступил из боя к системе {}: в пути до хода {}",
+                player.getName(), target.getName(), flying.getArrivalTurn());
+        return flying;
+    }
+
+    /**
+     * Радиус чужого варп-перехватчика в системе цели, парсеков; ноль — его нет (п. 8). Свой
+     * перехватчик своих не держит. Выборка на запрос игрока, не изнутри хода: ИИ передаёт радиус
+     * сам, по уже загруженным постройкам.
+     */
+    private Integer interdictor(StarSystemEntity target, UUID playerId) {
+        List<UUID> foreign = target.getPlanets().stream()
+                .filter(planet -> planet.getOwnerPlayerId() != null && !playerId.equals(planet.getOwnerPlayerId()))
+                .map(com.sddnw.server.domain.entity.PlanetEntity::getId)
+                .toList();
+        if (foreign.isEmpty()) {
+            return 0;
+        }
+        return planetBuildingRepository.findAllByPlanetIdIn(foreign).stream()
+                .map(building -> buildingCatalog.byCode().get(building.getBuildingCode()))
+                .filter(java.util.Objects::nonNull)
+                .mapToInt(building -> building.amount(com.sddnw.server.domain.enums.BuildingEffectType.WARP_INTERDICTOR))
+                .max()
+                .orElse(0);
+    }
+
+    /**
+     * Опыт уцелевшим кораблям флота за бой — п. 8 ({@link CrewRules#BATTLE_XP}). Флот, погибший
+     * целиком, уже удалён — прибавлять некому.
+     */
+    @Transactional
+    public void gainExperience(UUID fleetId, int xp) {
+        if (fleetId == null) {
+            return;
+        }
+        for (FleetShipEntity row : fleetShipRepository.findAllByFleetIdOrderByIdAsc(fleetId)) {
+            if (row.getShips() > 0) {
+                row.setExperience(CrewRules.gained(row.getExperience(), xp));
+                fleetShipRepository.save(row);
+            }
+        }
+    }
+
+    /**
+     * Космическая академия учит стоящих — п. 8 (перенос MOO II): каждый ход флот, стоящий в системе,
+     * где у хозяина есть академии, получает по очку опыта за каждую. Одной выборкой флотов и одной —
+     * их состава на партию; академии считает тот, кто уже держит постройки хода.
+     *
+     * @param academies система → хозяин → сколько у него там академий
+     */
+    @Transactional
+    public void trainAtAcademies(UUID gameId, Map<UUID, Map<UUID, Integer>> academies) {
+        if (academies.isEmpty()) {
+            return;
+        }
+        List<FleetEntity> stationed = fleetRepository.findAllByGameId(gameId).stream()
+                .filter(fleet -> fleet.getTargetSystemId() == null && fleet.getShips() > 0)
+                .filter(fleet -> academies.getOrDefault(fleet.getStarSystemId(), Map.of())
+                        .getOrDefault(fleet.getOwnerPlayerId(), 0) > 0)
+                .toList();
+        if (stationed.isEmpty()) {
+            return;
+        }
+        Map<UUID, List<FleetShipEntity>> rows = composition(stationed);
+        for (FleetEntity fleet : stationed) {
+            int xp = CrewRules.ACADEMY_XP_PER_TURN
+                    * academies.get(fleet.getStarSystemId()).get(fleet.getOwnerPlayerId());
+            for (FleetShipEntity row : rows.getOrDefault(fleet.getId(), List.of())) {
+                row.setExperience(CrewRules.gained(row.getExperience(), xp));
+                fleetShipRepository.save(row);
+            }
+        }
+    }
+
+    /** Населённая колония игрока в системе — у таких стоят врата (п. 8): застава их не держит. */
+    private Boolean colonyIn(StarSystemEntity system, UUID playerId) {
+        return system.getPlanets().stream()
+                .anyMatch(planet -> playerId.equals(planet.getOwnerPlayerId()) && planet.getPopulation() > 0);
+    }
+
+    private Set<String> technologies(UUID playerId) {
+        return playerTechnologyRepository
+                .findAllByPlayerIdOrderByCategoryCodeAscLevelOrderAsc(playerId).stream()
+                .map(PlayerTechnologyEntity::getOptionCode)
+                .collect(Collectors.toSet());
+    }
+
     private Boolean owns(StarSystemEntity system, UUID playerId) {
         return system.getPlanets().stream()
                 .anyMatch(planet -> playerId.equals(planet.getOwnerPlayerId()));
@@ -1558,6 +1991,11 @@ public class FleetService {
     public void applyLosses(FleetEntity fleet, Integer losses, PlayerEntity owner) {
         if (fleet == null || losses <= 0) {
             return;
+        }
+        // Лидер флота может погибнуть вместе со своим кораблём (п. 6) — решается до списания.
+        if (casualties != null) {
+            casualties.afterLosses(fleet, fleet.getShips(), Math.min(losses, fleet.getShips()),
+                    owner == null ? null : owner.getSlot());
         }
         fleet.setShips(Math.max(0, fleet.getShips() - losses));
         if (fleet.getShips() == 0) {
@@ -1586,7 +2024,7 @@ public class FleetService {
             }
             int killed = Math.min(left, row.getShips());
             left -= killed;
-            row.setShips(row.getShips() - killed);
+            row.lose(killed);
             if (row.getShips() == 0) {
                 fleetShipRepository.delete(row);
             } else {
@@ -1616,7 +2054,7 @@ public class FleetService {
             }
             int actual = Math.min(killed, row.getShips());
             lost += actual;
-            row.setShips(row.getShips() - actual);
+            row.lose(actual);
             if (row.getShips() == 0) {
                 fleetShipRepository.delete(row);
             } else {
@@ -1624,6 +2062,10 @@ public class FleetService {
             }
         }
 
+        // Лидер флота может погибнуть вместе со своим кораблём (п. 6).
+        if (casualties != null && lost > 0) {
+            casualties.afterLosses(fleet, fleet.getShips(), Math.min(lost, fleet.getShips()), null);
+        }
         fleet.setShips(Math.max(0, fleet.getShips() - lost));
         if (fleet.getShips() == 0) {
             fleetShipRepository.deleteAllByFleetId(fleet.getId());
@@ -1632,6 +2074,13 @@ public class FleetService {
         }
         fleetRepository.save(fleet);
     }
+
+    /**
+     * Гибель корабельных лидеров в бою — п. 6. Полем, а не параметром конструктора: службу флотов
+     * собирают руками юнит-тесты, а им лидеры ни к чему.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private LeaderCasualtyService casualties;
 
     /**
      * Уносит из флота слабейший корабль — п. 11: так считается потеря на минном поле.

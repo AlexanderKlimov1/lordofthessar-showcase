@@ -35,6 +35,12 @@ export interface TutorialStep {
   textFor?: (state: GameState) => Key | null;
   /** Шаг сделан — по состоянию партии, а не по нажатию. */
   done: (state: GameState) => boolean;
+  /**
+   * Выход из выбора — field-backlog, пункт 124: одной строкой, какая автоматика снимает это
+   * решение с игрока. Только в партии обучения; автоматика сама не включается — меняется лишь
+   * то, что о ней знают.
+   */
+  exit?: Key;
 }
 
 /** Сколько колоний у самого игрока: по ним видно, расселился он или нет. */
@@ -71,6 +77,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     title: 'tutorial.colony.title',
     text: 'tutorial.colony.text',
+    exit: 'tutorial.exit.autoBuild',
     done: (state) => state.openedColonyId !== null,
   },
   /*
@@ -80,6 +87,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     title: 'tutorial.turn.title',
     text: 'tutorial.turn.text',
+    exit: 'tutorial.exit.research',
     done: (state) => (state.game?.turn ?? 1) > 1,
   },
   /*

@@ -3,9 +3,22 @@ import { gameApi } from '../api/client';
 import type { Encounter } from '../api/types';
 import { useGameStore } from '../state/gameStore';
 import { useModalEscape } from './useModalEscape';
-import { tf, useT } from '../i18n';
+import { tf, useT, type Key } from '../i18n';
 import { Figure } from './Figure';
 import { figureLabelClass } from './accent';
+import { FirstTimeNote } from './FirstTimeNote';
+import { ActionError } from './feedback/ActionError';
+
+/**
+ * Прогноз встречи цветом и словом — пункты 84 и 153: цвет лишь вторит слову, информация не
+ * передаётся одним цветом. Неизвестное — без тревоги: оно не плохое, а не увиденное.
+ */
+const FORECAST_TONE: Record<NonNullable<Encounter['forecast']>, string> = {
+  LIKELY_WIN: 'text-good',
+  UNCLEAR: 'text-warn',
+  LIKELY_LOSS: 'text-danger',
+  UNKNOWN: 'text-ink-soft',
+};
 
 /**
  * Встреча флотов — выбор игрока (п. 8).
@@ -28,6 +41,7 @@ export function EncounterDialog({ encounter }: { encounter: Encounter }) {
   const setEmpire = useGameStore((state) => state.setEmpire);
   const setBattle = useGameStore((state) => state.setBattle);
   const setActiveBattle = useGameStore((state) => state.setActiveBattle);
+  const setMap = useGameStore((state) => state.setMap);
   const espionage = useGameStore((state) => state.espionage);
 
   const [auto, setAuto] = useState(true);
@@ -36,12 +50,15 @@ export function EncounterDialog({ encounter }: { encounter: Encounter }) {
   const [postponed, setPostponed] = useState(false);
 
   useModalEscape(!postponed, () => setPostponed(true));
+  // Все хуки — ДО раннего выхода: «отложить» убирает окно, и хук, стоявший ниже, исчезал
+  // из отрисовки — React падал «Rendered fewer hooks», и экран чернел целиком.
+  const { t } = useT();
 
   if (postponed) {
     return null;
   }
 
-  const decide = (decision: 'ATTACK' | 'IGNORE') => {
+  const decide = (decision: 'ATTACK' | 'IGNORE' | 'BOMBARD') => {
     if (!game || !credentials) {
       return;
     }
@@ -54,7 +71,10 @@ export function EncounterDialog({ encounter }: { encounter: Encounter }) {
         // живёт в хранилище, а не здесь: решённая встреча уходит из списка, и диалог
         // вместе с ней исчезает — сцену было бы некому держать.
         // Ручной бой открывает поле: сервер вернул встречу со ссылкой на бой.
-        if (decision === 'ATTACK' && !auto && result.battleId && game && credentials) {
+        if (decision === 'BOMBARD') {
+          // Бомбёжка меняет колонию — жителей, постройки, а то и хозяина: карту перечитываем.
+          setMap(await gameApi.getMap(game.id, credentials.accessToken));
+        } else if (decision === 'ATTACK' && !auto && result.battleId && game && credentials) {
           const opened = await gameApi.getBattle(game.id, result.battleId, credentials.accessToken);
           setActiveBattle(opened);
         } else if (decision === 'ATTACK') {
@@ -77,7 +97,6 @@ export function EncounterDialog({ encounter }: { encounter: Encounter }) {
       .finally(() => setBusy(false));
   };
 
-  const { t } = useT();
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-space-950/90 p-6">
       <div className="panel flex w-full max-w-xl flex-col">
@@ -92,24 +111,52 @@ export function EncounterDialog({ encounter }: { encounter: Encounter }) {
             ? t('encounter.firstMover')
             : t('encounter.secondMover')}
         </p>
+        <FirstTimeNote meeting="encounter" className="mt-2 text-14" />
 
         <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-11">
           <Line label={t('encounter.yourFleet')} value={tf('encounter.ships', { n: <Figure accent="value">{encounter.yourShips}</Figure> })} />
           <Line label={t('encounter.theirFleet')} value={tf('encounter.ships', { n: <Figure accent="value">{encounter.opponentShips}</Figure> })} />
           <Line label={t('encounter.yourInitiative')} value={<Figure accent="value">{encounter.yourInitiative}</Figure>} />
           <Line label={t('encounter.theirInitiative')} value={<Figure accent="value">{encounter.opponentInitiative}</Figure>} />
+          {/*
+            Сила сторон — пункты 84 и 153: число кораблей обманывает (пять фрегатов против
+            двух линкоров), а решает сила. Чужая — только когда её видно сквозь туман.
+          */}
+          {encounter.yourPower !== undefined ? (
+            <>
+              <Line label={t('encounter.yourPower')} value={<Figure accent="value">{encounter.yourPower}</Figure>} />
+              <Line
+                label={t('encounter.theirPower')}
+                value={encounter.opponentPower !== undefined
+                  ? <Figure accent="value">{encounter.opponentPower}</Figure>
+                  : t('encounter.power.unknown')}
+              />
+            </>
+          ) : null}
         </dl>
+        {encounter.forecast && !encounter.bombard ? (
+          <p className={'mt-2 text-14 leading-snug ' + FORECAST_TONE[encounter.forecast]}>
+            {t(`encounter.forecast.${encounter.forecast}` as Key)}
+            {encounter.forecast === 'UNKNOWN' && encounter.unseenTechnologies
+              ? ' ' + t('encounter.forecast.unseen', { n: encounter.unseenTechnologies })
+              : ''}
+          </p>
+        ) : null}
 
-        <label className="mt-3 flex items-center gap-2 text-11 text-ink-soft">
-          <input
-            type="checkbox"
-            checked={auto}
-            onChange={(event) => setAuto(event.target.checked)}
-          />
-          {t('encounter.auto')}
-        </label>
+        {encounter.bombard ? (
+          <p className="mt-3 text-11 leading-relaxed text-ink-soft">{t('encounter.bombardText')}</p>
+        ) : (
+          <label className="mt-3 flex items-center gap-2 text-11 text-ink-soft">
+            <input
+              type="checkbox"
+              checked={auto}
+              onChange={(event) => setAuto(event.target.checked)}
+            />
+            {t('encounter.auto')}
+          </label>
+        )}
 
-        {error ? <p className="mt-2 text-11 text-danger">{error}</p> : null}
+        {error ? <ActionError className="mt-2 text-11" message={error} /> : null}
 
         <div className="mt-4 flex items-center justify-between border-t border-space-700 pt-2 text-xs">
           <button type="button" className="link" onClick={() => setPostponed(true)}>
@@ -123,9 +170,9 @@ export function EncounterDialog({ encounter }: { encounter: Encounter }) {
               type="button"
               className="link text-accent"
               disabled={busy}
-              onClick={() => decide('ATTACK')}
+              onClick={() => decide(encounter.bombard ? 'BOMBARD' : 'ATTACK')}
             >
-              {t('encounter.attack')}
+              {encounter.bombard ? t('encounter.bombard') : t('encounter.attack')}
             </button>
           </span>
         </div>

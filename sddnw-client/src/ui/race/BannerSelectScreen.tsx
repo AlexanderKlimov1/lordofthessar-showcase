@@ -71,7 +71,7 @@ export function BannerSelectScreen({
                       + (taken ? ' opacity-30' : '')
                     }
                   >
-                    <BannerFlag colour={banner.hex} />
+                    <BannerFlag colour={banner.hex} glyph={banner.glyph} />
                   </span>
                   <span
                     className={
@@ -106,15 +106,16 @@ export function BannerSelectScreen({
 /**
  * Флаг на древке — тот же рисунок, каким заселённая планета помечена на схеме системы
  * (`OrbitDiagram.OwnerFlag`): знамя, выбранное здесь, игрок потом и увидит над своими
- * колониями.
+ * колониями. На полотнище — знак знамени (пункт 168): тот же, что у названий звёзд и флотов.
  */
-function BannerFlag({ colour }: { colour: string }) {
+function BannerFlag({ colour, glyph }: { colour: string; glyph: string }) {
   return (
     <svg viewBox="0 0 100 100" className="h-full w-full" aria-hidden="true">
       <rect x={18} y={8} width={5} height={86} rx={2} fill="#9aa4b4" />
       <circle cx={20.5} cy={8} r={5} fill="#c9d1dc" />
       <path d="M23 14 L86 14 Q76 31 86 48 L23 48 Z" fill={colour} stroke="#05070f" strokeWidth={1.5} />
       <path d="M23 14 L86 14 Q80 22 84 27 L23 27 Z" fill="#ffffff" opacity={0.18} />
+      <text x={50} y={39} fontSize={22} textAnchor="middle" fill="#05070f">{glyph}</text>
     </svg>
   );
 }

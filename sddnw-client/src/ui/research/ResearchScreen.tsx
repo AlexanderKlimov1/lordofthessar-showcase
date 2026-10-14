@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useAdvice } from '../../state/advisor';
+import { ResearchAdviceLine } from '../advisor/AdvisorLines';
 import { gameApi } from '../../api/client';
-import type { ResearchCategory, ResearchLevel, ResearchOption } from '../../api/types';
+import type { BuildingRef, ResearchCategory, ResearchLevel, ResearchOption, ShipCatalog } from '../../api/types';
 import { useGameStore } from '../../state/gameStore';
 import { OverlayFrame } from '../OverlayFrame';
 import { SIDE_PANEL_EDGE_HEIGHT } from '../layout';
 import { useModalEscape } from '../useModalEscape';
 import { ResearchField } from './ResearchField';
 import { ResearchFieldList } from './ResearchFieldList';
-import { givesWholeLevel, nextLevel } from './researchRules';
+import { givesWholeLevel, nextLevel, showsRecommendation } from './researchRules';
 import { t, useT } from '../../i18n';
 import { RuleNote } from '../RuleNote';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Экран исследований — п. 9, окно CHANGE CURRENT RESEARCH из MOO II. Открывается
@@ -97,8 +100,9 @@ export function ResearchScreen({ onClose }: { onClose: () => void }) {
   // не слушает вовсе: окошко и экран рождаются в разных отрисовках, и полагаться на
   // порядок их появления в очереди useModalEscape нельзя — одно нажатие закрывало
   // оба разом. Условие надёжнее порядка.
-  useModalEscape(listed === null, onClose);
+  useModalEscape(listed === null, onClose, true);
   useT();
+  const advice = useAdvice();
 
   const categories = tree?.categories ?? [];
 
@@ -145,7 +149,8 @@ export function ResearchScreen({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-space-950 text-xs">
+    // Enter закрывает окно, но на кнопке технологии он — выбор (data-keeps-enter).
+    <div className="fixed inset-0 z-40 flex flex-col bg-space-950 text-xs" data-keeps-enter>
       {/*
         Плашка с названием по центру сверху — как в оригинале. Надписей на ней ДВЕ, и это
         не украшение: в MOO II окна тоже два — «SELECT NEW RESEARCH» (docs/moo2, снимок
@@ -167,7 +172,20 @@ export function ResearchScreen({ onClose }: { onClose: () => void }) {
           Левый сегмент — треть ширины, как в оригинале досталось всему, что не сетка.
           Картинка сверху, под ней название, уровень с ценой и описание.
         */}
-        <TechnologyPreview highlighted={highlighted} />
+        <div className="flex w-1/3 flex-none flex-col">
+          {/* Советник — пункт 23: «взять» делает то же, что щелчок по этой технологии в сетке. */}
+          <div className="flex-none px-4 pt-4">
+            <ResearchAdviceLine advice={advice} busy={choosing} onTake={(categoryCode, optionCode) => {
+              const category = categories.find((one) => one.code === categoryCode);
+              const option = category ? nextLevel(category, research)?.options.find((one) => one.code === optionCode) : undefined;
+              if (category && option) {
+                highlight(category, option);
+                choose(category, option);
+              }
+            }} />
+          </div>
+          <TechnologyPreview highlighted={highlighted} />
+        </div>
 
         {/*
           Поле под сетку объявлено контейнером: от его размеров считается кегль клеток,
@@ -196,6 +214,7 @@ export function ResearchScreen({ onClose }: { onClose: () => void }) {
                     choose(category, option);
                   }}
                   onHighlight={(option) => highlight(category, option)}
+                  highlightedCode={highlighted?.category.code === category.code ? highlighted.option.code : undefined}
                   onOpenList={() => setListed(category)}
                 />
               ))}
@@ -226,13 +245,13 @@ export function ResearchScreen({ onClose }: { onClose: () => void }) {
         style={{ height: SIDE_PANEL_EDGE_HEIGHT }}
         className="relative flex flex-none items-center justify-center gap-4 border-t border-space-600 bg-space-800 px-3"
       >
-        {error ? <span className="absolute left-3 text-danger">{error}</span> : null}
+        {error ? <ActionError as="span" className="absolute left-3" message={error} /> : null}
         <button
           type="button"
           className="w-1/3 border border-space-600 bg-space-900 py-0.5 uppercase tracking-[0.3em] text-ink hover:text-accent"
           onClick={onClose}
         >
-          {t('research.cancel')}
+          {t('common.ok')}
         </button>
       </footer>
     </div>
@@ -247,9 +266,50 @@ export function ResearchScreen({ onClose }: { onClose: () => void }) {
  * ничего не выбрано, сегмент объясняет, что делать, — пустой прямоугольник читался бы
  * как поломка.
  */
+/**
+ * Что откроет технология — field-backlog, пункт 12: в миг выбора видно, ЧТО изменится, а не
+ * только когда. Названия берутся из справочников зданий и кораблей по их же ссылке на
+ * технологию (`requiredTechCode`), — второго списка «что открывает» в игре нет. Справочники
+ * читаются один раз за открытие экрана.
+ */
+/** Что открывает технология: название вещи и что она делает — из её же справочника. */
+interface Unlock {
+  name: string;
+  description?: string;
+}
+
+function useUnlocks(): (code: string) => Unlock[] {
+  const game = useGameStore((state) => state.game);
+  const credentials = useGameStore((state) => state.credentials);
+  const [buildings, setBuildings] = useState<BuildingRef[]>([]);
+  const [ships, setShips] = useState<ShipCatalog | null>(null);
+  useEffect(() => {
+    gameApi.reference.buildings().then(setBuildings).catch(() => undefined);
+    if (game && credentials) {
+      gameApi.getShipCatalog(game.id, credentials.accessToken).then(setShips).catch(() => undefined);
+    }
+  }, [game?.id, credentials?.accessToken]);
+  const unlock = (one: { name: string; description?: string }): Unlock =>
+    ({ name: one.name, description: one.description });
+  return (code) => {
+    const all = [
+      ...buildings.filter((one) => one.requiredTechCode === code).map(unlock),
+      ...(ships?.hulls ?? []).filter((one) => one.requiredTechCode === code).map(unlock),
+      ...(ships?.components ?? []).filter((one) => one.requiredTechCode === code).map(unlock),
+      ...(ships?.modifications ?? []).filter((one) => one.requiredTechCode === code).map(unlock),
+    ];
+    // Одна вещь в двух справочниках (корпус и его часть) — одной строкой.
+    return all.filter((one, index) => all.findIndex((other) => other.name === one.name) === index);
+  };
+}
+
 function TechnologyPreview({ highlighted }: { highlighted: Highlighted | null }) {
+  const game = useGameStore((state) => state.game);
+  const research = useGameStore((state) => state.research);
+  const unlocks = useUnlocks();
+  const opens = highlighted ? unlocks(highlighted.option.code) : [];
   return (
-    <section className="flex w-1/3 flex-none flex-col gap-3 overflow-auto p-4">
+    <section className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
       <div className="flex aspect-[4/3] max-h-[45%] flex-none items-center justify-center border border-space-700 bg-space-900/60 px-4">
         <span className="text-center leading-tight text-ink-faint">
           {highlighted ? t('research.image') : t('research.noImage')}
@@ -265,6 +325,27 @@ function TechnologyPreview({ highlighted }: { highlighted: Highlighted | null })
             </div>
           </div>
           <p className="leading-relaxed text-ink-soft">{highlighted.option.description}</p>
+          {/*
+            Что технология ДЕЛАЕТ (12.10.2026, баг хозяина проекта): описание в дереве — строка в
+            несколько слов («Defensive missile system»), а действие написано у того, что она
+            открывает, — у здания, корпуса, части корабля или модификации, в их справочниках.
+            Поэтому каждая открываемая вещь — своей строкой, с её описанием.
+          */}
+          {opens.length > 0 ? (
+            <div className="space-y-2">
+              <div className="uppercase tracking-[0.2em] text-ink-dim">{t('research.opens.title')}</div>
+              {opens.map((one) => (
+                <div key={one.name}>
+                  <div className="text-ink-bright">{one.name}</div>
+                  {one.description ? <p className="leading-relaxed text-ink">{one.description}</p> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {/* «Обычно берут» — пункт 120: опора для того, кто не знает, что выбрать. */}
+          {research && showsRecommendation(research, highlighted.level, highlighted.option) ? (
+            <p className="leading-relaxed text-lamp">{t('research.recommended.note')}</p>
+          ) : null}
           {highlighted.level.general ? (
             <p className="leading-relaxed text-ink-faint">
               {t('research.generalLevel')}
@@ -274,8 +355,10 @@ function TechnologyPreview({ highlighted }: { highlighted: Highlighted | null })
               исследуются (01.10.2026, решение хозяина проекта) — ветеран удивится, увидев их
               в выборе, поэтому сказано здесь же. */}
           {highlighted.level.order === 1 && FREE_IN_ORIGINAL.includes(highlighted.category.code) ? (
-            <RuleNote text={t('rule.firstLevels')} />
+            <RuleNote hint="rule.firstLevels" text={t('rule.firstLevels')} />
           ) : null}
+          {/* Гостевая партия считает науку вдвое — сказано там, где на неё смотрят. */}
+          {game?.guestRules ? <RuleNote hint="rule.guestResearch" text={t('rule.guestResearch')} /> : null}
         </>
       ) : (
         <p className="leading-relaxed text-ink-faint">

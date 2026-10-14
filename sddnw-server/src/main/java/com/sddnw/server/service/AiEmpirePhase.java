@@ -21,9 +21,12 @@ import org.springframework.stereotype.Service;
 public class AiEmpirePhase implements TurnPhase {
 
     private final AiEmpireService aiEmpireService;
+    /** Что ИИ решил за ушедших людей — field-backlog, пункт 112. */
+    private final StewardRecorder steward;
 
-    public AiEmpirePhase(AiEmpireService aiEmpireService) {
+    public AiEmpirePhase(AiEmpireService aiEmpireService, StewardRecorder steward) {
         this.aiEmpireService = aiEmpireService;
+        this.steward = steward;
     }
 
     @Override
@@ -42,6 +45,8 @@ public class AiEmpirePhase implements TurnPhase {
         if (!Boolean.TRUE.equals(context.game().getAiActive())) {
             return;
         }
+        StewardRecorder.Snapshot before = steward.before(context);
         aiEmpireService.play(context);
+        steward.after(context, before);
     }
 }

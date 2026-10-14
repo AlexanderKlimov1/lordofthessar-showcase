@@ -73,5 +73,214 @@ public enum ShipEffectType {
      * У флота дальность идёт по САМОМУ КОРОТКОМУ кораблю — тем же правилом, что и
      * скорость по самому медленному: строй летит вместе.
      */
-    FUEL_RANGE_PERCENT
+    FUEL_RANGE_PERCENT,
+
+    /**
+     * Противоракеты — backlog-promo, пункт 30, правило MOO II дословно: «60% chance to destroy
+     * enemy missiles, decreasing by 3% with each square». Количество — шанс на ракету в упор,
+     * в процентах; расстояние до залпа отнимает своё ({@code BattleRules.antiMissileChancePercent}).
+     * Пускаются вместо залпа корабля, по кораблям не бьют.
+     */
+    ANTI_MISSILE,
+
+    /**
+     * Прибавка к морской пехоте на борту в процентах — десантные отсеки (п. 8, абордаж):
+     * «doubles the number Marines it carries», поэтому у отсеков сотня.
+     */
+    MARINES_PERCENT,
+
+    /**
+     * Нейтронный бластер убивает пехоту на борту цели — п. 8: одного пехотинца за каждые
+     * столько очков урона, прошедших сквозь щит (у оригинала пять).
+     */
+    KILLS_MARINES,
+
+    /**
+     * Телепорты — п. 8: переносят пехоту на чужой корабль или базу с опущенным щитом за
+     * столько клеток (у оригинала двенадцать); обездвиживать цель не нужно.
+     */
+    TRANSPORTER,
+
+    /**
+     * Тяговый луч — п. 8: столько лучей бьёт вместе с залпом; луч на класс корпуса цели
+     * обездвиживает её до конца круга, лучи разных кораблей складываются.
+     */
+    TRACTOR,
+
+    /**
+     * Отсек штурмовых шаттлов — п. 8: столько шаттлов уходит к цели залпа, по два
+     * пехотинца в каждом; долетевшие сами идут на абордаж.
+     */
+    SHUTTLE_BAY,
+
+    /**
+     * Фокусировщик энергии — п. 8 (13.10.2026, перенос MOO II): «increases beam weapons'
+     * damage by +50%». Количество — процент к урону лучей и снарядов (масс-драйвер и пушка
+     * Гаусса у оригинала тоже «лучевые»), ракетам и торпедам не прибавляет.
+     */
+    BEAM_DAMAGE_PERCENT,
+
+    /**
+     * Прицел дальнего боя (Rangemaster) — п. 8: лучи на дальней дистанции бьют так, как
+     * прежде били с трети её («to the same level that they previously had at one-third of
+     * the range»). Количество — во сколько раз сокращается расстояние для ослабления луча.
+     */
+    LONG_RANGE_TARGETING,
+
+    /**
+     * Прицел Achilles — п. 8: лучи, пробившие щит, идут мимо брони прямо в корпус (тяжёлая
+     * броня это останавливает), и вероятность выбить систему втрое выше («triples the chance
+     * to damage weapons and other essential systems»). Количество — множитель этой вероятности.
+     */
+    ARMOUR_BYPASS,
+
+    /**
+     * Энергопоглотитель — п. 8: «decreases by 25% the damage your ships take». Количество —
+     * процент, на который меньше урона доходит до брони и корпуса.
+     */
+    DAMAGE_ABSORB_PERCENT,
+
+    /**
+     * Станции безопасности — п. 8, абордаж: «+20 to Marine Defense». Количество — процент к
+     * силе пехоты корабля, когда её берут на абордаж (шкала наземного боя: +10 оригинала —
+     * десять процентов).
+     */
+    MARINE_DEFENSE_PERCENT,
+
+    /**
+     * Ремонтный модуль — п. 8: «repairs up to 20% of a ship's armor or structure per combat
+     * turn». Количество — доля полной брони и корпуса, возвращаемая между кругами боя.
+     */
+    REPAIR_PERCENT,
+
+    /**
+     * Варп-рассеиватель — п. 8: «prevents enemy ships from retreating during combat». Пока на
+     * поле цел корабль с ним, чужие корабли не уходят в гиперпространство. Количество не
+     * значит ничего, хватает наличия.
+     */
+    RETREAT_BLOCK,
+
+    /**
+     * Разведлаборатория — п. 8, п. 9: корабль приносит империи очки исследований по своему
+     * корпусу (1, 2, 4, 8, 16, 32 — от фрегата до Левиафана), а весь флот с ней получает +20
+     * к меткости против чудищ. Количество — очки на фрегате; крупный корпус удваивает их.
+     */
+    SCOUT_LAB,
+
+    /**
+     * Гиперконденсаторы — п. 8 (13.10.2026, перенос MOO II): лучи стреляют дважды за круг, но
+     * следующий круг молчат («fire twice in a combat turn, but the ship then has to wait 1 combat
+     * turn without firing»). Количество не значит ничего, хватает наличия.
+     */
+    DOUBLE_BEAM_VOLLEY,
+
+    /** Скоростные ракетные стойки — п. 8: то же для ракет («fire missiles twice in 1 combat turn»). */
+    DOUBLE_MISSILE_VOLLEY,
+
+    /**
+     * Щитовой конденсатор — п. 8 (13.10.2026, перенос MOO II): «triples the shield recharge rate».
+     * Количество — во сколько раз быстрее восстанавливается запас щита между кругами.
+     */
+    SHIELD_RECHARGE_MULTIPLIER,
+
+    /**
+     * Биологическая бомба — пункт 25 (13.10.2026, перенос MOO II): «each Death Spore bomb has a 10%
+     * chance of killing a colonist», у биотерминатора 20 %. Количество — этот шанс в процентах на
+     * каждую бомбу; постройки она не трогает. Медицина колонии его снижает
+     * ({@code BombardmentRules.bioChancePercent}).
+     */
+    BIO_KILL_PERCENT,
+
+    /**
+     * Маскировка на карте — п. 8, п. 15 (стелс-поле, маскировочное устройство, фазовый плащ MOO II):
+     * «completely invisible on the Galaxy map to other human players except to Omniscient
+     * empires». Флот невидим, если маскировка стоит на каждом его корабле.
+     */
+    STEALTH,
+
+    /**
+     * Маскировка в бою — п. 8, маскировочное устройство: «+80 increase in beam defense and +50%
+     * chance for missiles and torpedoes to miss as long as it stays cloaked and does not fire».
+     * Количество — прибавка к защите от лучей; ракеты промахиваются вдвое чаще.
+     */
+    CLOAK,
+
+    /**
+     * Фазовый плащ — п. 8: «completely invisible in combat... for 10 combat turns», пока не
+     * выстрелит; потом действует как маскировочное устройство. Количество — сколько кругов.
+     */
+    PHASING,
+
+    /**
+     * Стазисное поле — п. 8: «freezes the target ship so that it cannot move, fire or be
+     * attacked», дальность 3 клетки. Количество — дальность. Реконструкция срока: заморожен до
+     * конца следующего круга (в оригинале — пока поле не выключат).
+     */
+    STASIS,
+
+    /**
+     * Отсек истребителей — п. 8 (13.10.2026, перенос MOO II). Количество — род звена: 1 —
+     * перехватчики, 2 — бомбардировщики, 3 — тяжёлые истребители. Звено уходит с залпом корабля,
+     * летит к цели, его сбивает ближняя оборона; долетевшее бьёт лучшим лучом с модификацией
+     * ближней обороны и лучшей бомбой империи ({@code BattleRules.fighterShots}).
+     */
+    FIGHTER_BAY,
+
+    /**
+     * Подпространственный телепорт — п. 8 (13.10.2026, перенос MOO II): «a subspace jump of up to
+     * 20 squares in any direction... afterwards, normal movement is still available». Количество —
+     * длина прыжка в клетках; на поле она прибавляется к ходу корабля: прыжок и обычный ход вместе.
+     */
+    TELEPORT,
+
+    /**
+     * Смещающее устройство — п. 8 (перенос MOO II): «all regular weapons targeted against an equipped
+     * ship have a 30% chance of missing completely, regardless of any other considerations».
+     * Количество — этот шанс в процентах.
+     */
+    DISPLACEMENT,
+
+    /**
+     * Прочные щиты — п. 8: «reduces the damage of any attack by an additional 3 points... prevents
+     * the use of enemy transporters even after shields have been dropped. Immune to shield-piercing
+     * weapons». Количество — сколько урона срезается с каждого удара сверх класса щита.
+     */
+    HARD_SHIELD,
+
+    /**
+     * Многофазные щиты — п. 8: «increasing the maximum strength by +50%». Количество — процент к
+     * запасу щита.
+     */
+    SHIELD_POOL_PERCENT,
+
+    /**
+     * Поле молний — п. 8: «a 50% chance of destroying [missiles, torpedoes, fighters] before they can
+     * damage the ship». Количество — шанс в процентах.
+     */
+    LIGHTNING_PERCENT,
+
+    /**
+     * Пульсар — п. 8: бьёт с залпом по всем чужим кораблям и залпам в полёте «within a 6-square
+     * radius», «1-24 points per size class». Количество — радиус.
+     */
+    PULSAR,
+
+    /**
+     * Гиродестабилизатор — п. 8: «1-4 points of structural damage times the ship's size class. Range
+     * is 15 squares». Количество — дальность; урон идёт в корпус мимо щита и брони.
+     */
+    GYRO,
+
+    /**
+     * Плазменная сеть — п. 8: «envelopes a target within a 15 square range. Inflicts 5-25 points of
+     * damage... per turn. This damage persists, dissipating at a rate of 5 points per turn».
+     * Количество — дальность.
+     */
+    PLASMA_WEB,
+
+    /**
+     * Ускоритель времени — п. 8: «take an additional turn at the end of every combat turn».
+     * Количество не значит ничего, кроме «стоит».
+     */
+    TIME_WARP
 }

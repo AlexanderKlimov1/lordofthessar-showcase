@@ -18,7 +18,7 @@ import type { Key } from '../i18n';
 /** Что клавиша делает. Новое действие заводится здесь, в `HOTKEY_ACTIONS` и в обработчике. */
 export type HotkeyAction =
   | 'turn' | 'research' | 'fleet' | 'colonies' | 'homeworld'
-  | 'planets' | 'game' | 'leaders' | 'races' | 'info';
+  | 'planets' | 'game' | 'leaders' | 'races' | 'info' | 'fullscreen' | 'idle';
 
 /** Раскладка: какая клавиша какому действию досталась. */
 export type Hotkeys = Record<HotkeyAction, string>;
@@ -43,6 +43,10 @@ export const DEFAULT_HOTKEYS: Hotkeys = {
   leaders: 'KeyL',
   races: 'KeyR',
   info: 'KeyI',
+  // Полный экран (пункт 189): F11 держит браузер, поэтому своя клавиша рядом с ней.
+  fullscreen: 'F9',
+  // Следующее без приказа (field-backlog, пункт 205): N — next, как «следующий юнит» жанра.
+  idle: 'KeyN',
 };
 
 /**
@@ -62,6 +66,8 @@ export const HOTKEY_ACTIONS: { action: HotkeyAction; label: Key }[] = [
   { action: 'races', label: 'hud.races' },
   { action: 'info', label: 'hud.info' },
   { action: 'homeworld', label: 'hotkey.homeworld' },
+  { action: 'fullscreen', label: 'hotkey.fullscreen' },
+  { action: 'idle', label: 'hotkey.idle' },
 ];
 
 /*

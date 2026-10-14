@@ -7,6 +7,7 @@ import com.sddnw.server.domain.ShipHull;
 import com.sddnw.server.domain.ShipStats;
 import com.sddnw.server.domain.enums.ShipComponentSlot;
 import com.sddnw.server.domain.enums.ShipEffectType;
+import com.sddnw.server.domain.enums.WeaponKind;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -88,14 +89,17 @@ public class ShipDesignRules {
         return technologies.contains(DRIVE_TECH) && technologies.contains(FUEL_TECH);
     }
 
-    /** Чего не хватает для кораблестроения — строкой для игрока; пусто, если хватает. */
+    /**
+     * Чего не хватает для кораблестроения — КОДАМИ технологий; пусто, если хватает. Название
+     * подставляет служба на языке игрока: правило языка не знает.
+     */
     public List<String> missingShipbuildingTechnologies(Set<String> technologies) {
         List<String> missing = new ArrayList<>(2);
         if (!technologies.contains(DRIVE_TECH)) {
-            missing.add("Nuclear Fission (Power)");
+            missing.add(DRIVE_TECH);
         }
         if (!technologies.contains(FUEL_TECH)) {
-            missing.add("Chemistry (Chemistry)");
+            missing.add(FUEL_TECH);
         }
         return missing;
     }
@@ -253,7 +257,12 @@ public class ShipDesignRules {
         // тем же множителем, что место и цена. Тяжёлая броня добавляется процентом сверху.
         int armour = sum(items, ShipEffectType.ARMOUR) * hull.systemFactor()
                 * (100 + sum(items, ShipEffectType.ARMOUR_PERCENT)) / 100;
-        int shield = sum(items, ShipEffectType.SHIELD) * hull.systemFactor();
+        // Щит оригинала (п. 8, 13.10.2026): класс срезает урон с каждого выстрела, а запас — класс
+        // × 5 × множитель корпуса — поглощает остаток, пока не кончится.
+        int shieldClass = sum(items, ShipEffectType.SHIELD);
+        // Многофазные щиты (перенос MOO II): запас щита на половину больше.
+        int shield = shieldClass * SHIELD_POOL_PER_CLASS * shieldFactor(hull)
+                * (100 + sum(items, ShipEffectType.SHIELD_POOL_PERCENT)) / 100;
 
         int attack = salvo(items) * (100 + sum(items, ShipEffectType.ATTACK_PERCENT)
                 + race.shipAttackPercent()) / 100;
@@ -272,12 +281,95 @@ public class ShipDesignRules {
                 attack,
                 defense,
                 sum(items, ShipEffectType.MISSILE_EVASION),
-                sum(items, ShipEffectType.TROOPS),
+                marines(hull, items),
                 hull.command(),
                 // Дальность корабля — это дальность империи плюс проценты его баков (п. 8):
                 // топливо в проект не ставится, а баки ставятся.
-                sum(items, ShipEffectType.FUEL_RANGE_PERCENT));
+                sum(items, ShipEffectType.FUEL_RANGE_PERCENT),
+                Math.min(MAX_ABSORB_PERCENT, sum(items, ShipEffectType.DAMAGE_ABSORB_PERCENT)),
+                shieldClass,
+                fighterSalvo(items) * (100 + sum(items, ShipEffectType.ATTACK_PERCENT)
+                        + race.shipAttackPercent()) / 100,
+                sum(items, ShipEffectType.TIME_WARP) > 0);
     }
+
+    /**
+     * Во сколько раз удар истребителей в силе корабля меньше полного — <i>реконструкция</i> (14.10.2026):
+     * звено летит к цели кругами, его сбивают ближняя оборона и поле молний, а щит срезает урон с
+     * каждого удара. Пополам — первый шаг по правилу «вдвое или пополам» (правила проекта, пункт 89).
+     */
+    static final int FIGHTER_POWER_DIVISOR = 4;
+
+    /** Слабейший удар истребителя — лазер (4) +1, «normal damage +1» оригинала. */
+    static final int FIGHTER_FLOOR_DAMAGE = 5;
+
+    /**
+     * Удар истребителей за круг для силы корабля — п. 8 (перенос MOO II, {@code BattleRules.fighterShots}):
+     * с каждого отсека звено из четырёх машин, у перехватчика по 4 удара лучом, у тяжёлого по 2 (бомбы
+     * в силу не входят, как и у стволов); урон удара — лучший луч самого корабля +1 («normal damage
+     * +1»). В бою истребители бьют лучшим лучом империи, а технологий правила корабля не знают: луч на
+     * борту — нижняя граница лучшего изученного, а без него берётся лазер ({@link #FIGHTER_FLOOR_DAMAGE}),
+     * слабейший луч истребителя, — <i>реконструкция</i>: проекты игры ставят отсек, только когда такой
+     * луч у империи есть.
+     */
+    private Integer fighterSalvo(List<Item> items) {
+        int beam = 0;
+        for (Item item : items) {
+            if (item.component().slot() == ShipComponentSlot.WEAPON && item.component().weaponKind() == WeaponKind.BEAM) {
+                beam = Math.max(beam, item.damage());
+            }
+        }
+        if (beam == 0) {
+            beam = FIGHTER_FLOOR_DAMAGE - 1;
+        }
+        int hits = 0;
+        for (Item item : items) {
+            int kind = item.component().amount(ShipEffectType.FIGHTER_BAY);
+            int perCraft = kind == BattleRules.INTERCEPTORS ? 4 : kind == BattleRules.HEAVY_FIGHTERS ? 2 : 0;
+            hits += perCraft * BattleRules.FIGHTERS_PER_BAY * item.count();
+        }
+        return hits * (beam + 1) / FIGHTER_POWER_DIVISOR;
+    }
+
+    /** Запас щита на единицу класса и множителя корпуса — число MOO II («class × 5 × size class»). */
+    public static final int SHIELD_POOL_PER_CLASS = 5;
+
+    /**
+     * Множитель корпуса для запаса щита — п. 8. У кораблей оригинала: 1, 2, 3, 4, 5 и 7 от
+     * фрегата до Левиафана («shields hull multiplier (5, 10, 15, 20, 25, 35)» — это 5 × множитель).
+     * <p>
+     * <b>Реконструкция для платформ и чудищ:</b> их множителей оригинал не публиковал, поэтому
+     * они берутся по множителю систем корпуса той же лестницей: звёздная база — как линкор,
+     * станция — как титан, крепость и планетарный щит — как Левиафан.
+     */
+    public static int shieldFactor(ShipHull hull) {
+        if (!Boolean.TRUE.equals(hull.platform()) && !Boolean.TRUE.equals(hull.monster())
+                && hull.sortOrder() != null && hull.sortOrder() >= 1 && hull.sortOrder() <= 6) {
+            return SHIP_SHIELD_FACTORS[hull.sortOrder() - 1];
+        }
+        int systems = hull.systemFactor() == null ? 1 : hull.systemFactor();
+        if (systems <= 1) {
+            return 1;
+        }
+        if (systems <= 2) {
+            return 2;
+        }
+        if (systems <= 4) {
+            return 3;
+        }
+        if (systems <= 8) {
+            return 4;
+        }
+        if (systems <= 16) {
+            return 5;
+        }
+        return 7;
+    }
+
+    private static final int[] SHIP_SHIELD_FACTORS = {1, 2, 3, 4, 5, 7};
+
+    /** Больше этого урона поглотители не гасят, сколько их ни ставь: корабль не бессмертен. */
+    static final int MAX_ABSORB_PERCENT = 75;
 
     /**
      * Боевая сила одного корабля: чем он больнее бьёт, дольше живёт и труднее ловится, тем
@@ -306,8 +398,21 @@ public class ShipDesignRules {
      */
     public Integer power(ShipStats stats) {
         int endurance = stats.structure() + stats.armour() + stats.shield();
+        // Энергопоглотитель гасит долю урона по броне и корпусу (п. 8): корабль живёт дольше
+        // ровно во столько раз, во сколько меньше урона до него доходит.
+        int absorb = stats.damageAbsorbPercent() == null ? 0 : stats.damageAbsorbPercent();
+        if (absorb > 0) {
+            endurance = endurance * 100 / (100 - absorb);
+        }
         long evasion = 100L + Math.max(0, stats.defense());
-        return (int) Math.max(1, (long) stats.attack() * endurance * evasion / 10_000L);
+        // Истребители бьют вместе со стволами, а ускоритель времени даёт лишний ход в конце круга —
+        // корабль стреляет дважды (п. 8, 14.10.2026). Без этого быстрый бой, которым дерётся ИИ, не
+        // видел ни того, ни другого, и модули были для него потерянным местом.
+        long attack = (long) stats.attack() + (stats.fighterAttack() == null ? 0 : stats.fighterAttack());
+        if (Boolean.TRUE.equals(stats.timeWarp())) {
+            attack *= 2;
+        }
+        return (int) Math.max(1, attack * endurance * evasion / 10_000L);
     }
 
     /**
@@ -316,16 +421,85 @@ public class ShipDesignRules {
      */
     private Integer salvo(List<Item> items) {
         int salvo = 0;
+        // Фокусировщик энергии прибавляет к лучам и снарядам (п. 8), но не к ракетам.
+        int beamPercent = sum(items, ShipEffectType.BEAM_DAMAGE_PERCENT);
         // Обволакивающий удар входит в залп вчетверо: в бою он и приходится на цель
         // четыре раза (ENVELOPING_SIDES). Без этого сила проекта расходилась бы с боем —
         // а её читают ИИ, сравнение флотов и прибор балансировки.
         for (Item item : items) {
-            if (item.component().slot() == ShipComponentSlot.WEAPON) {
+            // Бомбы в силу корабля не входят — пункт 25: по кораблям они не бьют.
+            if (item.component().slot() == ShipComponentSlot.WEAPON
+                    && item.component().weaponKind() != WeaponKind.BOMB) {
                 int sides = Boolean.TRUE.equals(item.envelops()) ? ENVELOPING_SIDES : 1;
-                salvo += item.damage() * item.shots() * item.count() * sides;
+                int damage = item.component().weaponKind() == WeaponKind.BEAM
+                        || item.component().weaponKind() == WeaponKind.PROJECTILE
+                        ? item.damage() * (100 + beamPercent) / 100
+                        : item.damage();
+                salvo += damage * item.shots() * item.count() * sides;
             }
         }
         return salvo;
+    }
+
+    /**
+     * Морская пехота на борту по классу корпуса (1..6) — п. 8, абордаж.
+     * <p>
+     * <b>Реконструкция.</b> MOO II чисел не публиковала, известно лишь, что пехоту несёт каждый
+     * корабль, что её тем больше, чем крупнее корпус, и что десантные отсеки её удваивают. Ряд
+     * растёт быстрее места — у фрегата команда на два бойца, у Левиафана на полсотни, — иначе
+     * крупный корабль брали бы мелкие стаей.
+     */
+    private static final int[] MARINES_BY_HULL = {2, 5, 10, 15, 20, 50};
+
+    /**
+     * Сколько морской пехоты на корабле — п. 8, абордаж: по классу корпуса, а десантные
+     * отсеки её удваивают ({@code MARINES_PERCENT}, правило оригинала). У платформы обороны
+     * пехота — гарнизон, которым она отбивается от рейда: два бойца на множитель систем корпуса
+     * (реконструкция — звёздной базе дюжина). У чудищ пехоты нет. Одно правило на окно
+     * дизайна и бой.
+     */
+    public Integer marines(ShipHull hull, List<Item> items) {
+        if (Boolean.TRUE.equals(hull.monster())) {
+            return 0;
+        }
+        int base = Boolean.TRUE.equals(hull.platform())
+                ? 2 * Math.max(1, hull.systemFactor())
+                : MARINES_BY_HULL[Math.max(1, Math.min(6, hull.sortOrder())) - 1];
+        return base * (100 + sum(items, ShipEffectType.MARINES_PERCENT)) / 100;
+    }
+
+    /**
+     * Сколько урона по планете даёт проект за заход — пункт 25: бомбы, урон каждой на число
+     * стволов. Ноль — бомб на корабле нет.
+     */
+    public Integer bombSalvo(List<Item> items) {
+        int total = 0;
+        for (Item item : items) {
+            // Биологические бомбы урона не дают — они убивают жителей шансом (пункт 25).
+            if (item.component().slot() == ShipComponentSlot.WEAPON
+                    && item.component().weaponKind() == WeaponKind.BOMB
+                    && item.component().amount(ShipEffectType.BIO_KILL_PERCENT) <= 0) {
+                total += item.damage() * item.shots() * item.count();
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Биологические бомбы проекта — пункт 25: по шансу на каждую бомбу (10 у спор смерти, 20 у
+     * биотерминатора). Урона они не дают и в {@link #bombSalvo} не входят.
+     */
+    public List<Integer> bioBombs(List<Item> items) {
+        List<Integer> bombs = new java.util.ArrayList<>();
+        for (Item item : items) {
+            int percent = item.component().amount(ShipEffectType.BIO_KILL_PERCENT);
+            if (percent > 0) {
+                for (int i = 0; i < item.count() * Math.max(1, item.shots()); i++) {
+                    bombs.add(percent);
+                }
+            }
+        }
+        return bombs;
     }
 
     /** Сумма одного эффекта по всему проекту — с учётом количества компонентов. */

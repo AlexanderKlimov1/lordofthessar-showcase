@@ -9,6 +9,8 @@ import { useModalEscape } from '../useModalEscape';
 import { Figure } from '../Figure';
 import { figureLabelClass } from '../accent';
 import { t, tf, useT, type Key as I18nKey } from '../../i18n';
+import { climateName, mineralsName, planetSizeName } from '../planetLabels';
+import { ActionError } from '../feedback/ActionError';
 
 /** Строка списка: планета вместе со своей системой — без неё не показать ни карту, ни соседей. */
 interface PlanetRow {
@@ -149,6 +151,10 @@ export function PlanetsScreen({ onClose }: { onClose: () => void }) {
    * получают приказ лететь — и высадятся, когда придут.
    */
   useT();
+  /** Почему выбранную планету не заселить — пункт 76; пусто — можно. */
+  const blocked: 'planets.blocked.taken' | 'planets.blocked.guarded' | null = !chosenRow ? null
+    : chosenRow.planet.ownerPlayerId ? 'planets.blocked.taken'
+      : chosenRow.system.monster ? 'planets.blocked.guarded' : null;
   const send = (role: 'COLONY' | 'OUTPOST') => {
     if (!game || !credentials || !chosenRow) {
       return;
@@ -257,7 +263,7 @@ export function PlanetsScreen({ onClose }: { onClose: () => void }) {
                         ) : null}
                       </td>
                       <td className="py-1 text-ink-soft">
-                        {planet.climateLabel}
+                        {climateName(planet.climate, planet.climateLabel)}
                         <span className="text-ink-faint">
                           {tf('planets.food', { n: <Figure accent="note">{planet.foodPerFarmer}</Figure> })}
                         </span>
@@ -279,12 +285,12 @@ export function PlanetsScreen({ onClose }: { onClose: () => void }) {
                         ) : null}
                       </td>
                       <td className="py-1 text-ink-soft">
-                        {planet.mineralsLabel}
+                        {mineralsName(planet.minerals, planet.mineralsLabel)}
                         <span className="text-ink-faint">
                           {tf('planets.prod', { n: <Figure accent="note">{planet.productionPerWorker}</Figure> })}
                         </span>
                       </td>
-                      <td className="py-1 text-ink-soft">{planet.sizeLabel}</td>
+                      <td className="py-1 text-ink-soft">{planetSizeName(planet.size, planet.sizeLabel)}</td>
                       <td className="py-1 text-ink-soft">
                         <Figure accent="note">{planet.maxPopulation}</Figure>
                         {planet.population > 0 ? (
@@ -344,14 +350,23 @@ export function PlanetsScreen({ onClose }: { onClose: () => void }) {
           </section>
 
           <section className="flex-none space-y-1 px-3 py-2">
+            {/*
+              Занятую планету и систему под сторожем сервер не заселяет (`planet.taken`,
+              `planet.guardedSettle`), а корабль, посланный издалека, летел бы впустую: кнопки
+              гаснут с причиной (пункт 76) — список при этом показывает и такие планеты, по ним
+              решают, куда расти.
+            */}
+            {blocked ? <p className="text-11 text-warn">{t(blocked)}</p> : null}
             <Action
-              disabled={busy || !chosenRow || civil('COLONY').length === 0}
+              disabled={busy || !chosenRow || blocked !== null || civil('COLONY').length === 0}
+              title={blocked ? t(blocked) : undefined}
               onClick={() => send('COLONY')}
             >
               {t('planets.colonyShip')}
             </Action>
             <Action
-              disabled={busy || !chosenRow || civil('OUTPOST').length === 0}
+              disabled={busy || !chosenRow || blocked !== null || civil('OUTPOST').length === 0}
+              title={blocked ? t(blocked) : undefined}
               onClick={() => send('OUTPOST')}
             >
               {t('planets.outpostShip')}
@@ -361,7 +376,7 @@ export function PlanetsScreen({ onClose }: { onClose: () => void }) {
 
           <p className="flex-none px-3 pb-2 text-11 leading-tight">
             {error ? (
-              <span className="text-danger">{error}</span>
+              <ActionError as="span" message={error} />
             ) : notice ? (
               <span className="text-accent">{notice}</span>
             ) : (
@@ -454,16 +469,19 @@ function Key({
 function Action({
   children,
   disabled = false,
+  title,
   onClick,
 }: {
   children: string;
   disabled?: boolean;
+  title?: string;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
+      title={title}
       onClick={onClick}
       className="block w-full border border-space-700 bg-space-950 px-3 py-1 text-11 uppercase tracking-wider text-ink-soft hover:text-accent disabled:opacity-40"
     >

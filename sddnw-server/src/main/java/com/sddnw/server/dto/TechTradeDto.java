@@ -11,12 +11,18 @@ import java.util.List;
  * у другого, — остальные в сделке бессмысленны, и показывать их значило бы предлагать
  * игроку заведомый отказ.
  *
- * @param offer  мои технологии, которых нет у соседа
- * @param wanted технологии соседа, которых нет у меня
+ * <b>Туман войны</b> (п. 15, 03.10.2026): изученное соседом игрок не знает — он знает только
+ * УВИДЕННОЕ (бой, сканеры флота; {@code TechSightService}). Поэтому «чего нет у соседа» —
+ * всё своё, кроме увиденного у него, а «чего нет у меня» — только увиденное.
+ *
+ * @param offer    мои технологии, о которых не известно, что они у соседа есть
+ * @param wanted   увиденные у соседа технологии, которых нет у меня
+ * @param observed всё, что увидено у соседа, — доклад о расе
  */
 public record TechTradeDto(
         List<TechnologyOfferDto> offer,
-        List<TechnologyOfferDto> wanted
+        List<TechnologyOfferDto> wanted,
+        List<TechnologyOfferDto> observed
 ) {
 
     /**

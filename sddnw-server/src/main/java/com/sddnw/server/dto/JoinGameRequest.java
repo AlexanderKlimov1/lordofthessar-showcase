@@ -26,6 +26,15 @@ public record JoinGameRequest(
         List<String> raceTraits,
 
         /** Знамя игрока — п. 3.2; пусто — знамя расы или первое свободное. */
-        BannerColor banner
+        BannerColor banner,
+
+        /**
+         * Какую империю ИИ взять, входя по приглашению в идущую партию (field-backlog, пункт 66);
+         * пусто — та, что предлагает приглашение. Обычному входу в лобби поле не нужно.
+         */
+        java.util.UUID empirePlayerId,
+
+        /** Своя раса из личного кабинета — field-backlog, пункт 99; пусто — не из кабинета. */
+        java.util.UUID raceTemplateId
 ) {
 }

@@ -72,6 +72,22 @@ public class EmpireService {
         return diplomacyService.act(player, request, game.getTurn());
     }
 
+    /** Предложения игроку и от игрока, ждущие итога, — field-backlog, пункт 182. */
+    @Transactional(readOnly = true)
+    public com.sddnw.server.dto.DiplomacyProposalsDto proposals(UUID gameId, String accessToken) {
+        PlayerEntity player = gameAccess.requirePlayerOfRunningGame(gameId, accessToken);
+        return diplomacyService.proposals(player);
+    }
+
+    /** Ответ человека на предложение — пункт 182: исполнится в конце хода. */
+    @Transactional
+    public com.sddnw.server.dto.DiplomacyProposalsDto answerProposal(UUID gameId, UUID proposalId,
+                                                                    com.sddnw.server.dto.ProposalAnswerRequest request) {
+        PlayerEntity player = gameAccess.requirePlayerOfRunningGame(gameId, request.accessToken());
+        diplomacyService.answerProposal(player, proposalId, request.accept());
+        return diplomacyService.proposals(player);
+    }
+
     @Transactional(readOnly = true)
     public EspionageDto espionage(UUID gameId, String accessToken) {
         PlayerEntity player = gameAccess.requirePlayerOfRunningGame(gameId, accessToken);

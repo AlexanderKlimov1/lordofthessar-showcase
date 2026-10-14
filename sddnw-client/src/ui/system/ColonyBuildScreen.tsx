@@ -1,17 +1,19 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useAdvice } from '../../state/advisor';
+import { ColonyAdviceLine } from '../advisor/AdvisorLines';
 import { gameApi } from '../../api/client';
-import type { Colony, ColonyProject, Planet, ShipDesign, BuildTemplate } from '../../api/types';
+import type { Colony, ColonyProject, Planet, ShipDesign } from '../../api/types';
 import { selectSelf, useGameStore } from '../../state/gameStore';
 import { ShipDesignScreen } from '../ship/ShipDesignScreen';
 import { useModalEscape } from '../useModalEscape';
-import { ColonyQueue, queueShift, queueStep } from './ColonyQueue';
+import { ColonyQueue, CURRENT, queueShift, queueStep } from './ColonyQueue';
 import { projectTurns } from './colonyRules';
 import { QUEUE_LIMIT } from './buildLimits';
 import { useBuildHotkeys } from './useBuildHotkeys';
-import { BuildTemplateScreen } from '../build/BuildTemplateScreen';
-import { t, tf, useT } from '../../i18n';
-import { Figure } from '../Figure';
+import { t, tf, useT, type Key } from '../../i18n';
+import { Figure, TurnsFigure } from '../Figure';
 import { figureLabelClass } from '../accent';
+import { ActionError } from '../feedback/ActionError';
 
 /**
  * Сцена «Постройки колонии» — п. 10, окном стройки MOO II во весь экран.
@@ -62,11 +64,12 @@ export function ColonyBuildScreen({
   colony,
   saving,
   error,
+  notice,
   onChoose,
   onEnqueue,
   onBuildMode,
-  onTemplate,
   onRemove,
+  onDropCurrent,
   onMove,
   onBuy,
   onClose,
@@ -76,15 +79,17 @@ export function ColonyBuildScreen({
   /** Ответ сервера ещё не пришёл: вторым нажатием очередь можно перепутать. */
   saving: boolean;
   error: string | null;
+  /** Что сказать после действия, не будучи отказом: пропущенное из шаблона (пункт 97). */
+  notice?: string | null;
   /** На стапель; `keepCurrent` — прежняя стройка сдвигается первой в очередь, а не пропадает. */
   onChoose: (project: ColonyProject, keepCurrent?: boolean) => void;
   /** В очередь: `top` — в голову, иначе в конец — п. 10. */
-  onEnqueue: (project: ColonyProject, top?: boolean) => void;
+  onEnqueue: (project: ColonyProject, top?: boolean, at?: number) => void;
   /** Повтор очереди и автострой — п. 10; шлётся только то, что переключили. */
   onBuildMode: (mode: { repeatBuild?: boolean; autoBuild?: boolean }) => void;
-  /** Заложить колонии шаблон стройки — п. 10. */
-  onTemplate: (templateId: string) => void;
   onRemove: (index: number) => void;
+  /** Снять текущую стройку: её место займёт первое из очереди или товары. */
+  onDropCurrent: () => void;
   onMove: (index: number, toIndex: number) => void;
   /** Выкупить текущую стройку — п. 10: монетка у верхней строки очереди. */
   onBuy: () => void;
@@ -98,7 +103,7 @@ export function ColonyBuildScreen({
   /** Шесть ячеек дизайна империи: колонка кораблей показывает их все, а не только строимые. */
   const [designs, setDesigns] = useState<ShipDesign[]>([]);
   /** Сколько у империи ячеек проекта; до ответа справочника — шесть, как в оригинале. */
-  const [slots, setSlots] = useState(6);
+  const [slots, setSlots] = useState(8);
   /**
    * Ячейка, которую правит дизайн; пусто — сцена закрыта.
    *
@@ -110,18 +115,9 @@ export function ColonyBuildScreen({
   const [picking, setPicking] = useState(false);
   /** Выбранная строка очереди: её убирает клавиша D. */
   const [selectedQueue, setSelectedQueue] = useState<number | null>(null);
-  /**
-   * Шаблоны стройки — п. 10. Спрашиваются при открытии окна: они принадлежат записи, а не
-   * партии, и могли измениться с прошлого раза — в другой партии или на другой машине.
-   */
-  const [templates, setTemplates] = useState<BuildTemplate[]>([]);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
-
-  useEffect(() => {
-    gameApi.listBuildTemplates().then(setTemplates).catch(() => setTemplates([]));
-  }, [templatesOpen]);
   const designing = designSlot !== null;
   useT();
+  const advice = useAdvice();
 
   // Esc гасится, пока поверх открыт дизайн: обе сцены рождаются в одной отрисовке, и
   // одно нажатие закрыло бы обе — те же грабли, что на экране исследований.
@@ -154,13 +150,19 @@ export function ColonyBuildScreen({
     [available],
   );
 
-  // Слева — то, что остаётся на планете; справа — то, что с неё улетает.
-  const planetside = available.filter((project) => !isSpace(project.code));
-  const freighter = byCode.get('FREIGHTER') ?? null;
+  // Слева — то, что остаётся на планете; справа — то, что с неё улетает. По переключателю —
+  // по сроку окупаемости (пункт 122): быстрые вперёд, без окупаемости — в конец.
+  const [byPayback, setByPayback] = useState(readByPayback);
+  const planetsideAll = available.filter((project) => !isSpace(project.code));
+  const planetside = byPayback
+    ? [...planetsideAll].sort((a, b) => (a.paybackTurns ?? 10_000) - (b.paybackTurns ?? 10_000))
+    : planetsideAll;
   const spy = byCode.get('SPY') ?? null;
-  const civil = available.filter((project) =>
-    ['COLONY_SHIP', 'OUTPOST_SHIP', 'TRANSPORT'].includes(project.code),
-  );
+  // Гражданские сверху и в этом порядке (09.10.2026, решение хозяина проекта): грузовой флот,
+  // застава, колониальный корабль, транспорт.
+  const civil = ['FREIGHTER', 'OUTPOST_SHIP', 'COLONY_SHIP', 'TRANSPORT']
+    .map((code) => byCode.get(code))
+    .filter((project): project is NonNullable<typeof project> => !!project);
 
   const selected =
     (selectedCode === null ? null : byCode.get(selectedCode) ?? null) ?? planetside[0] ?? null;
@@ -172,10 +174,39 @@ export function ColonyBuildScreen({
     active: !picking,
     onRepeat: () => onBuildMode({ repeatBuild: !colony.repeatBuild }),
     onDelete: () => {
+      // Текущую стройку D снимает так же, как крестик в её строке (09.10.2026).
+      if (selectedQueue === CURRENT) {
+        if (colony.projectCode && !(colony.projectCode === 'TRADE_GOODS' && colony.queue.length === 0)) {
+          onDropCurrent();
+        }
+        setSelectedQueue(null);
+        return;
+      }
       if (selectedQueue !== null && selectedQueue < colony.queue.length) {
         onRemove(selectedQueue);
         setSelectedQueue(null);
       }
+    },
+    /*
+      T — выбранную строку очереди в текущую стройку (09.10.2026, решение хозяина проекта): та же
+      «вставка на первое место», что и бросок на верхнюю строку. Прежняя стройка не пропадает, а
+      встаёт первой в очередь; у оплаченной стройки выбранное встаёт первым в очереди.
+    */
+    onTop: () => {
+      if (saving || selectedQueue === null || selectedQueue === CURRENT) {
+        return;
+      }
+      const project = colony.queue[selectedQueue];
+      if (!project) {
+        return;
+      }
+      const paid = colony.projectCost !== undefined && colony.projectPoints >= colony.projectCost;
+      if (!paid) {
+        onChoose(project, true);
+      } else if (selectedQueue !== 0) {
+        onMove(selectedQueue, 0);
+      }
+      setSelectedQueue(null);
     },
     onStep: (delta) => setSelectedQueue(queueStep(colony.queue, selectedQueue, delta)),
     onShift: (delta) => {
@@ -186,7 +217,6 @@ export function ColonyBuildScreen({
       }
     },
   });
-  const current = selected !== null && selected.code === colony.projectCode;
   const queueFull = colony.queue.length >= QUEUE_LIMIT;
   /**
    * Щелчок по строке списка стройки — п. 10.
@@ -213,15 +243,15 @@ export function ColonyBuildScreen({
     if (project.code === colony.projectCode && !project.repeatable) {
       return;
     }
+    // Полная очередь проекта не примет (`colony.queueFull`), и сказано это строкой состояния
+    // внизу окна: щелчок только показывает проект, а не зовёт отказ (пункт 76). Бесконечную
+    // стройку выбранное заменяет, а не ждёт в очереди, — там предел не мешает.
+    if (queueFull && colony.projectCost !== undefined) {
+      return;
+    }
     onEnqueue(project, false);
   };
 
-  // Колония занята бесконечной стройкой: сервер поставит выбранное НА ЕЁ МЕСТО, а не в
-  // очередь (`ColonyService.enqueue`). Кнопка «в конец очереди» тут лжёт названием,
-  // поэтому гаснет, а объяснение уходит в подсказку — делает то же самое кнопка «строить».
-  const endlessNow = colony.projectCode !== null && colony.projectCost === undefined;
-  const canQueue = selected !== null && !queueFull && !endlessNow
-    && (!current || selected.repeatable);
 
   return (
     <div
@@ -237,6 +267,24 @@ export function ColonyBuildScreen({
       <div className="grid min-h-0 flex-1 grid-cols-[16rem_minmax(0,1fr)_15rem] gap-2">
         {/* Левый сегмент во всю высоту: всё, что колония строит на себе. */}
         <Panel title={t('buildScreen.planetside')} className="overflow-auto">
+          <label className="mb-1 flex cursor-pointer items-center gap-2 text-14 text-ink-dim">
+            <input
+              type="checkbox"
+              checked={byPayback}
+              onChange={(event) => {
+                setByPayback(event.target.checked);
+                writeByPayback(event.target.checked);
+              }}
+            />
+            {t('buildScreen.sortPayback')}
+          </label>
+          {/* Советник — пункт 23: «в очередь» делает то же, что щелчок по строке списка. */}
+          <ColonyAdviceLine advice={advice} planetId={planet.id} onTake={(code) => {
+            const project = byCode.get(code);
+            if (project) {
+              pick(project);
+            }
+          }} />
           <ProjectList
             projects={planetside}
             selectedCode={selected?.code ?? null}
@@ -271,6 +319,17 @@ export function ColonyBuildScreen({
                   </dd>
                   <dt>{t('buildScreen.time')}</dt>
                   <dd>{buildTime(colony, selected)}</dd>
+                  {/* Окупаемость на ЭТОЙ колонии — пункт 122; без неё — ради чего строят. */}
+                  {selected.paybackTurns !== undefined || selected.purpose ? (
+                    <>
+                      <dt>{t('buildScreen.payback')}</dt>
+                      <dd>
+                        {selected.paybackTurns !== undefined
+                          ? tf('buildScreen.payback.turns', { n: <Figure accent="value">{selected.paybackTurns}</Figure> })
+                          : t(`buildScreen.purpose.${selected.purpose}` as Key)}
+                      </dd>
+                    </>
+                  ) : null}
                 </dl>
               ) : null}
             </Panel>
@@ -286,21 +345,23 @@ export function ColonyBuildScreen({
         {/* Правый сегмент: всё, что с колонии улетает, — как в оригинале. */}
         <Panel title={t('buildScreen.ships')} className="overflow-auto">
           <ProjectList
-            projects={freighter ? [freighter] : []}
+            projects={civil}
             selectedCode={selected?.code ?? null}
             currentCode={colony.projectCode}
             onPick={pick}
           />
 
           {/*
-            Шесть ячеек дизайна: строка есть у КАЖДОЙ — и у той, которую колония не
-            поднимет, и у пустой. Недоступное помечено и объяснено, пустая так и говорит,
-            что свободна: в оригинале эта колонка не пустует никогда, а четыре строки
-            вместо шести читаются как пропажа двух корпусов.
+            Боевые проекты — только занятые ячейки (09.10.2026, решение хозяина проекта): пустая
+            строка «ячейка свободна» в списке стройки ничего не строит. Пустые ячейки видны лишь
+            пока выбирают цель дизайна: с них начинают новый проект.
           */}
           <ul className="mt-2 border-t border-space-800 pt-1">
             {Array.from({ length: slots }, (_, index) => index + 1).map((cell) => {
               const design = designs.find((one) => one.slot === cell) ?? null;
+              if (design === null && !picking) {
+                return null;
+              }
               if (design === null) {
                 return (
                   <li key={`free-${cell}`}>
@@ -355,7 +416,9 @@ export function ColonyBuildScreen({
                         ? t('buildScreen.design.pickHint')
                         : project === null
                           ? t('buildScreen.ship.unavailable')
-                          : design.hullName
+                          : design.spaceUsed > design.space
+                            ? t('design.overflow', { used: design.spaceUsed, space: design.space })
+                            : design.hullName
                     }
                     onClick={() => {
                       if (picking) {
@@ -369,22 +432,32 @@ export function ColonyBuildScreen({
                     }}
                   >
                     {design.name}
+                    {/* Проект перестал помещаться после правки справочника — пункт 97: сказано
+                        знаком у строки и словами в подсказке, а не молча. */}
+                    {design.spaceUsed > design.space ? <span className="ml-1 text-warn">⚠</span> : null}
                   </button>
                 </li>
               );
             })}
           </ul>
 
-          {civil.length > 0 ? (
-            <div className="mt-2 border-t border-space-800 pt-1">
-              <ProjectList
-                projects={civil}
-                selectedCode={selected?.code ?? null}
-                currentCode={colony.projectCode}
-                onPick={pick}
-              />
-            </div>
-          ) : null}
+          {/*
+            Дизайн кораблей — отдельный блок между боевыми проектами и шпионом (09.10.2026,
+            решение хозяина проекта). DESIGN оригинала: нажатие не открывает окно, а превращает
+            указатель в выбор ЦЕЛИ — правят один из проектов выше (п. 8). Второе нажатие снимает
+            выбор, как и Esc.
+          */}
+          <div className="mt-2 border-t border-space-800 pt-1">
+            <button
+              type="button"
+              className={'block w-full truncate px-1 py-0.5 text-left text-20 '
+                + (picking ? 'link-quiet link-active bg-space-800' : 'link-quiet')}
+              title={picking ? t('buildScreen.design.pickHint') : undefined}
+              onClick={() => setPicking(!picking)}
+            >
+              {picking ? t('buildScreen.design.picking') : t('buildScreen.design')}
+            </button>
+          </div>
 
           {spy ? (
             <div className="mt-2 border-t border-space-800 pt-1">
@@ -399,7 +472,8 @@ export function ColonyBuildScreen({
         </Panel>
       </div>
 
-      <div className="grid h-[15rem] flex-none grid-cols-[16rem_minmax(0,1fr)_15rem] gap-2">
+      {/* Нижний ряд — в полтора раза выше прежних 15rem (09.10.2026, решение хозяина проекта): очереди и стапелю было тесно. */}
+      <div className="grid h-[22.5rem] flex-none grid-cols-[16rem_minmax(0,1fr)] gap-2">
         {/* Под левым списком — то, что колония строит сейчас: её стапель. */}
         <Panel title={t('buildScreen.current')}>
           <p className="text-22 text-ink-bright">
@@ -430,130 +504,39 @@ export function ColonyBuildScreen({
             onRemove={onRemove}
             onMove={onMove}
             onPromote={onChoose}
-            onEnqueue={onEnqueue}
+            onDropCurrent={onDropCurrent}
             selected={selectedQueue}
             onSelect={setSelectedQueue}
             credits={credits}
             onBuy={onBuy}
-            onDropProject={(code) => {
+            onDropProject={(code, place) => {
               const project = byCode.get(code);
-              if (project) {
-                onEnqueue(project);
+              if (!project) {
+                return;
+              }
+              setSelectedCode(project.code);
+              if (place === 'current') {
+                onChoose(project, true);
+              } else if (typeof place === 'number') {
+                onEnqueue(project, false, place);
+              } else {
+                onEnqueue(project, place === 'top');
               }
             }}
           />
-        </Panel>
-
-        {/* Правый нижний сегмент — полоса кнопок оригинала: она и правит очередью. */}
-        <Panel title={t('buildScreen.controls')}>
-          <div className="flex h-full flex-col gap-1 text-20">
-            <button
-              type="button"
-              className="link-quiet text-left disabled:cursor-not-allowed disabled:text-ink-off"
-              disabled={saving || selected === null || current}
-              onClick={() => selected && onChoose(selected)}
-            >
-              {t('buildScreen.build')}
-            </button>
-            {/*
-              «В конец очереди» — то, чего щелчок по списку не делает: он кладёт в ГОЛОВУ.
-              Обе дороги нужны: голова — это «строить сразу за нынешним», хвост — «когда
-              дойдут руки».
-            */}
-            <button
-              type="button"
-              className="link-quiet text-left disabled:cursor-not-allowed disabled:text-ink-off"
-              disabled={saving || !canQueue}
-              title={t('buildScreen.enqueue.title')}
-              onClick={() => selected && onEnqueue(selected)}
-            >
-              {t('buildScreen.enqueue')}
-            </button>
-            {/*
-              DESIGN оригинала: нажатие не открывает окно, а превращает указатель в
-              выбор ЦЕЛИ — правят один из шести проектов правой колонки (п. 8). Второе
-              нажатие снимает выбор, как и Esc.
-            */}
-            <button
-              type="button"
-              className={'text-left ' + (picking ? 'link-quiet link-active' : 'link-quiet')}
-              onClick={() => setPicking(!picking)}
-            >
-              {picking ? t('buildScreen.design.picking') : t('buildScreen.design')}
-            </button>
-
-            {/*
-              REPEAT BUILD и AUTO BUILD оригинала — две кнопки, которых у нас не было вовсе
-              (`docs/moo2/README.md`). Первая пускает очередь по кругу, вторая отдаёт выбор
-              колонии. Обе — переключатели, и взведённая помечена как выбранный пункт.
-            */}
-            <button
-              type="button"
-              className={'text-left ' + (colony.repeatBuild ? 'link-quiet link-active' : 'link-quiet')}
-              disabled={saving}
-              title={t('buildScreen.repeat.title')}
-              onClick={() => onBuildMode({ repeatBuild: !colony.repeatBuild })}
-            >
-              {t('buildScreen.repeat')}
-            </button>
-            <button
-              type="button"
-              className={'text-left ' + (colony.autoBuild ? 'link-quiet link-active' : 'link-quiet')}
-              disabled={saving}
-              title={t('buildScreen.auto.title')}
-              onClick={() => onBuildMode({ autoBuild: !colony.autoBuild })}
-            >
-              {t('buildScreen.auto')}
-            </button>
-
-            {/*
-              Шаблон стройки — п. 10: набор закладывается одним движением. Шаблоны свои,
-              общие для всех партий, поэтому список короткий и лежит прямо в кнопках: лишний
-              диалог ради выбора из трёх строк — плохой обмен.
-            */}
-            {templates.length > 0 ? (
-              <div className="mt-1 flex flex-col">
-                <span className="text-17 uppercase tracking-[0.2em] text-ink-faint">
-                  {t('template.apply')}
-                </span>
-                {templates.map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    className="link-quiet truncate text-left"
-                    disabled={saving || queueFull}
-                    title={t('template.apply.title')}
-                    onClick={() => onTemplate(template.id)}
-                  >
-                    {t('template.tier.short', { n: template.tier })} {template.name}
-                  </button>
-                ))}
-              </div>
+          {/* Строка состояния — под очередью: панели кнопок больше нет (09.10.2026), а отказ
+              сервера и «очередь полна» обязаны быть видны там, где правят очередь. */}
+          <p className="mt-2 text-17 leading-tight text-ink-faint">
+            {error ? (
+              <ActionError as="span" message={error} />
+            ) : notice ? (
+              <span className="text-warn">{notice}</span>
+            ) : picking ? (
+              <span className="text-accent">{t('buildScreen.design.pickHint')}</span>
+            ) : queueFull ? (
+              t('buildScreen.queueFull', { n: QUEUE_LIMIT })
             ) : null}
-            <button type="button" className="link-quiet text-left text-ink-dim"
-                    onClick={() => setTemplatesOpen(true)}>
-              {t('menu.templates')}
-            </button>
-
-            <span className="mt-auto block text-17 leading-tight text-ink-faint">
-              {error ? (
-                <span className="text-danger">{error}</span>
-              ) : picking ? (
-                <span className="text-accent">{t('buildScreen.design.pickHint')}</span>
-              ) : queueFull ? (
-                t('buildScreen.queueFull', { n: QUEUE_LIMIT })
-              ) : endlessNow ? (
-                t('buildScreen.enqueue.replaces')
-              ) : current ? (
-                t('buildScreen.alreadyBuilding') + (selected?.repeatable ? t('buildScreen.canRepeat') : '')
-              ) : (
-                t('buildScreen.hint')
-              )}
-            </span>
-            <button type="button" className="link-quiet text-left" onClick={onClose}>
-              {t('buildScreen.close')}
-            </button>
-          </div>
+          </p>
         </Panel>
       </div>
 
@@ -561,7 +544,6 @@ export function ColonyBuildScreen({
         Дизайн кораблей — та же сцена, что и с экрана флота, но открытая СРАЗУ на
         выбранной ячейке: список проектов ей не нужен, цель уже назвали указателем.
       */}
-      {templatesOpen ? <BuildTemplateScreen onClose={() => setTemplatesOpen(false)} /> : null}
 
       {designSlot !== null ? (
         <ShipDesignScreen slot={designSlot} onClose={() => setDesignSlot(null)} />
@@ -590,7 +572,7 @@ const buildTime = (colony: Colony, project: ColonyProject): ReactNode => {
     return t('build.endless');
   }
   const turns = projectTurns(colony, project.cost);
-  return turns === null ? '—' : tf('build.turns', { n: <Figure accent="value">{turns}</Figure> });
+  return turns === null ? '—' : tf('build.turns', { n: <TurnsFigure accent="value">{turns}</TurnsFigure> });
 };
 
 /** Сегмент сцены: рамка с подписью — их в оригинале семь, и все одинаковые. */
@@ -653,8 +635,18 @@ function ProjectList({
             title={t('buildScreen.pick.title')}
             onClick={() => onPick(project)}
           >
-            {project.code === currentCode ? '● ' : ''}
-            {project.name}
+            <span className="flex items-baseline justify-between gap-2">
+              <span className="truncate">
+                {project.code === currentCode ? '● ' : ''}
+                {project.name}
+              </span>
+              {/* Срок окупаемости строкой списка — пункт 122: сравнение одного числа. */}
+              {project.paybackTurns !== undefined ? (
+                <span className="shrink-0 text-14 text-ink-dim">
+                  {t('buildScreen.payback.short', { n: project.paybackTurns })}
+                </span>
+              ) : null}
+            </span>
           </button>
         </li>
       ))}
@@ -662,3 +654,22 @@ function ProjectList({
   );
 }
 
+
+/** Порядок списка по окупаемости — пункт 122; помнит браузер (удобство, не правило). */
+const PAYBACK_KEY = 'sddnw.build.byPayback';
+
+function readByPayback(): boolean {
+  try {
+    return window.localStorage.getItem(PAYBACK_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeByPayback(on: boolean): void {
+  try {
+    window.localStorage.setItem(PAYBACK_KEY, on ? '1' : '0');
+  } catch {
+    // не запомнилось — переключатель вернётся к порядку справочника
+  }
+}

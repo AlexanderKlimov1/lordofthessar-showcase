@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        13.10.2026, перенос технологий MOO II, шестая очередь: андроиды колонии — фермеры, рабочие и
+        учёные. Живут счётчиками на самой планете: своей таблицей они дали бы выборку «на планету»
+        изнутри посчитанного хода.
+    -->
+    <changeSet id="147-androids" author="sddnw">
+        <addColumn tableName="planet">
+            <column name="android_farmers" type="integer" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="android_workers" type="integer" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="android_scientists" type="integer" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

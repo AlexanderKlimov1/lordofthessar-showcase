@@ -2,6 +2,7 @@ import type {
   PlayerResearch,
   ResearchCategory,
   ResearchLevel,
+  ResearchOption,
   ResearchTree,
   TurnReport,
 } from '../../api/types';
@@ -146,3 +147,16 @@ export const asksForNextTarget = (
 
 /** Код события исследований в отчёте хода — тот же, что у сервера. */
 const RESEARCH_EVENT = 'RESEARCH';
+
+/**
+ * Показывать ли у технологии метку «обычно берут» — field-backlog, пункт 120.
+ *
+ * Признак `recommended` лежит в дереве (`tech.json`) и решает выбор ИИ внутри уровня; игроку
+ * он даёт опору там, где тот не знает, что брать, — а выбирает по-прежнему сам. Метки нет:
+ * на уровнях, где рекомендации нет вовсе (правильного ответа там нет, и это честно), там,
+ * где уровень выдаётся целиком, и там, где технология на уровне одна, — выбирать там нечего. У неизобретательной расы метка та же:
+ * жребий отнимает выбор внутри уровня у ИИ, а не знание у игрока.
+ */
+export function showsRecommendation(research: PlayerResearch, level: ResearchLevel, option: ResearchOption): boolean {
+  return option.recommended && level.options.length > 1 && !givesWholeLevel(research, level);
+}

@@ -66,7 +66,7 @@ public class GalacticEventService {
     private static final int EVENT_CHANCE_PERCENT = 8;
 
     /** Во сколько раз ведущая империя вероятнее получит беду, а отстающая — удачу. */
-    private static final int STANDING_BIAS = 3;
+    public static final int STANDING_BIAS = 3;
 
     /** Насколько чаще добрые события приходят к везучей расе. */
     private static final int LUCKY_BONUS = 2;
@@ -94,7 +94,9 @@ public class GalacticEventService {
     private final FleetShipRepository fleetShipRepository;
     private final DiplomacyRelationRepository relationRepository;
     private final ShipDesignService shipDesignService;
+    private final PopulationCalculator populationCalculator;
     private final Messages messages;
+    private final EmpireActivityService activity;
 
     public GalacticEventService(EmpireInfoService empireInfoService,
                                 ResearchService researchService,
@@ -104,7 +106,10 @@ public class GalacticEventService {
                                 FleetShipRepository fleetShipRepository,
                                 DiplomacyRelationRepository relationRepository,
                                 ShipDesignService shipDesignService,
-                                Messages messages) {
+                                PopulationCalculator populationCalculator,
+                                Messages messages,
+                                EmpireActivityService activity) {
+        this.activity = activity;
         this.empireInfoService = empireInfoService;
         this.researchService = researchService;
         this.raceService = raceService;
@@ -113,7 +118,30 @@ public class GalacticEventService {
         this.fleetShipRepository = fleetShipRepository;
         this.relationRepository = relationRepository;
         this.shipDesignService = shipDesignService;
+        this.populationCalculator = populationCalculator;
         this.messages = messages;
+    }
+
+    /**
+     * Смена климата колонии событием — п. 4.1, п. 11.1. Вместимость планеты записана на ней
+     * самой и выведена из климата при рождении галактики, поэтому меняется ВМЕСТЕ с ним: без
+     * этого сдвиг оси (климат становится земным) у терпимой расы РЕЗАЛ вместимость — её
+     * расовая прибавка на суровом климате велика, на земном равна нулю, а записанная часть
+     * оставалась от бедного климата. Замер партии ИИ: Литари, Canopus III, 4 жителя при
+     * вместимости 1. Население, которому больше негде жить, уходит сразу, а не следующим
+     * ходом: событие и есть то, что его выселило.
+     */
+    private void changeClimate(TurnContext context, PlanetEntity colony, PlanetClimate climate) {
+        colony.setClimate(climate);
+        colony.setMaxPopulation(populationCalculator.maxPopulation(colony.getPlanetSize(), climate));
+        ColonyService.ColonyContext colonies = context.colonyContext();
+        int capacity = colony.getMaxPopulation()
+                + populationCalculator.raceCapacityBonus(colony.getPlanetSize(), climate, colonies.race(colony))
+                + colonies.effects(colony).maxPopulationBonus();
+        int capacityK = Math.max(1, capacity) * PlanetEntity.POPULATION_UNIT;
+        if (colony.getPopulationK() > capacityK) {
+            colony.setPopulationK(capacityK);
+        }
     }
 
     /** Ход галактических событий: не чаще одного за ход и не в каждой партии — п. 11.1. */
@@ -130,7 +158,11 @@ public class GalacticEventService {
         }
 
         Map<UUID, Integer> might = empireInfoService.mightByPlayer(context);
-        Boolean good = random.nextBoolean();
+        // Гостевая партия — удача вдвое чаще беды (пункт 36); обычная — пополам, тем же броском,
+        // что и прежде, чтобы её партии повторялись по-старому.
+        Boolean good = Boolean.TRUE.equals(context.game().getRichStart())
+                ? random.nextInt(100) < GuestGameRules.GOOD_EVENT_PERCENT
+                : random.nextBoolean();
         PlayerEntity target = pick(context, might, good, random);
         if (target == null) {
             return;
@@ -146,6 +178,9 @@ public class GalacticEventService {
             MessageKey story = happen(context, target, event, random);
             if (story != null) {
                 context.report().add(target.getId(), "GALACTIC", story);
+                // Замер бед и удач (пункт 36): сколько каждой империи досталось за партию.
+                activity.record(context.game().getId(), target.getId(),
+                        Boolean.TRUE.equals(good) ? EmpireActivityService.EVENT_GOOD : EmpireActivityService.EVENT_BAD);
                 log.info("Галактическое событие {} у игрока {}: {}",
                         event.name(), target.getName(), story.key());
                 return;
@@ -259,7 +294,7 @@ public class GalacticEventService {
                         || colony.getClimate() == PlanetClimate.GAIA) {
                     yield null;
                 }
-                colony.setClimate(PlanetClimate.TERRAN);
+                changeClimate(context, colony, PlanetClimate.TERRAN);
                 yield new MessageKey("turn.galactic.axisShift", event, colony.getName());
             }
 
@@ -271,7 +306,7 @@ public class GalacticEventService {
                 }
                 colony.setMinerals(richer);
                 yield new MessageKey("turn.galactic.mineralDeposit",
-                        event, colony.getName(), richer.getLabel());
+                        event, colony.getName(), richer);
             }
 
             case DONATION -> {
@@ -332,7 +367,7 @@ public class GalacticEventService {
                 yield ruined == null
                         ? new MessageKey("turn.galactic.earthquake", event, colony.getName(), lost)
                         : new MessageKey("turn.galactic.earthquakeRuined",
-                                event, colony.getName(), lost, ruined);
+                                event, colony.getName(), lost, CatalogTexts.building(ruined));
             }
 
             case INDUSTRIAL_ACCIDENT -> {
@@ -341,9 +376,9 @@ public class GalacticEventService {
                 if (worse == null) {
                     yield null;
                 }
-                colony.setClimate(worse);
+                changeClimate(context, colony, worse);
                 yield new MessageKey("turn.galactic.industrialAccident",
-                        event, colony.getName(), worse.getLabel());
+                        event, colony.getName(), worse);
             }
 
             case MINERAL_DEPLETION -> {
@@ -354,7 +389,7 @@ public class GalacticEventService {
                 }
                 colony.setMinerals(poorer);
                 yield new MessageKey("turn.galactic.mineralDepletion",
-                        event, colony.getName(), poorer.getLabel());
+                        event, colony.getName(), poorer);
             }
 
             case EXPLODED_SHIP -> {
@@ -454,7 +489,7 @@ public class GalacticEventService {
             return null;
         }
         FleetShipEntity group = composition.get(random.nextInt(composition.size()));
-        group.setShips(group.getShips() - 1);
+        group.lose(1);
         if (group.getShips() <= 0) {
             fleetShipRepository.delete(group);
         } else {
@@ -483,10 +518,16 @@ public class GalacticEventService {
      * один и тот же. Измерено 26.09.2026: две одинаковые партии теряли к «ужасной аварии»
      * РАЗНЫЕ постройки одной и той же колонии — в одной сгорел завод, в другой звёздная
      * база, — и с 101-го хода партия расходилась сама с собой.
+     * <p>
+     * <b>Столица не рушится</b> (08.10.2026): её нельзя продать и нельзя построить вторую, а
+     * утрата бьёт по морали ВСЕХ колоний (`CapitolRules`). Снесённая землетрясением, она
+     * оставляла империю без пути назад: сквозной прогон поймал Псилонов с моралью −55 % и нулём
+     * производства на родном мире. Престол уходит только с колонией — захватом.
      */
     private String ruin(PlanetEntity colony, Random random) {
         List<PlanetBuildingEntity> buildings = buildingRepository.findAllByPlanetId(colony.getId())
                 .stream()
+                .filter(building -> !CapitolRules.CODE.equals(building.getBuildingCode()))
                 .sorted(Comparator.comparing(PlanetBuildingEntity::getBuildingCode))
                 .toList();
         if (buildings.isEmpty()) {

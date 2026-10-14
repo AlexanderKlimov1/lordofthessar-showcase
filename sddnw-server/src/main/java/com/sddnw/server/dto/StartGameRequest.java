@@ -26,7 +26,17 @@ public record StartGameRequest(
      *
      * @param name   название расы; пусто — раса из справочника со своим именем
      * @param traits коды особенностей: то, ценность чего и меряется
+     * @param skill    уровень игры этой империи ({@code AiSkill}, field-backlog, пункт 9) — прогон
+     *                 сравнения уровней сажает за один стол разные; пусто — уровень партии
+     * @param raceCode готовая раса этой империи — книга дебютов (пункт 9) меряет начало каждой расы,
+     *                 а раздача по порядку справочника сажает за стол всегда одних и тех же; пусто —
+     *                 первая свободная, как обычно
      */
-    public record AiEmpireDesign(String name, List<String> traits) {
+    public record AiEmpireDesign(String name, List<String> traits, String skill, String raceCode) {
+
+        /** Раса без своего уровня — уровень партии. */
+        public AiEmpireDesign(String name, List<String> traits) {
+            this(name, traits, null, null);
+        }
     }
 }

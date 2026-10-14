@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        13.10.2026, перенос технологий MOO II, пятая очередь: ускоритель времени даёт кораблю лишний ход
+        в конце круга — помнится круг, где он взят; плазменная сеть горит на корабле несколько кругов,
+        слабея, — помнится её сила.
+    -->
+    <changeSet id="146-battle-devices" author="sddnw">
+        <addColumn tableName="battle_ship">
+            <column name="warp_round" type="integer"/>
+            <column name="plasma_web" type="integer" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

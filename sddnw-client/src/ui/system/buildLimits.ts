@@ -8,4 +8,4 @@
  * очереди (`ColonyQueue`), а импортировать константу из экрана значило бы тянуть за ней
  * весь экран.
  */
-export const QUEUE_LIMIT = 7;
+export const QUEUE_LIMIT = 10;

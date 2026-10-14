@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Память игрока о чужих колониях (п. 15, туман войны): что он видел, когда в системе
+        были его глаза, — хозяин, население, оборона и ход. Без глаз карта показывает её, а
+        не живое состояние: так в оригинале.
+    -->
+    <changeSet id="095-planet-intel" author="sddnw">
+        <createTable tableName="planet_intel">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_planet_intel_player"
+                             references="player(id)" deleteCascade="true"/>
+            </column>
+            <column name="planet_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="owner_player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="population" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="defences" type="varchar(512)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="seen_turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="planet_intel" columnNames="player_id, planet_id"
+                             constraintName="uq_planet_intel_player_planet"/>
+        <createIndex tableName="planet_intel" indexName="ix_planet_intel_game">
+            <column name="game_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

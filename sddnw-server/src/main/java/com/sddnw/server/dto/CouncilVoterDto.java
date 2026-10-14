@@ -11,6 +11,7 @@ import java.util.UUID;
  * @param yours          это империя того, кто смотрит сцену
  * @param pending        голос ещё не объявлен: совет открыт, и чужих голосов до итога не
  *                       показывают, а свой — пока игрок не ответил
+ * @param silent         свой голос подан по доверию: игрок не ответил до итога
  */
 public record CouncilVoterDto(
         UUID playerId,
@@ -20,6 +21,11 @@ public record CouncilVoterDto(
         UUID choicePlayerId,
         Boolean candidate,
         Boolean yours,
-        Boolean pending
+        Boolean pending,
+        /**
+         * Свой голос подан правилом доверия: человек не ответил до итога (07.10.2026). Только у
+         * своей строки; у чужих — {@code false}.
+         */
+        Boolean silent
 ) {
 }

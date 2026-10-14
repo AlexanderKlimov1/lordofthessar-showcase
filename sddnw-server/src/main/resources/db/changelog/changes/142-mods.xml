@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        09.10.2026, field-backlog, пункт 42: моды — свои наборы справочников у основателя.
+        mod_set — набор в учётной записи (здания, корабли, технологии, лидеры — тексты JSON тем же
+        видом, что файлы resources/). game_mod — копия набора у партии: партия не зависит от того,
+        что основатель потом сделает со своим набором, и копия едет в сохранение.
+    -->
+    <changeSet id="142-mods" author="sddnw">
+        <createTable tableName="mod_set">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="name" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="buildings" type="text"/>
+            <column name="ships" type="text"/>
+            <column name="technologies" type="text"/>
+            <column name="leaders" type="text"/>
+            <column name="updated_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="mod_set" indexName="idx_mod_set_account">
+            <column name="account_id"/>
+        </createIndex>
+
+        <createTable tableName="game_mod">
+            <column name="game_id" type="uuid">
+                <constraints primaryKey="true" nullable="false"
+                             foreignKeyName="fk_game_mod_game" references="game(id)" deleteCascade="true"/>
+            </column>
+            <column name="name" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="buildings" type="text"/>
+            <column name="ships" type="text"/>
+            <column name="technologies" type="text"/>
+            <column name="leaders" type="text"/>
+        </createTable>
+
+        <addColumn tableName="game">
+            <column name="modded" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -16,12 +16,11 @@ public final class ColonyProject {
     /**
      * Сколько проектов помещается в очередь стройки колонии — п. 10.
      * <p>
-     * Семь, как в окне стройки MOO II: очередь там ограничена, и переполненная перестаёт
-     * принимать новое («queue full» в руководстве к патчу 1.50). Восьмой проект колонии
-     * не нужен: к тому времени, как дойдёт очередь, изучится половина дерева и строить
-     * захочется другое.
+     * Десять (09.10.2026, решение хозяина проекта; в окне стройки MOO II — семь): очередь
+     * ограничена, и переполненная перестаёт принимать новое («queue full» в руководстве к
+     * патчу 1.50), но семи мест игроку не хватало.
      */
-    public static final Integer QUEUE_LIMIT = 7;
+    public static final Integer QUEUE_LIMIT = 10;
 
     /** Дома: производство колонии идёт в прибавку к рождаемости. */
     public static final String HOUSING = "HOUSING";
@@ -197,6 +196,58 @@ public final class ColonyProject {
      */
     public static final Integer COLONY_SHIP_SETTLERS = 1;
 
+    /** Терраформирование — п. 4.1.2.1: климат на ступень лучше (250, 500, 750). */
+    public static final String TERRAFORM = "TERRAFORM";
+
+    /** Превращение земной планеты в Гею — п. 4.1.2.1, 500. */
+    public static final String GAIA = "GAIA";
+
+    /** Искусственная планета из газового гиганта или пояса астероидов системы — п. 4.1, 800. */
+    public static final String ARTIFICIAL_PLANET = "ARTIFICIAL_PLANET";
+
+    /**
+     * Андроиды — п. 4.1 (перенос MOO II): «mechanical worker with a +3 food / production / research
+     * bonus. Requires 1 production unit per turn instead of food». Каждый занимает место жителя,
+     * даёт 3 единицы своего дела и съедает единицу производства. <i>Реконструкция</i>: в оригинале
+     * андроид — житель с прибавкой к своей работе; у нас жители не делятся на виды, поэтому
+     * андроид даёт твёрдую прибавку, а место занимает отрицательной вместимостью — как туземцы.
+     */
+    public static final String ANDROID_FARMER = "ANDROID_FARMER";
+    public static final String ANDROID_WORKER = "ANDROID_WORKER";
+    public static final String ANDROID_SCIENTIST = "ANDROID_SCIENTIST";
+
+    /** Цена андроида. <i>Реконструкция</i>: оригинал её не публикует; вдвое дешевле колониальной базы. */
+    public static final Integer ANDROID_COST = 100;
+
+    /** Сколько даёт андроид своего дела — число MOO II («+3»). */
+    public static final Integer ANDROID_OUTPUT = 3;
+
+    /**
+     * Сколько андроидов планета держит СВЕРХ потолка населения — решение хозяина проекта (14.10.2026): крошечная 1,
+     * малая 2, средняя 3, большая 4, огромная 5. Первые столько андроидов места жителя не занимают; дальше каждый
+     * снова занимает. Без этого андроид у колонии, упёршейся в потолок (ради такой его и изучают), был невозможен
+     * вовсе, а у растущей — менял жителя на машину почти без выгоды.
+     */
+    public static Integer androidsBeyondCap(com.sddnw.server.domain.enums.PlanetSize size) {
+        return size == null ? 0 : size.ordinal() + 1;
+    }
+
+    /** Сколько андроидов планеты занимают места жителей — те, что сверх {@link #androidsBeyondCap}. */
+    public static Integer androidsTakingRoom(Integer androids, com.sddnw.server.domain.enums.PlanetSize size) {
+        return Math.max(0, androids - androidsBeyondCap(size));
+    }
+
+    /** Андроид — проект колонии из трёх видов. */
+    public static Boolean isAndroid(String projectCode) {
+        return ANDROID_FARMER.equals(projectCode) || ANDROID_WORKER.equals(projectCode)
+                || ANDROID_SCIENTIST.equals(projectCode);
+    }
+
+    /** Переделка планеты — терраформирование, Гея или искусственная планета. */
+    public static Boolean isReshape(String projectCode) {
+        return TERRAFORM.equals(projectCode) || GAIA.equals(projectCode) || ARTIFICIAL_PLANET.equals(projectCode);
+    }
+
     private ColonyProject() {
     }
 
@@ -213,7 +264,9 @@ public final class ColonyProject {
                 || COLONY_SHIP.equals(projectCode)
                 || OUTPOST_SHIP.equals(projectCode)
                 || TRANSPORT.equals(projectCode)
-                || FREIGHTER.equals(projectCode);
+                || FREIGHTER.equals(projectCode)
+                || isReshape(projectCode)
+                || isAndroid(projectCode);
     }
 
     /**

@@ -1,11 +1,13 @@
 import type { Planet } from '../../api/types';
 import { BuyCoin } from './BuyCoin';
 import { Colonist, ResourceIcon, type ResourceKind } from '../system/colonyIcons';
-import { turnsLeft } from '../system/colonyRules';
+import { output, turnsLeft } from '../system/colonyRules';
 import { t, tf, type Key } from '../../i18n';
-import { Figure } from '../Figure';
+import { Figure, TurnsFigure } from '../Figure';
 import { figureLabelClass, signed, signTone } from '../accent';
 import type { JobName } from './usePopulationDrag';
+import { climateName, planetSizeName } from '../planetLabels';
+import { isCapitol } from '../system/buildingArt';
 
 /**
  * Строка колонии в списке колоний империи — п. 4.1.1 и п. 10.
@@ -43,7 +45,7 @@ import type { JobName } from './usePopulationDrag';
  * выстраивались в столбик и набор читался одним взглядом.
  */
 export const COLUMNS =
-  'grid grid-cols-[1.5rem_15rem_minmax(16rem,1fr)_5.5rem_5.5rem_5.5rem_5.5rem_15rem]'
+  'grid grid-cols-[1.5rem_14rem_minmax(14rem,1fr)_4.5rem_4.5rem_4.5rem_4.5rem_15rem]'
   + ' items-center gap-x-3 px-2';
 
 const JOB_ORDER: JobName[] = ['farmers', 'workers', 'scientists'];
@@ -76,6 +78,7 @@ export function ColonyRow({
   onStartDrag,
   held,
   onOpen,
+  onOpenBuild,
   onTransfer,
   onMoveJob,
   onSelect,
@@ -110,6 +113,8 @@ export function ColonyRow({
   /** Группа, взятая из этой строки: её фигурки бледнеют на месте. */
   held: { job: JobName; count: number } | null;
   onOpen: () => void;
+  /** Щелчок по текущей стройке — колония открывается сразу на окне стройки (очереди). */
+  onOpenBuild: () => void;
   /** Перевозка жителя в другую колонию (Shift + щелчок): диалог с грузовиками. */
   onTransfer: () => void;
   /** Житель меняет занятие в этой же колонии: от одного к другому, без грузовиков. */
@@ -127,7 +132,18 @@ export function ColonyRow({
   // Остаток еды считается как на экране колонии: своя выработка минус едоки плюс подвоз
   // грузового флота — п. 4.1.1. Сервер шлёт остаток до подвоза, а голодает колония или
   // нет, решает подвоз.
-  const balance = colony.foodBalance + colony.foodDelivered;
+  // Жители «на руках» уже сняты с работы (09.10.2026, решение хозяина проекта): строка считает
+  // выработку без них, пока группу не положат. Правило выработки — то же, что у экрана колонии
+  // (`colonyRules.output`), а к серверным числам прибавляется только разница: подвоз, уборку и
+  // доход сервер знает лучше одной строки.
+  const working = { farmers: colony.farmers, workers: colony.workers, scientists: colony.scientists };
+  const lifted = held ? { ...working, [held.job]: Math.max(0, working[held.job] - held.count) } : working;
+  const before = output(colony, working);
+  const after = output(colony, lifted);
+  const food = colony.food + after.food - before.food;
+  const production = colony.production + after.production - before.production;
+  const research = colony.research + after.research - before.research;
+  const balance = colony.foodBalance + after.food - before.food + colony.foodDelivered;
   // Последнего жителя увезти в другую колонию нельзя (колония без населения перестала бы
   // существовать) — но занятие он менять вправе, поэтому фигурка живая всегда, а отказ
   // на перевозке даёт сам экран.
@@ -137,7 +153,7 @@ export function ColonyRow({
       ref={rowRef}
       data-colony-row={planet.id}
       className={
-        `${COLUMNS} border-b border-space-800 py-1.5 ` +
+        `${COLUMNS} border-b border-space-800 py-3 ` +
         (hovered && !source && refused
           ? 'bg-space-800 outline outline-1 -outline-offset-1 outline-danger'
           : hovered && !source
@@ -172,10 +188,17 @@ export function ColonyRow({
 
       {/* Колония: отсюда открывается экран управления планетой — как в оригинале. */}
       <button type="button" className="link min-w-0 text-left" onClick={onOpen}>
-        <span className="block truncate text-19 text-ink-bright">{planet.name}</span>
+        {/* Население и предел планеты — у названия (12.10.2026, решение хозяина проекта). */}
+        <span className="block truncate text-19 text-ink-bright"
+              title={t('colonyRow.population.title', { n: planet.population, max: colony.maxPopulation, growth: signed(colony.growthK) })}>
+          {planet.name}{' '}
+          <span className="text-ink-soft">{planet.population}</span>
+          <span className="text-ink-dim">/{colony.maxPopulation}</span>
+        </span>
         <span className="block truncate text-15 text-ink-faint no-underline">
-          {systemName} · {planet.sizeLabel} · {planet.climateLabel}
+          {systemName} · {planetSizeName(planet.size, planet.sizeLabel)} · {climateName(planet.climate, planet.climateLabel)}
           {planet.homeworld ? t('colonyRow.homeworld') : ''}
+          {isCapitol(colony) ? t('colonyRow.capitol') : ''}
         </span>
       </button>
 
@@ -185,24 +208,32 @@ export function ColonyRow({
         рабочие одной колонии стояли под фермерами другой, и столбцы занятий не читались
         сверху вниз. Не влезло в долю — фигурки переносятся строкой ниже внутри своей группы.
       */}
-      <div className="flex flex-col gap-0.5">
+      <div className="flex flex-col gap-0.5"
+           title={t('colonyRow.population.title', { n: planet.population, max: colony.maxPopulation, growth: signed(colony.growthK) })}>
         <div className="grid grid-cols-3 gap-x-3">
-          {JOB_ORDER.map((job) => (
+          {JOB_ORDER.map((job) => {
+            // Фермеры там, где еду не вырастить (12.10.2026): группа гаснет и жителей не
+            // принимает — без своей зоны бросок туда считается броском на строку колонии.
+            const closed = job === 'farmers' && colony.foodPerFarmer <= 0;
+            return (
             <div
               key={job}
-              ref={zoneRef(job)}
+              ref={closed ? undefined : zoneRef(job)}
+              title={closed ? t('colony.jobs.farmersClosed.title') : undefined}
+              aria-disabled={closed || undefined}
               className={
-                'flex min-h-[22px] min-w-0 flex-wrap items-center gap-1 px-1 '
+                'flex min-h-[26px] min-w-0 flex-wrap items-center gap-1 px-1 '
                 + (hoverZone === `${planet.id}:${job}` ? 'bg-space-800 ring-1 ring-accent' : '')
+                + (closed ? ' opacity-50' : '')
               }
             >
               <ResourceIcon
                 kind={JOB_ICONS[job]}
-                label={JOB_LABELS[job]}
-                className="h-[16px] w-[16px] shrink-0 text-ink-faint"
+                label={t(JOB_LABELS[job])}
+                className="h-[19px] w-[19px] shrink-0 text-ink-faint"
               />
               {colony[job] === 0 ? (
-                <span className="text-15 text-ink-off">—</span>
+                <span className="text-15 text-ink-off">{closed ? t('colony.jobs.unavailable') : '—'}</span>
               ) : (
                 Array.from({ length: colony[job] }).map((_, index) => (
                   <button
@@ -215,6 +246,9 @@ export function ColonyRow({
                     }
                     draggable={false}
                     aria-label={t('colonyRow.colonist.aria', { job: t(JOB_LABELS[job]), name: planet.name, n: index + 1 })}
+                    // Скрытые действия названы (field-backlog, пункт 72): щелчок берёт группу,
+                    // Shift + щелчок открывает перевозку.
+                    title={t('colonyRow.colonist.title')}
                     onPointerDown={onStartDrag(job, colony[job] - index)}
                     onDragStart={(event) => event.preventDefault()}
                     onClick={(event) => {
@@ -225,43 +259,32 @@ export function ColonyRow({
                       // Смена занятия по кругу — только с клавиатуры (detail = 0): мышь
                       // берёт группу нажатием, и её щелчок здесь лишний.
                       if (event.detail === 0) {
-                        onMoveJob(job, JOB_ORDER[(JOB_ORDER.indexOf(job) + 1) % JOB_ORDER.length]);
+                        // По кругу — мимо закрытой группы фермеров.
+                        const open = JOB_ORDER.filter((other) => other !== 'farmers' || colony.foodPerFarmer > 0 || other === job);
+                        onMoveJob(job, open[(open.indexOf(job) + 1) % open.length]);
                       }
                     }}
                   >
-                    <Colonist color={color} className="h-[17px] w-[12px]" />
+                    <Colonist color={color} className="h-[20px] w-[14px]" />
                   </button>
                 ))
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
-        <span className={figureLabelClass('note')}>
-          {tf('colonyRow.population', {
-            n: <Figure accent="note">{planet.population}</Figure>,
-            max: <Figure accent="note">{colony.maxPopulation}</Figure>,
-          })}{' '}
-          <Figure accent="note" tone={signTone(colony.growthK)}>
-            {signed(colony.growthK)}
-          </Figure>{' '}
-          {t('colonyRow.thousand')}
-        </span>
       </div>
 
       {/*
         Еда стоит с остатком: сама по себе выработка ничего не говорит — колония живёт
         или голодает по тому, что осталось после едоков и подвоза.
       */}
-      <Value value={colony.food}>
-        <Figure accent="note" tone={balance < 0 ? 'danger' : 'good'}>
-          {signed(balance)}
-        </Figure>
-        {colony.foodDelivered > 0 ? (
-          <span>
-            {tf('colonyRow.delivery', { n: <Figure accent="note">{colony.foodDelivered}</Figure> })}
-          </span>
-        ) : null}
-      </Value>
+      <Value
+        value={balance}
+        tone={balance < 0 ? 'danger' : 'good'}
+        signedValue
+        title={t('colonyRow.food.title', { food, delivered: colony.foodDelivered })}
+      />
 
       {/*
         Производство идёт с уборкой (п. 10): в столбце стоит то, что достаётся стройке,
@@ -269,29 +292,21 @@ export function ColonyRow({
         одинаковые по жителям колонии различались бы выработкой без всякой видимой
         причины — грязь зависит от размера планеты.
       */}
-      <Value value={colony.production}>
-        {colony.pollution > 0 ? (
-          <span className="text-warn">
-            {tf('colonyRow.cleanup', { n: <Figure accent="note" tone="warn">{colony.pollution}</Figure> })}
-          </span>
-        ) : null}
-      </Value>
+      <Value
+        value={production}
+        warn={colony.pollution > 0}
+        title={colony.pollution > 0 ? t('colonyRow.production.cleanup', { n: colony.pollution }) : undefined}
+      />
 
-      <Value value={colony.research} />
+      <Value value={research} />
 
       {/* Доход — единственная величина без своих жителей: она из налогов и содержания. */}
-      <div className="text-right">
-        <span className="block">
-          <Figure accent="value" tone={signTone(colony.income)}>
-            {signed(colony.income)}
-          </Figure>
-        </span>
-        {colony.upkeep > 0 ? (
-          <span className="block">
-            <Figure accent="note">−{colony.upkeep}</Figure>
-          </span>
-        ) : null}
-      </div>
+      <Value
+        value={colony.income}
+        tone={signTone(colony.income)}
+        signedValue
+        title={colony.upkeep > 0 ? t('colonyRow.income.upkeep', { n: colony.upkeep }) : undefined}
+      />
 
       {/*
         Стройка: что строится и сколько осталось — тот же срок, что на экране колонии, — а
@@ -300,7 +315,12 @@ export function ColonyRow({
         как в столбик они читаются одним взглядом.
       */}
       <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
+        {/*
+          Щелчок по стройке открывает очередь колонии (07.10.2026): стройку меняют, глядя на
+          всю империю, и путь «название → колония → сменить» был на два шага длиннее нужного.
+        */}
+        <button type="button" className="link-quiet min-w-0 flex-1 text-left"
+                title={t('colonies.openBuild.title')} onClick={onOpenBuild}>
           <span className="block truncate text-18 text-ink">
             {colony.projectName ?? t('build.nothing')}
             {/*
@@ -312,7 +332,7 @@ export function ColonyRow({
             ) : null}
           </span>
           <span className={'block truncate ' + figureLabelClass('note')}>{progress(planet)}</span>
-        </div>
+        </button>
         <BuyCoin
           colony={colony}
           credits={credits}
@@ -325,14 +345,22 @@ export function ColonyRow({
   );
 }
 
-/** Число выработки со своей припиской снизу: в столбце помещается и то, и другое. */
-function Value({ value, children }: { value: number; children?: React.ReactNode }) {
+/**
+ * Число столбца — редизайн списка колоний (07.10.2026, решение хозяина проекта): в строке только
+ * числа, крупно; то, что прежде стояло мелкой припиской под ними (подвоз, уборка, содержание), —
+ * во всплывающей подсказке, а «есть уборка» — знаком ◆ рядом с числом.
+ */
+function Value({ value, tone, signedValue = false, warn = false, title }: {
+  value: number;
+  tone?: 'danger' | 'good' | 'warn';
+  signedValue?: boolean;
+  warn?: boolean;
+  title?: string;
+}) {
   return (
-    <div className="text-right">
-      <span className="block">
-        <Figure accent="value">{value}</Figure>
-      </span>
-      {children ? <span className={'block ' + figureLabelClass('note')}>{children}</span> : null}
+    <div className="text-right" title={title}>
+      {warn ? <span aria-hidden className="mr-1 text-14 text-warn">◆</span> : null}
+      <Figure accent="lead" tone={tone}>{signedValue ? signed(value) : value}</Figure>
     </div>
   );
 }
@@ -353,15 +381,17 @@ const progress = (planet: Planet): React.ReactNode => {
       : tf('colonyRow.tradeGoods', { n: <Figure accent="note">{Math.floor(colony.production / 2)}</Figure> });
   }
   const turns = turnsLeft(colony);
+  // Срок — первым и вдвое крупнее (12.10.2026): столбец узкий, и срезаться должно вложенное,
+  // а не срок.
   return (
     <>
+      {turns === null ? t('colonyRow.noProduction') : (
+        <>{tf('build.turns', { n: <TurnsFigure accent="note">{turns}</TurnsFigure> })} · </>
+      )}
       {tf('build.progress', {
         points: <Figure accent="note">{colony.projectPoints}</Figure>,
         cost: <Figure accent="note">{colony.projectCost}</Figure>,
       })}
-      {turns === null ? t('colonyRow.noProduction') : (
-        <> · {tf('build.turns', { n: <Figure accent="note">{turns}</Figure> })}</>
-      )}
     </>
   );
 };

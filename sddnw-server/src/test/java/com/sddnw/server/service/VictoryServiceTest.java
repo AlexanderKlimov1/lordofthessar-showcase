@@ -32,7 +32,7 @@ class VictoryServiceTest {
       службе зависимость, поправь и этот список (те же грабли, что у AiNeedsTest).
     */
     private final VictoryService service = new VictoryService(
-            new CouncilService(new CouncilRules(), null, null, null, null, null, null, null),
+            new CouncilService(new CouncilRules(), null, null, null, null, null, null, null, Messages.standalone()),
             // Мощь империй нужна только итогу по могуществу; у этих партий он выключен.
             null);
 
@@ -89,7 +89,7 @@ class VictoryServiceTest {
     }
 
     @Test
-    @DisplayName("Двадцать ходов одному у Wardenhold — победа удержанием")
+    @DisplayName("Положенный срок одному у Wardenhold — победа удержанием")
     void holdingWardenholdTwentyTurnsWins() {
         PlayerEntity first = player(1);
         PlayerEntity second = player(2);
@@ -102,11 +102,13 @@ class VictoryServiceTest {
         assertEquals(first.getId(), game.getWardenholdHolderPlayerId());
         assertEquals(10, game.getWardenholdSinceTurn());
 
-        game.setTurn(28);
+        // Срок берётся из правила, а не числом: его двигает хозяин проекта (20, с 09.10.2026 — 25).
+        int last = 10 + WardenholdRules.HOLD_TURNS - 1;
+        game.setTurn(last - 1);
         service.check(context(game, List.of(first, second), special, rivalHome));
         assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
 
-        game.setTurn(29);
+        game.setTurn(last);
         service.check(context(game, List.of(first, second), special, rivalHome));
         assertEquals(GameStatus.FINISHED, game.getStatus());
         assertEquals(first.getId(), game.getWinnerPlayerId());
@@ -183,6 +185,55 @@ class VictoryServiceTest {
         }
         return new TurnContext(game, players, List.of(system), List.of(colonies), null,
                 new TurnReport(game.getTurn()));
+    }
+
+    @Test
+    @DisplayName("Колонии остались у двух союзников — побеждают оба (пункт 145)")
+    void alliesWinTogether() {
+        PlayerEntity first = player(1);
+        PlayerEntity second = player(2);
+        PlayerEntity fallen = player(3);
+        GameEntity game = game();
+        withRelations(relation(first, second, true), relation(second, first, true));
+
+        service.check(context(game, List.of(first, second, fallen), colony(first, 4), colony(second, 10)));
+
+        assertEquals(GameStatus.FINISHED, game.getStatus());
+        // Первым записан самый населённый, союзник — рядом.
+        assertEquals(second.getId(), game.getWinnerPlayerId());
+        assertEquals(List.of(second.getId(), first.getId()), game.winners());
+    }
+
+    @Test
+    @DisplayName("Без союза двое уцелевших играют дальше")
+    void survivorsWithoutAllianceKeepPlaying() {
+        PlayerEntity first = player(1);
+        PlayerEntity second = player(2);
+        PlayerEntity fallen = player(3);
+        GameEntity game = game();
+        withRelations(relation(first, second, false), relation(second, first, false));
+
+        service.check(context(game, List.of(first, second, fallen), colony(first, 4), colony(second, 10)));
+
+        assertEquals(GameStatus.IN_PROGRESS, game.getStatus());
+        assertNull(game.getWinnerPlayerId());
+    }
+
+    private void withRelations(com.sddnw.server.domain.entity.DiplomacyRelationEntity... rows) {
+        com.sddnw.server.repository.DiplomacyRelationRepository relations =
+                org.mockito.Mockito.mock(com.sddnw.server.repository.DiplomacyRelationRepository.class);
+        org.mockito.Mockito.when(relations.findAllByPlayerIdIn(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of(rows));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "relations", relations);
+    }
+
+    private com.sddnw.server.domain.entity.DiplomacyRelationEntity relation(PlayerEntity from, PlayerEntity to,
+                                                                           boolean allied) {
+        com.sddnw.server.domain.entity.DiplomacyRelationEntity row = new com.sddnw.server.domain.entity.DiplomacyRelationEntity();
+        row.setPlayerId(from.getId());
+        row.setOtherPlayerId(to.getId());
+        row.setTreaties(allied ? java.util.Set.of(com.sddnw.server.domain.enums.DiplomacyTreaty.ALLIANCE) : java.util.Set.of());
+        return row;
     }
 
     private GameEntity game() {

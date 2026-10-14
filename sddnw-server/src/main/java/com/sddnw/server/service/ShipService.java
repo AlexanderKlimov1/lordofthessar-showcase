@@ -32,12 +32,15 @@ public class ShipService {
     private final FleetService fleetService;
     private final CommandRules commandRules;
     private final PlanetRepository planetRepository;
+    private final com.sddnw.server.repository.PlanetBuildingRepository planetBuildingRepository;
 
     public ShipService(RaceService raceService,
                        CommandRules commandRules,
                        PlanetRepository planetRepository,
+                       com.sddnw.server.repository.PlanetBuildingRepository planetBuildingRepository,
                        ShipDesignService shipDesignService,
                        FleetService fleetService) {
+        this.planetBuildingRepository = planetBuildingRepository;
         this.raceService = raceService;
         this.commandRules = commandRules;
         this.planetRepository = planetRepository;
@@ -83,6 +86,22 @@ public class ShipService {
                 fleetService.canRedirect(player),
                 race.telepathic(),
                 fleetService.commandUsedByPlayer(game.getId()).getOrDefault(player.getId(), 0),
-                commandRules.capacity(planetRepository.countByOwnerPlayerId(player.getId()), race));
+                commandCapacity(player, race),
+                shipDesignService.technologies(player).contains(FlightRules.JUMP_GATE_TECH),
+                shipDesignService.technologies(player).contains(FlightRules.STAR_GATE_TECH));
+    }
+
+    /** Запас командных очков империи с прибавкой связи за орбитальные базы — п. 8 ({@link CommandRules}). */
+    private Integer commandCapacity(PlayerEntity player, RaceEffects race) {
+        List<UUID> planets = planetRepository.findAllByOwnerPlayerId(player.getId()).stream()
+                .map(com.sddnw.server.domain.entity.PlanetEntity::getId)
+                .toList();
+        long bases = planets.isEmpty() ? 0 : planetBuildingRepository.findAllByPlanetIdIn(planets).stream()
+                .filter(building -> OrbitalDefenceRules.orbital(building.getBuildingCode()))
+                .map(com.sddnw.server.domain.entity.PlanetBuildingEntity::getPlanetId)
+                .distinct()
+                .count();
+        return commandRules.capacity(planetRepository.countByOwnerPlayerId(player.getId()), race, (int) bases,
+                shipDesignService.technologies(player));
     }
 }

@@ -116,6 +116,33 @@ public class MailService {
         return send(email, subject, text, html);
     }
 
+    /**
+     * Письмо со ссылкой сброса пароля — backlog-promo, пункт 45: тем же путём, что подтверждение,
+     * на языке запроса. Ссылка живёт {@code minutes} минут.
+     */
+    public String sendReset(String email, String login, String link, Integer minutes) {
+        String subject = messages.get("mail.reset.subject");
+        String text = messages.get("mail.reset.text", login, link, minutes);
+        String html = messages.get("mail.reset.html", escape(login), link, minutes);
+        return send(email, subject, text, html);
+    }
+
+    /**
+     * Письмо-уведомление — field-backlog, пункт 22: тем же путём, что подтверждение, но сбой
+     * отправки здесь не отказ — о ходе напомнят и следующим письмом, а уронить из-за почты
+     * посчитанный ход было бы хуже молчания.
+     *
+     * @return ушло ли письмо (или легло в исходящие, если почтового сервера нет)
+     */
+    public Boolean sendNotice(String to, String subject, String text, String html) {
+        try {
+            send(to, subject, text, html);
+            return Boolean.TRUE;
+        } catch (MailDeliveryException failure) {
+            return Boolean.FALSE;
+        }
+    }
+
     private String send(String to, String subject, String text, String html) {
         if (!Boolean.TRUE.equals(sendsForReal())) {
             return outbox(to, subject, text);
@@ -133,7 +160,7 @@ public class MailService {
             helper.setSubject(subject);
             helper.setText(text, html);
             sender.send(message);
-            log.info("Письмо со ссылкой подтверждения отправлено на {} через {}", to, smtpHost);
+            log.info("Письмо «{}» отправлено на {} через {}", subject, to, smtpHost);
             return null;
         } catch (MailException | jakarta.mail.MessagingException failure) {
             // Копия остаётся в исходящих: письмо не ушло, но ссылка не потеряна —

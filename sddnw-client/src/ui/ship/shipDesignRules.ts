@@ -73,7 +73,10 @@ export interface Totals {
   cost: number;
   structure: number;
   armour: number;
+  /** Запас щита — п. 8, MOO II: класс × 5 × множитель корпуса; падает, когда кончится. */
   shield: number;
+  /** Класс щита: столько он срезает с каждого выстрела, не тратя запаса. */
+  shieldClass: number;
   speed: number;
   /** Боевая скорость: число оригинала, поле боя делит его на четыре. */
   combatSpeed: number;
@@ -130,10 +133,23 @@ const pickEnvelops = (pick: Pick): boolean =>
  * Обволакивающий удар входит вчетверо — правилом оригинала и сервера: он приходится на
  * цель четыре раза, по разу на каждую сторону.
  */
+/** Запас щита на единицу класса — число MOO II, как на сервере (`ShipDesignRules`). */
+const SHIELD_POOL_PER_CLASS = 5;
+
+/** Множитель корпуса для запаса щита: 1, 2, 3, 4, 5, 7 от фрегата до Левиафана — п. 8. */
+const shieldFactor = (size: number): number => [1, 2, 3, 4, 5, 7][Math.min(6, Math.max(1, size)) - 1];
+
 function salvo(picks: Pick[]): number {
+  // Фокусировщик энергии прибавляет к лучам и снарядам, но не к ракетам — п. 8, как на сервере.
+  const beamPercent = sum(picks, 'BEAM_DAMAGE_PERCENT');
+  const focused = (pick: Pick, damage: number) =>
+    pick.component.weaponKind === 'BEAM' || pick.component.weaponKind === 'PROJECTILE'
+      ? Math.trunc((damage * (100 + beamPercent)) / 100)
+      : damage;
   return picks
-    .filter((pick) => pick.component.slot === 'WEAPON')
-    .reduce((total, pick) => total + pickDamage(pick) * pickShots(pick) * pick.count
+    // Бомбы в залп не входят — пункт 25: по кораблям они не бьют (так же считает сервер).
+    .filter((pick) => pick.component.slot === 'WEAPON' && pick.component.weaponKind !== 'BOMB')
+    .reduce((total, pick) => total + focused(pick, pickDamage(pick)) * pickShots(pick) * pick.count
       * (pickEnvelops(pick) ? ENVELOPING_SIDES : 1), 0);
 }
 
@@ -188,7 +204,8 @@ export function totals(
     cost,
     structure: Math.trunc((hull.structure * (100 + sum(picks, 'STRUCTURE_PERCENT'))) / 100),
     armour,
-    shield: sum(picks, 'SHIELD') * hull.systemFactor,
+    shield: sum(picks, 'SHIELD') * SHIELD_POOL_PER_CLASS * shieldFactor(hull.size),
+    shieldClass: sum(picks, 'SHIELD'),
     speed: sum(picks, 'SPEED'),
     combatSpeed: sum(picks, 'COMBAT_SPEED'),
     attack: Math.trunc(
@@ -199,11 +216,17 @@ export function totals(
       ((100 - hull.hitChancePercent + sum(picks, 'DEFENSE')) * (100 + racePercent.defense)) / 100,
     ),
     missileEvasion: sum(picks, 'MISSILE_EVASION'),
-    troops: sum(picks, 'TROOPS'),
+    // Пехота на борту — то же правило, что на сервере (ShipDesignRules.marines): по классу
+    // корпуса, десантные отсеки удваивают.
+    troops: Math.trunc((MARINES_BY_HULL[Math.max(1, Math.min(6, hull.size)) - 1]
+      * (100 + sum(picks, 'MARINES_PERCENT'))) / 100),
     command: hull.command,
     rangePercent: sum(picks, 'FUEL_RANGE_PERCENT'),
   };
 }
+
+/** Пехота по классу корпуса 1..6 — реконструкция, одна с сервером (п. 8, абордаж). */
+const MARINES_BY_HULL = [2, 5, 10, 15, 20, 50];
 
 /**
  * Дальность корабля в парсеках — п. 8: топливо империи плюс проценты его баков.

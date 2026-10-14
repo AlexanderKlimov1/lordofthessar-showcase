@@ -211,6 +211,16 @@ public class BalanceRunProgress {
         });
     }
 
+    /** Ход решённости прогона — пункт 155: медианы по партиям, рядом с приговорами ценам. */
+    @Transactional("historyTransactionManager")
+    public void decided(UUID runId, Integer percent, Integer tail) {
+        repository.findById(runId).ifPresent(run -> {
+            run.setDecidedPercent(percent);
+            run.setTailTurns(tail);
+            repository.save(run);
+        });
+    }
+
     @Transactional("historyTransactionManager")
     public void played(UUID runId, Integer played) {
         repository.findById(runId).ifPresent(run -> {

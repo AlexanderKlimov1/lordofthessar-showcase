@@ -3,6 +3,7 @@ package com.sddnw.server.service;
 import com.sddnw.server.domain.entity.FleetEncounterEntity;
 import com.sddnw.server.domain.entity.SpaceBattleEntity;
 import com.sddnw.server.domain.entity.FleetEntity;
+import com.sddnw.server.domain.entity.FleetShipEntity;
 import com.sddnw.server.domain.ShipStats;
 import com.sddnw.server.domain.entity.PlanetBuildingEntity;
 import com.sddnw.server.domain.entity.PlanetEntity;
@@ -13,6 +14,8 @@ import com.sddnw.server.domain.entity.PlayerEntity;
 import com.sddnw.server.domain.entity.StarSystemEntity;
 import com.sddnw.server.domain.enums.EncounterDecision;
 import com.sddnw.server.domain.enums.EncounterState;
+import com.sddnw.server.domain.enums.PlayerType;
+import com.sddnw.server.domain.enums.ShipEffectType;
 import com.sddnw.server.dto.EncounterDto;
 import com.sddnw.server.repository.FleetEncounterRepository;
 import com.sddnw.server.repository.GameRepository;
@@ -28,10 +31,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -78,6 +84,12 @@ public class EncounterService {
     private final ShipDesignRules shipDesignRules;
     private final PlanetRepository planetRepository;
     private final PlanetBuildingRepository planetBuildingRepository;
+    private final OrbitalDefenceService orbitalDefence;
+    private final GroundCombatService groundCombat;
+    private final ShipCatalog shipCatalog;
+    private final TechSightService techSight;
+    private final BuildingCatalog buildingCatalog;
+    private final LeaderRecordService leaderRecord;
 
     public EncounterService(Messages messages,
                             FleetEncounterRepository encounterRepository,
@@ -93,8 +105,20 @@ public class EncounterService {
                             ShipDesignService shipDesignService,
                             ShipDesignRules shipDesignRules,
                             PlanetRepository planetRepository,
-                            PlanetBuildingRepository planetBuildingRepository) {
+                            PlanetBuildingRepository planetBuildingRepository,
+                            OrbitalDefenceService orbitalDefence,
+                            GroundCombatService groundCombat,
+                            ShipCatalog shipCatalog,
+                            TechSightService techSight,
+                            BuildingCatalog buildingCatalog,
+                            LeaderRecordService leaderRecord) {
+        this.leaderRecord = leaderRecord;
+        this.techSight = techSight;
+        this.buildingCatalog = buildingCatalog;
         this.messages = messages;
+        this.orbitalDefence = orbitalDefence;
+        this.groundCombat = groundCombat;
+        this.shipCatalog = shipCatalog;
         this.orbitalDefenceRules = orbitalDefenceRules;
         this.shipDesignService = shipDesignService;
         this.shipDesignRules = shipDesignRules;
@@ -213,9 +237,7 @@ public class EncounterService {
                 // придут в тот же бой вместе с ним.
                 continue;
             }
-            if (defence(context, colony).isEmpty()) {
-                continue;
-            }
+            boolean bombable = defence(context, colony).isEmpty();
 
             FleetEntity visitor = fleets.stream()
                     .sorted(Comparator.comparing((FleetEntity fleet) -> initiative(fleet, players))
@@ -224,6 +246,12 @@ public class EncounterService {
                     .findFirst()
                     .orElse(null);
             if (visitor == null || ownerId.equals(visitor.getOwnerPlayerId())) {
+                continue;
+            }
+            // Беззащитная колония даёт встречу только флоту С БОМБАМИ — пункт 25, диалог
+            // оригинала «Select Combat at …: BOMBARD / CANCEL». Без бомб решать там нечего.
+            if (bombable && fleetBombs(players.get(visitor.getOwnerPlayerId()), visitor) <= 0
+                    && fleetBio(players.get(visitor.getOwnerPlayerId()), visitor).isEmpty()) {
                 continue;
             }
             if (Boolean.TRUE.equals(peaceBound(visitor.getOwnerPlayerId(), ownerId))
@@ -240,11 +268,16 @@ public class EncounterService {
             encounter.setFirstPlayerId(visitor.getOwnerPlayerId());
             encounter.setSecondPlayerId(ownerId);
             encounter.setState(EncounterState.WAITING_FIRST);
+            encounter.setBombard(bombable);
             encounterRepository.save(encounter);
+            if (bombable) {
+                log.debug("Встреча «бомбить» у колонии {}: флот игрока {}", colony.getName(), visitor.getOwnerPlayerId());
+            }
 
             String system = systemNames.getOrDefault(systemId, messages.get("turn.system.unnamed"));
             context.report().add(visitor.getOwnerPlayerId(), "ENCOUNTER",
-                    new MessageKey("turn.encounter.atColony", name(players, ownerId), system),
+                    new MessageKey(bombable ? "turn.encounter.bombardable" : "turn.encounter.atColony",
+                            name(players, ownerId), system),
                     systemId, null);
             context.report().add(ownerId, "ENCOUNTER",
                     new MessageKey("turn.encounter.colonyVisited",
@@ -314,6 +347,349 @@ public class EncounterService {
                 .sum();
     }
 
+    /**
+     * Сносит {@code count} платформ обороны из тех, что вышли в быстрый бой, — по порядку
+     * выхода (тому же, что задаёт строй в тактической сцене), и через то же
+     * {@code OrbitalDefenceService.destroy}, каким их сносит тактический бой: разбитая
+     * платформа уносит своё здание.
+     */
+    private void destroyPlatforms(PlayerEntity owner, UUID systemId, List<UUID> platforms, int count) {
+        if (owner == null || count <= 0 || platforms.isEmpty()) {
+            return;
+        }
+        Map<UUID, String> hullByDesign = new HashMap<>();
+        shipDesignService.platformDesigns(owner).forEach((hull, design) -> hullByDesign.put(design.getId(), hull));
+        Map<String, Integer> lost = new LinkedHashMap<>();
+        for (UUID design : platforms.subList(0, Math.min(count, platforms.size()))) {
+            String hull = hullByDesign.get(design);
+            if (hull != null) {
+                lost.merge(hull, 1, Integer::sum);
+            }
+        }
+        lost.forEach((hull, number) -> orbitalDefence.destroy(owner.getId(), systemId, hull, number));
+    }
+
+    /**
+     * Что стороны увидели друг у друга в бою — п. 15 ({@link TechSightService#observeBattle}):
+     * проекты кораблей обоих флотов, платформы обороны и постройки колоний сторон в системе.
+     */
+    private void observeBattle(FleetEncounterEntity encounter, Integer turn, PlayerEntity player, FleetEntity mine,
+                               PlayerEntity opponent, FleetEntity theirs, List<UUID> defence) {
+        if (opponent == null || opponent.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.MONSTER) {
+            return;
+        }
+        Map<UUID, ShipDesignEntity> designs = shipDesignService.designsOfGame(encounter.getGameId());
+        Map<UUID, java.util.Collection<ShipDesignEntity>> sides = new LinkedHashMap<>();
+        sides.put(player.getId(), composition(mine).keySet().stream()
+                .map(designs::get).filter(java.util.Objects::nonNull).toList());
+        List<ShipDesignEntity> theirDesigns = new ArrayList<>(composition(theirs).keySet().stream()
+                .map(designs::get).filter(java.util.Objects::nonNull).toList());
+        defence.stream().map(designs::get).filter(java.util.Objects::nonNull).forEach(theirDesigns::add);
+        sides.put(opponent.getId(), theirDesigns);
+
+        Map<UUID, java.util.Collection<com.sddnw.server.domain.Building>> colonies = new LinkedHashMap<>();
+        for (PlayerEntity side : List.of(player, opponent)) {
+            List<com.sddnw.server.domain.Building> built = new ArrayList<>();
+            for (PlanetEntity colony : planetRepository.findAllByOwnerPlayerId(side.getId())) {
+                if (colony.getStarSystem() == null
+                        || !encounter.getStarSystemId().equals(colony.getStarSystem().getId())) {
+                    continue;
+                }
+                planetBuildingRepository.findAllByPlanetId(colony.getId()).stream()
+                        .map(PlanetBuildingEntity::getBuildingCode)
+                        .map(code -> buildingCatalog.byCode().get(code))
+                        .filter(java.util.Objects::nonNull)
+                        .forEach(built::add);
+            }
+            colonies.put(side.getId(), built);
+        }
+        Map<UUID, Set<String>> fresh = techSight.observeBattle(encounter.getGameId(), turn, sides, colonies);
+        seenAtEnemy(encounter, turn, player, opponent, fresh.getOrDefault(player.getId(), Set.of()));
+        seenAtEnemy(encounter, turn, opponent, player, fresh.getOrDefault(opponent.getId(), Set.of()));
+    }
+
+    /** Сколько увиденных у врага технологий называть строками, остальное — числом. */
+    private static final int SEEN_LINES = 3;
+
+    /**
+     * Увиденное у врага — открытым вопросом (field-backlog, пункт 134): «у них есть то, чего нет у
+     * меня» — сильный разрыв, если его назвать. После боя человеку — строкой на технологию: впервые
+     * увиденное у этого врага и при этом не изученное им самим. Путь к закрытию называет сама строка
+     * — исследование, обмен (просить можно только увиденное) или трофей на слом; ссылка на справочник
+     * даёт название на языке читателя. Только новое: виденное раньше второй раз не повторяется.
+     */
+    private void seenAtEnemy(FleetEncounterEntity encounter, Integer turn, PlayerEntity viewer, PlayerEntity enemy,
+                             Set<String> fresh) {
+        if (fresh.isEmpty() || viewer.getPlayerType() != com.sddnw.server.domain.enums.PlayerType.HUMAN) {
+            return;
+        }
+        Set<String> own = techSight.knownBy(viewer.getId());
+        List<String> missing = fresh.stream().filter(code -> !own.contains(code)).sorted().toList();
+        for (String code : missing.subList(0, Math.min(SEEN_LINES, missing.size()))) {
+            playerEvents.record(encounter.getGameId(), viewer.getId(), turn, "BATTLE",
+                    new MessageKey("turn.battle.seenTech", enemy.getName(), CatalogTexts.tech(code)),
+                    encounter.getStarSystemId(), null);
+        }
+        if (missing.size() > SEEN_LINES) {
+            playerEvents.record(encounter.getGameId(), viewer.getId(), turn, "BATTLE",
+                    new MessageKey("turn.battle.seenTechMore", enemy.getName(), missing.size() - SEEN_LINES),
+                    encounter.getStarSystemId(), null);
+        }
+    }
+
+    /** Состав флота по проектам — до и после потерь быстрого боя. */
+    private Map<UUID, Integer> composition(FleetEntity fleet) {
+        Map<UUID, Integer> rows = new LinkedHashMap<>();
+        if (fleet == null) {
+            return rows;
+        }
+        for (FleetShipEntity row : fleetService.shipsOf(fleet.getId())) {
+            rows.merge(row.getDesignId(), row.getShips(), Integer::sum);
+        }
+        return rows;
+    }
+
+    /**
+     * Трофеи быстрого боя — п. 8, абордаж «авто». На поле корабль берут, когда у него опущен
+     * щит и он обездвижен, — то есть именно у тех, кто в быстром бою «погиб». Поэтому
+     * победитель, у которого есть ЧЕМ брать (телепатия, телепорт, штурмовые шаттлы или
+     * тяговый луч — те же средства, что на поле), уводит из погибших столько, сколько
+     * потянет его пехота: каждый корабль берётся расчётом наземного боя
+     * ({@code GroundCombatService.boarding}), и абордажники тратятся на его команду. Без
+     * таких средств погибшие так и гибнут — у быстрого боя нет хода, чтобы подойти и
+     * обездвижить. Трофеи встают во флот победителя копией проекта, как и на поле.
+     */
+    private void fastPrizes(PlayerEntity winner, PlayerEntity loser, FleetEncounterEntity encounter, Integer turn,
+                            Map<UUID, Integer> before, Map<UUID, Integer> after) {
+        if (winner == null || loser == null) {
+            return;
+        }
+        FleetEntity fleet = fleetService.fleetAt(winner.getId(), encounter.getStarSystemId());
+        if (fleet == null) {
+            log.debug("Трофеи быстрого боя: у победителя {} нет стоящего флота в системе", winner.getName());
+            return;
+        }
+        Map<UUID, ShipDesignEntity> ownDesigns = shipDesignService.allDesignsOf(winner);
+        Map<UUID, List<ShipDesignRules.Item>> ownItems = shipDesignService.itemsOf(ownDesigns.values());
+        int marines = 0;
+        boolean means = Boolean.TRUE.equals(groundCombat.boardsFreely(winner));
+        for (FleetShipEntity row : fleetService.shipsOf(fleet.getId())) {
+            ShipDesignEntity design = ownDesigns.get(row.getDesignId());
+            List<ShipDesignRules.Item> items = ownItems.getOrDefault(row.getDesignId(), List.of());
+            if (design == null) {
+                continue;
+            }
+            marines += shipDesignRules.marines(shipCatalog.hull(design.getHullCode()), items) * row.getShips();
+            means |= items.stream().anyMatch(item -> item.component().amount(ShipEffectType.TRANSPORTER) > 0
+                    || item.component().amount(ShipEffectType.SHUTTLE_BAY) > 0
+                    || item.component().amount(ShipEffectType.TRACTOR) > 0);
+        }
+        int lostTotal = before.entrySet().stream()
+                .mapToInt(row -> Math.max(0, row.getValue() - after.getOrDefault(row.getKey(), 0))).sum();
+        // След для разбора (п. 8): трофеи быстрого боя редки, и без него не видно, какое из
+        // условий их отсекает — средства абордажа, пехота или погибшие у врага.
+        log.debug("Трофеи быстрого боя: {} против {}, средства {}, пехота {}, погибло у врага {}",
+                winner.getName(), loser.getName(), means, marines, lostTotal);
+        if (!means || marines <= 0) {
+            return;
+        }
+        Map<UUID, ShipDesignEntity> theirDesigns = shipDesignService.allDesignsOf(loser);
+        Map<UUID, List<ShipDesignRules.Item>> theirItems = shipDesignService.itemsOf(theirDesigns.values());
+        int taken = 0;
+        // Погибшие — ПОРЯДКОМ ПРОЕКТОВ (GameOrder.DESIGNS), а не строк флота: пехота кончается на ком-то, и
+        // строки флота шли по случайному UUID (`shipsOf` — ORDER BY id). 14.10.2026 одна и та же партия на
+        // 300-м ходу то брала два трофея, то ни одного, и расходилась с собой (проверка повторимости на 500 ходов).
+        List<Map.Entry<UUID, Integer>> fallen = before.entrySet().stream()
+                .sorted(Comparator.comparing((Map.Entry<UUID, Integer> row) -> theirDesigns.get(row.getKey()),
+                        Comparator.nullsLast(GameOrder.DESIGNS)))
+                .toList();
+        for (Map.Entry<UUID, Integer> row : fallen) {
+            int lost = row.getValue() - after.getOrDefault(row.getKey(), 0);
+            ShipDesignEntity design = theirDesigns.get(row.getKey());
+            if (lost <= 0 || design == null) {
+                continue;
+            }
+            int crew = shipDesignRules.marines(shipCatalog.hull(design.getHullCode()),
+                    theirItems.getOrDefault(row.getKey(), List.of()));
+            for (int i = 0; i < lost && marines > 0; i++) {
+                GroundCombatService.Outcome fight = groundCombat.boarding(marines, winner, crew, loser);
+                if (!Boolean.TRUE.equals(fight.captured())) {
+                    marines = 0;
+                    break;
+                }
+                // Абордажники, оставшиеся экипажем трофея, из пехоты флота выбывают.
+                marines = Math.max(0, marines - Math.max(crew, 1));
+                UUID trophy = shipDesignService.trophyDesign(winner, design.getId(), turn).getId();
+                fleetService.addShip(encounter.getGameId(), winner.getId(), encounter.getStarSystemId(), turn, trophy);
+                taken++;
+            }
+        }
+        if (taken > 0) {
+            activity.record(encounter.getGameId(), winner.getId(), EmpireActivityService.BOARDING);
+            playerEvents.record(encounter.getGameId(), winner.getId(), turn, "BATTLE",
+                    new MessageKey("turn.battle.prizesTaken", taken), encounter.getStarSystemId(), null);
+            playerEvents.record(encounter.getGameId(), loser.getId(), turn, "BATTLE",
+                    new MessageKey("turn.battle.prizesLost", taken, winner.getName()),
+                    encounter.getStarSystemId(), null);
+            log.info("Империя {} взяла абордажем в быстром бою {} кораблей", winner.getName(), taken);
+        }
+    }
+
+    /** Колония, которую бомбят по этой встрече: самая населённая колония противника в системе. */
+    private PlanetEntity bombardTarget(FleetEncounterEntity encounter, UUID opponentId) {
+        return planetRepository.findAllByOwnerPlayerId(opponentId).stream()
+                .filter(planet -> planet.getStarSystem() != null
+                        && encounter.getStarSystemId().equals(planet.getStarSystem().getId()))
+                .filter(planet -> planet.getPopulation() > 0)
+                .sorted(GameOrder.PLANETS)
+                .max(Comparator.comparing(PlanetEntity::getPopulation))
+                .orElse(null);
+    }
+
+    /**
+     * Можно ли бомбить по этой встрече СЕЙЧАС — пункт 25: те же условия, что проверяет сама
+     * бомбардировка (бомбы во флоте, живая колония, нет обороны). Встречу заводит фаза встреч, а
+     * ИИ решает её ходом позже — за этот ход флот теряет бомбы (бомбардировщики ушли отдельной
+     * частью или погибли), колонию выжигают соседи, а хозяин достраивает оборону. Отказ изнутри
+     * хода уронил бы его целиком (средняя галактика, ход 243, «The fleet carries no bombs»),
+     * поэтому ИИ спрашивает заранее, как и о высадке.
+     */
+    public Boolean bombardable(FleetEncounterEntity encounter, PlayerEntity player) {
+        FleetEntity fleet = fleetService.fleetAt(player.getId(), encounter.getStarSystemId());
+        if (fleetBombs(player, fleet) <= 0 && fleetBio(player, fleet).isEmpty()) {
+            return Boolean.FALSE;
+        }
+        PlanetEntity colony = bombardTarget(encounter, encounter.opponentOf(player.getId()));
+        return colony != null && orbitalDefenceRules.platformsOf(
+                planetBuildingRepository.findAllByPlanetId(colony.getId()).stream()
+                        .map(PlanetBuildingEntity::getBuildingCode)
+                        .toList()).isEmpty();
+    }
+
+    /**
+     * Урон по планете, который флот кладёт за заход, — пункт 25: бомбы всех его кораблей
+     * ({@code ShipDesignRules.bombSalvo}). Ноль — бомб во флоте нет.
+     */
+    private int fleetBombs(PlayerEntity owner, FleetEntity fleet) {
+        if (owner == null || fleet == null) {
+            return 0;
+        }
+        Map<UUID, ShipDesignEntity> designs = shipDesignService.allDesignsOf(owner);
+        Map<UUID, List<ShipDesignRules.Item>> items = shipDesignService.itemsOf(designs.values());
+        int total = 0;
+        for (FleetShipEntity row : fleetService.shipsOf(fleet.getId())) {
+            total += shipDesignRules.bombSalvo(items.getOrDefault(row.getDesignId(), List.of())) * row.getShips();
+        }
+        return total;
+    }
+
+    /**
+     * Биологические бомбы флота — пункт 25: шанс на каждую бомбу всех его кораблей.
+     */
+    private List<Integer> fleetBio(PlayerEntity owner, FleetEntity fleet) {
+        if (owner == null || fleet == null) {
+            return List.of();
+        }
+        Map<UUID, ShipDesignEntity> designs = shipDesignService.allDesignsOf(owner);
+        Map<UUID, List<ShipDesignRules.Item>> items = shipDesignService.itemsOf(designs.values());
+        List<Integer> bombs = new ArrayList<>();
+        for (FleetShipEntity row : fleetService.shipsOf(fleet.getId())) {
+            List<Integer> perShip = shipDesignRules.bioBombs(items.getOrDefault(row.getDesignId(), List.of()));
+            for (int i = 0; i < row.getShips(); i++) {
+                bombs.addAll(perShip);
+            }
+        }
+        bombs.sort(null); // шанс по бомбе бросается по очереди — порядок строк флота (случайный UUID) его не задаёт
+        return bombs;
+    }
+
+    /**
+     * Бомбардировка — пункт 25. Флот бомбит самую населённую беззащитную колонию противника в
+     * системе: урон бомб ({@link #fleetBombs}) убивает жителей и рушит постройки по
+     * {@code BombardmentRules}. Колония, у которой не осталось жителей, гибнет целиком: планета
+     * становится ничьей, постройки — руинами, — «выжженная земля» оригинала. Бомбить колонию
+     * под обороной нельзя: сперва бой за орбиту, как и у десанта.
+     */
+    private void bombard(FleetEncounterEntity encounter, PlayerEntity player, Integer turn,
+                         Map<UUID, PlayerEntity> players, String system) {
+        UUID opponentId = encounter.opponentOf(player.getId());
+        diplomacyService.requireAttackAllowed(player.getId(), opponentId);
+        FleetEntity fleet = fleetService.fleetAt(player.getId(), encounter.getStarSystemId());
+        int damage = fleetBombs(player, fleet);
+        List<Integer> bio = fleetBio(player, fleet);
+        if (damage <= 0 && bio.isEmpty()) {
+            throw new ConflictException("bombard.noBombs");
+        }
+        PlanetEntity colony = bombardTarget(encounter, opponentId);
+        if (colony == null) {
+            throw new ConflictException("bombard.noColony");
+        }
+        List<PlanetBuildingEntity> built = planetBuildingRepository.findAllByPlanetId(colony.getId()).stream()
+                .sorted(Comparator.comparing(PlanetBuildingEntity::getBuildingCode))
+                .toList();
+        if (!orbitalDefenceRules.platformsOf(built.stream().map(PlanetBuildingEntity::getBuildingCode).toList())
+                .isEmpty()) {
+            throw new ConflictException("invasion.defended", colony.getName());
+        }
+
+        int killed = Math.min(colony.getPopulation(), BombardmentRules.colonistsKilled(damage));
+        int ruined = Math.min(built.size(), BombardmentRules.buildingsRuined(damage));
+        // Какие постройки рухнут — жребий от зерна партии и хода: порядок задан кодом здания.
+        java.util.Random random = new java.util.Random(gameSeed(encounter) * 31 + turn);
+        // Биологические бомбы (пункт 25): каждая убивает жителя со своим шансом, сниженным
+        // медициной жертвы; постройки они не трогают, а доверие жертвы обваливают.
+        int poisoned = 0;
+        if (!bio.isEmpty()) {
+            java.util.Set<String> medicine = shipDesignService.technologies(players.get(opponentId));
+            for (Integer percent : bio) {
+                if (random.nextInt(100) < BombardmentRules.bioChancePercent(percent, medicine)) {
+                    poisoned++;
+                }
+            }
+            killed = Math.min(colony.getPopulation(), killed + poisoned);
+            diplomacyService.incident(opponentId, player.getId(), BombardmentRules.BIO_TRUST_PENALTY);
+        }
+        List<PlanetBuildingEntity> standing = new ArrayList<>(built);
+        for (int i = 0; i < ruined && !standing.isEmpty(); i++) {
+            planetBuildingRepository.delete(standing.remove(random.nextInt(standing.size())));
+        }
+        boolean razed = killed >= colony.getPopulation();
+        String colonyName = colony.getName();
+        if (razed) {
+            standing.forEach(planetBuildingRepository::delete);
+            colony.setOwnerPlayerId(null);
+            colony.setPopulation(0);
+            colony.setAlienPopulation(0);
+            colony.setAlienOwnerPlayerId(null);
+            colony.setJobs(com.sddnw.server.domain.PopulationJobs.NONE);
+            colony.setHomeworld(Boolean.FALSE);
+            colony.setProjectCode(null);
+            colony.setProjectPoints(0);
+        } else {
+            colony.setPopulationK(colony.getPopulationK() - killed * 1000);
+            colony.setAlienPopulation(Math.min(colony.getAlienPopulation(), colony.getPopulation()));
+        }
+        planetRepository.save(colony);
+
+        encounter.setState(EncounterState.BATTLE);
+        encounter.setAttackerPlayerId(player.getId());
+        MessageKey outcome = razed
+                ? new MessageKey("turn.bombard.razed", colonyName, system, damage)
+                : new MessageKey("turn.bombard.done", colonyName, system, damage, killed, ruined);
+        encounter.setOutcome(outcome.packed());
+        playerEvents.record(encounter.getGameId(), player.getId(), turn, "BATTLE", outcome,
+                encounter.getStarSystemId(), colony.getId());
+        playerEvents.record(encounter.getGameId(), opponentId, turn, "BATTLE",
+                razed
+                        ? new MessageKey("turn.bombard.lost", colonyName, system, player.getName())
+                        : new MessageKey("turn.bombard.suffered", colonyName, system, player.getName(),
+                                killed, ruined),
+                encounter.getStarSystemId(), colony.getId());
+        activity.record(encounter.getGameId(), player.getId(), EmpireActivityService.BATTLE);
+        log.info("Игрок {} бомбил колонию {} ({} урона): убито {}, разрушено {}{}", player.getName(),
+                colonyName, damage, killed, ruined, razed ? ", колония погибла" : "");
+    }
+
     /** Платформы обороны колонии — п. 8, п. 11: пусто, если колония беззащитна. */
     private List<String> defence(TurnContext context, PlanetEntity colony) {
         return orbitalDefenceRules.platformsOf(context.colonyContext().buildings(colony).stream()
@@ -365,6 +741,11 @@ public class EncounterService {
 
         if (decision == EncounterDecision.IGNORE) {
             ignore(encounter, player, turn, system);
+        } else if (Boolean.TRUE.equals(encounter.getBombard())) {
+            // У беззащитной колонии атаковать некого: «напасть» здесь и значит бомбить.
+            bombard(encounter, player, turn, players, system);
+        } else if (decision == EncounterDecision.BOMBARD) {
+            throw new ConflictException("bombard.notHere");
         } else {
             attack(encounter, player, turn, players, system, auto);
         }
@@ -392,7 +773,7 @@ public class EncounterService {
                         Integer turn, String system) {
         UUID opponentId = encounter.opponentOf(player.getId());
 
-        if (encounter.getState() == EncounterState.WAITING_FIRST) {
+        if (encounter.getState() == EncounterState.WAITING_FIRST && !Boolean.TRUE.equals(encounter.getBombard())) {
             encounter.setState(EncounterState.WAITING_SECOND);
             playerEvents.record(encounter.getGameId(), opponentId, turn, "ENCOUNTER",
                     new MessageKey("turn.encounter.partedYourTurn", player.getName(), system),
@@ -437,6 +818,10 @@ public class EncounterService {
             return;
         }
 
+        // Бой открывает каждой стороне технологии другой (п. 15, туман войны): возможность
+        // нажать «осмотр» была — значит, знание есть, и в тактическом бою, и в «авто».
+        observeBattle(encounter, turn, player, mine, opponent, theirs, defence);
+
         // Ручной бой — тактическая сцена: корабли ходят по инициативе, и исход считает
         // не формула, а само поле (п. 8). Встреча ждёт его конца в состоянии IN_BATTLE.
         if (!Boolean.TRUE.equals(auto)) {
@@ -468,6 +853,17 @@ public class EncounterService {
         Integer defencePower = platformPower(opponent, defence);
         Integer attackerPower = power(mine, players);
         Integer defenderPower = (theirs == null ? 0 : power(theirs, players)) + defencePower;
+        // Слагаемые сил — до потерь (field-backlog, пункт 102): после боя состав уже другой.
+        // Только когда их прочтёт человек: бои ИИ с ИИ идут сотнями внутри посчитанного хода, и
+        // лишние выборки там стоят всему ходу (правила проекта, «Запрос в базу изнутри хода»).
+        Boolean attackerReads = player.getPlayerType() == PlayerType.HUMAN;
+        Boolean defenderReads = opponent != null && opponent.getPlayerType() == PlayerType.HUMAN;
+        BattleLeverRules.Side attackerSide = attackerReads || defenderReads
+                ? fleetService.side(player, mine, List.of(), attackerPower) : null;
+        BattleLeverRules.Side defenderSide = !(attackerReads || defenderReads) ? null
+                : opponent == null
+                ? new BattleLeverRules.Side(0, 0, 0, 0, 0, defenderPower)
+                : fleetService.side(opponent, theirs, defence, defenderPower);
         SpaceBattleService.BattleOutcome outcome = battleService.resolve(
                 player.getName(), mine.getShips(), attackerPower,
                 opponent == null ? messages.get("turn.opponent.unknown") : opponent.getName(),
@@ -482,10 +878,46 @@ public class EncounterService {
                 BattleRules.battleSeed(gameSeed(encounter), turn, player.getSlot(),
                         opponent == null ? player.getSlot() : opponent.getSlot()));
 
+        int theirShips = theirs == null ? 0 : theirs.getShips();
+        // Послужной список (пункт 140): лидеру флота — исход боя. Только людям: лидеров ИИ никто
+        // не читает, а бои ИИ с ИИ идут сотнями внутри посчитанного хода.
+        // Подвиги флота (пункт 141) — у каждого флота, читают их или нет: счёт лежит в строке
+        // флота, которую бой и так сохраняет, и выборки не стоит.
+        mine.recordBattle(outcome.attackerWins());
+        if (theirs != null) {
+            theirs.recordBattle(outcome.attackerWins() == null ? null : !outcome.attackerWins());
+        }
+        if (attackerReads) {
+            leaderRecord.battle(player.getId(), mine.getId(), outcome.attackerWins());
+        }
+        if (defenderReads && theirs != null) {
+            leaderRecord.battle(opponent.getId(), theirs.getId(),
+                    outcome.attackerWins() == null ? null : !outcome.attackerWins());
+        }
+        Map<UUID, Integer> mineBefore = composition(mine);
+        Map<UUID, Integer> theirsBefore = composition(theirs);
         fleetService.applyLosses(mine, outcome.attackerLosses(), player);
         if (theirs != null) {
             fleetService.applyLosses(theirs, outcome.defenderLosses(), opponent);
         }
+        // Опыт за бой уцелевшим обеих сторон (п. 8, CrewRules).
+        fleetService.gainExperience(mine.getId(), CrewRules.BATTLE_XP);
+        if (theirs != null) {
+            fleetService.gainExperience(theirs.getId(), CrewRules.BATTLE_XP);
+        }
+        // Абордаж в быстром бою (п. 8): победитель, у которого есть чем брать корабли, уводит
+        // часть погибших у врага трофеями — как он сделал бы это на поле.
+        if (Boolean.TRUE.equals(outcome.attackerWins())) {
+            fastPrizes(player, opponent, encounter, turn, theirsBefore, composition(theirs));
+        } else if (Boolean.FALSE.equals(outcome.attackerWins()) && opponent != null) {
+            fastPrizes(opponent, player, encounter, turn, mineBefore, composition(mine));
+        }
+        // Что флот не покрыл — платформы обороны (03.10.2026). Прежде потери обороняющегося
+        // списывались только с флота, и в быстром бою база, станция и батареи были
+        // неуязвимы: ИИ дерётся только «авто», «побеждал» каждый ход, а оборона стояла целой
+        // — защищённую колонию нельзя было ни вскрыть, ни подчинить телепатами.
+        destroyPlatforms(opponent, encounter.getStarSystemId(), defence,
+                outcome.defenderLosses() - theirShips);
 
         encounter.setState(EncounterState.BATTLE);
         encounter.setAttackerPlayerId(player.getId());
@@ -503,6 +935,22 @@ public class EncounterService {
         playerEvents.record(encounter.getGameId(), opponentId, turn, "BATTLE",
                 defenderReport(outcome, player.getName(), system, attackerPower, defenderPower),
                 encounter.getStarSystemId(), null);
+        // Из чего сложились силы — каждой стороне, своей стороной вперёд (пункт 102): бой открыл
+        // технологии обеих сторон (observeBattle), так что скрывать чужие слагаемые нечего.
+        if (attackerReads) {
+            playerEvents.record(encounter.getGameId(), player.getId(), turn, "BATTLE",
+                    BattleLeverRules.parts(attackerSide, defenderSide), encounter.getStarSystemId(), null);
+        }
+        if (defenderReads) {
+            playerEvents.record(encounter.getGameId(), opponentId, turn, "BATTLE",
+                    BattleLeverRules.parts(defenderSide, attackerSide), encounter.getStarSystemId(), null);
+        }
+        // Что изменить — только проигравшему и только когда правила называют причину (пункт 103).
+        if (Boolean.FALSE.equals(outcome.attackerWins()) && attackerReads) {
+            lever(encounter, player.getId(), turn, attackerSide, defenderSide);
+        } else if (Boolean.TRUE.equals(outcome.attackerWins()) && defenderReads) {
+            lever(encounter, opponentId, turn, defenderSide, attackerSide);
+        }
 
         log.info("Игрок {} атаковал флот в системе {} ({}): {}",
                 player.getName(), system, Boolean.TRUE.equals(auto) ? "авто" : "вручную",
@@ -518,6 +966,16 @@ public class EncounterService {
       Прежние ключи (turn.battle.won и соседние) остались в словаре для отчётов, записанных
       до этой правки.
     */
+
+    /** Рычаг проигравшему — строкой «что изменить» в итогах хода (пункт 103); нет причины — нет строки. */
+    private void lever(FleetEncounterEntity encounter, UUID loserId, Integer turn,
+                       BattleLeverRules.Side loser, BattleLeverRules.Side winner) {
+        MessageKey lever = BattleLeverRules.lever(loser, winner);
+        if (lever != null) {
+            playerEvents.record(encounter.getGameId(), loserId, turn, "LEVER", lever,
+                    encounter.getStarSystemId(), null);
+        }
+    }
 
     /** Что сказать напавшему: его сила стоит первой. */
     private static MessageKey attackerReport(SpaceBattleService.BattleOutcome outcome, String system,
@@ -648,6 +1106,7 @@ public class EncounterService {
         UUID opponentId = encounter.opponentOf(player.getId());
         FleetEntity mine = fleetService.fleetAt(player.getId(), encounter.getStarSystemId());
         FleetEntity theirs = fleetService.fleetAt(opponentId, encounter.getStarSystemId());
+        Forecast forecast = forecast(encounter, player, players.get(opponentId), mine, theirs, players);
 
         return new EncounterDto(
                 encounter.getId(),
@@ -667,7 +1126,47 @@ public class EncounterService {
                 mine == null ? 0 : initiative(mine, players),
                 theirs == null ? 0 : initiative(theirs, players),
                 encounter.getBattleId(),
-                messages.text(encounter.getOutcome()));
+                messages.text(encounter.getOutcome()),
+                encounter.getBombard(),
+                forecast.yours(),
+                forecast.theirs(),
+                forecast.verdict().name(),
+                forecast.unseen());
+    }
+
+    /** Прогноз встречи со стороны игрока — пункты 84 и 153; {@code theirs} пуст, когда сила не видна. */
+    private record Forecast(Integer yours, Integer theirs, EncounterForecastRules.Forecast verdict, Integer unseen) {
+    }
+
+    /**
+     * Прогноз встречи — field-backlog, пункты 84 и 153: силы сторон той же мерой, что решает
+     * быстрый бой (флот плюс платформы обороны своих колоний в системе). Свою сторону игрок знает
+     * целиком, чужую — только увиденными технологиями (п. 15): пока хоть одна технология на
+     * кораблях и платформах соперника не увидена, его сила не называется.
+     */
+    private Forecast forecast(FleetEncounterEntity encounter, PlayerEntity player, PlayerEntity opponent,
+                              FleetEntity mine, FleetEntity theirs, Map<UUID, PlayerEntity> players) {
+        UUID systemId = encounter.getStarSystemId();
+        Integer yours = (mine == null ? 0 : power(mine, players))
+                + platformPower(player, platformsAt(player, systemId));
+        if (opponent == null) {
+            return new Forecast(yours, 0, EncounterForecastRules.forecast(yours, 0), 0);
+        }
+        List<UUID> platforms = platformsAt(opponent, systemId);
+        Integer power = (theirs == null ? 0 : power(theirs, players)) + platformPower(opponent, platforms);
+        Map<UUID, ShipDesignEntity> designs = shipDesignService.designsOfGame(encounter.getGameId());
+        List<ShipDesignEntity> seen = new ArrayList<>();
+        if (theirs != null) {
+            fleetService.shipsOf(theirs.getId()).stream()
+                    .map(row -> designs.get(row.getDesignId()))
+                    .filter(Objects::nonNull)
+                    .forEach(seen::add);
+        }
+        platforms.stream().map(designs::get).filter(Objects::nonNull).forEach(seen::add);
+        java.util.Set<String> unseen = new java.util.TreeSet<>(techSight.designTechs(seen));
+        unseen.removeAll(techSight.observedBy(player.getId(), opponent.getId()));
+        Integer theirsShown = unseen.isEmpty() ? power : null;
+        return new Forecast(yours, theirsShown, EncounterForecastRules.forecast(yours, theirsShown), unseen.size());
     }
 
     /**

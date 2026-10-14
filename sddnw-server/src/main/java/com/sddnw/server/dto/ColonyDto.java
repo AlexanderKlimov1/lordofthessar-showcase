@@ -26,6 +26,8 @@ import java.util.List;
  * @param upkeep               содержание зданий колонии в кредитах за ход
  * @param productionPerColonist производство с каждого жителя, чем бы он ни был занят, —
  *                             п. 10: так работает рециклотрон, и эта часть не пачкает
+ * @param productionDirtyFlat  твёрдое производство, которое ПАЧКАЕТ, — п. 10: роботизированный
+ *                             завод (по недрам планеты); в чистую часть добычи не входит
  * @param pollution            сколько единиц производства уходит на уборку за собой — п. 10;
  *                             в {@code production} их уже нет
  * @param pollutionTolerance   сколько производства планета терпит без грязи: её размер,
@@ -66,6 +68,7 @@ public record ColonyDto(
         Integer productionPerWorker,
         Integer productionFlat,
         Integer productionPerColonist,
+        Integer productionDirtyFlat,
         Integer researchPerScientist,
         Integer researchFlat,
 
@@ -92,12 +95,57 @@ public record ColonyDto(
         List<ColonyProjectDto> queue,
         Boolean repeatBuild,
         Boolean autoBuild,
+        /** «Жители сами» — field-backlog, пункт 91. */
+        Boolean autoJobs,
         Integer buyCost,
         Integer soldTurn,
 
         /** Сколько жителей колонии — подданные, взятые с боем (п. 12); 0 — все свои. */
         Integer alienPopulation,
         /** Через сколько ходов один из них станет своим; пусто — подданных нет. */
-        Integer assimilationTurns
+        Integer assimilationTurns,
+
+        /**
+         * Мораль колонии в процентах — п. 10.1: процент ко всему, что дают жители. Уже сидит
+         * в {@code foodPercent}, {@code productionPercent}, {@code researchPercent} и в доходе.
+         */
+        Integer moralePercent,
+        /** Из чего мораль сложилась — строками подсказки. */
+        List<MoralePartDto> moraleParts,
+        /** Строй морали не знает (объединение) — экран говорит это словами, а не нулём. */
+        Boolean moraleIgnored,
+
+        /**
+         * Проценты к выработке фермера, рабочего и учёного — п. 7, п. 10.1: строй, тяжесть,
+         * мораль. Клиент пересчитывает выработку при переносе жителя сам, и без процентов его
+         * число расходилось бы с серверным.
+         */
+        Integer foodPercent,
+        Integer productionPercent,
+        Integer researchPercent,
+        /**
+         * Из чего сложились еда, производство и наука — field-backlog, пункт 40: слагаемые теми
+         * же функциями, что считают итог. Порядок — база, постройки, раса и прочие источники,
+         * лидер, уборка.
+         */
+        List<OutputPartDto> outputParts,
+        /**
+         * Стоят пищевые репликаторы (п. 4.1.1): недостающую еду колония делает из производства,
+         * и клиент при переносе жителя считает это тем же правилом.
+         */
+        Boolean foodReplicator
 ) {
+    /**
+     * Слагаемое выработки: ресурс (FOOD, PRODUCTION, RESEARCH), источник (BASE, BUILDING, RACE,
+     * ARTIFACTS, FIND, GRAVITY, MORALE, TREATIES, LEADER, POLLUTION), имя постройки и вклад —
+     * на жителя дела, твёрдо, процентом и на всякого жителя (переработка).
+     */
+    public record OutputPartDto(String resource, String source, String name, Integer perUnit,
+                                Integer flat, Integer percent, Integer perColonist) {
+    }
+
+
+    /** Слагаемое морали: откуда ({@code MoraleRules.Source}) и сколько процентов. */
+    public record MoralePartDto(String source, Integer percent) {
+    }
 }

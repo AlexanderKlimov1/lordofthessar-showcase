@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Туман войны, вторая часть (п. 15, решение хозяина проекта 03.10.2026): что игрок
+        знает о технологиях соперника — только увиденное в бою или сканерами флота, — и что
+        помнит о чудище системы, когда глаз там нет.
+    -->
+    <changeSet id="096-observed-tech" author="sddnw">
+        <createTable tableName="observed_tech">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_observed_tech_player"
+                             references="player(id)" deleteCascade="true"/>
+            </column>
+            <column name="other_player_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="tech_code" type="varchar(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="observed_turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="observed_tech" columnNames="player_id, other_player_id, tech_code"
+                             constraintName="uq_observed_tech"/>
+        <createIndex tableName="observed_tech" indexName="ix_observed_tech_game">
+            <column name="game_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="096-monster-intel" author="sddnw">
+        <createTable tableName="monster_intel">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="player_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_monster_intel_player"
+                             references="player(id)" deleteCascade="true"/>
+            </column>
+            <column name="star_system_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Пусто — в последний раз сторожа там не было. -->
+            <column name="monster_code" type="varchar(64)"/>
+            <column name="strength" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="seen_turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="monster_intel" columnNames="player_id, star_system_id"
+                             constraintName="uq_monster_intel"/>
+        <createIndex tableName="monster_intel" indexName="ix_monster_intel_game">
+            <column name="game_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

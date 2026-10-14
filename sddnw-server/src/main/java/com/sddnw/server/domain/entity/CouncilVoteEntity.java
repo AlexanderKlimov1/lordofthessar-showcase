@@ -73,6 +73,22 @@ public class CouncilVoteEntity {
     @Column(name = "pending", nullable = false)
     private Boolean pending = Boolean.FALSE;
 
+    /**
+     * Человек так и не ответил, и голос за него подан правилом доверия при итоге совета (07.10.2026).
+     * Без этой отметки сцена не могла сказать игроку, ЧТО случилось с его голосом: «воздержались»
+     * читалось как его собственный выбор.
+     */
+    @Column(name = "silent", nullable = false)
+    private Boolean silent = Boolean.FALSE;
+
+    public Boolean getSilent() {
+        return silent;
+    }
+
+    public void setSilent(Boolean silent) {
+        this.silent = silent;
+    }
+
     public Boolean getAsked() {
         return asked;
     }

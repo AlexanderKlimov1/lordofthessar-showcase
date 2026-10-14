@@ -55,6 +55,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LEARN_DIR = os.environ.get('SDDNW_LEARN_DIR', os.path.join(ROOT, 'tools', 'learn'))
 BEST_FILE = os.path.join(LEARN_DIR, 'best.npz')
 REPORT_FILE = os.path.join(LEARN_DIR, 'train-report.txt')
+#: Зерно партии показа после обучения — то же, что у `play` по умолчанию.
+SHOW_SEED = 999
 
 BASE = os.environ.get('SDDNW_BASE', 'http://localhost:8081')
 
@@ -530,6 +532,46 @@ def new_tally():
             'colonized': 0, 'colonies': 0, 'ships': collections.Counter(),
             'acquired': 0, 'jobs': 0, 'outposts': 0,
             'encounters': collections.Counter()}
+
+
+#: Справедливая доля мощи на четверых: выше неё стратегия «побеждает» — field-backlog, пункт 90.
+FAIR_SHARE = 1.0 / EMPIRES
+#: Доля одного вида стройки, с которой это уже «строить одно и то же».
+SAME_BUILD_SHARE = 0.7
+#: Доля домов и товаров, с которой это «бесконечная стройка вместо дела».
+ENDLESS_SHARE = 0.5
+
+
+def degenerate(tally, value):
+    """
+    Странное в поведении сети — field-backlog, пункт 90: если в игре есть нудная, но выгодная
+    стратегия, сеть найдёт её раньше игроков. Доля мощи одна этого не говорит — смотрится, КАК
+    сеть играла: не строила флот, строила одно и то же, сидела на родной звезде, жила домами и
+    товарами, не исследовала. Странное при доле не выше справедливой — слабость сети; при доле
+    выше — кандидат в вырожденную стратегию ИГРЫ, и чинится он правилом (пункт 95), а не сетью.
+    """
+    odd = []
+    built = sum(tally['projects'].values())
+    if built:
+        kind, times = tally['projects'].most_common(1)[0]
+        if times / built >= SAME_BUILD_SHARE:
+            odd.append('строит одно и то же: %s %d из %d' % (kind, times, built))
+        endless = tally['projects']['housing'] + tally['projects']['trade']
+        if endless / built >= ENDLESS_SHARE:
+            odd.append('живёт бесконечной стройкой: дома и товары %d из %d' % (endless, built))
+    if not tally['ships'].get('WARSHIP'):
+        odd.append('боевого флота к концу нет')
+    if tally['moves'] == 0 or (tally['colonized'] == 0 and tally['outposts'] == 0):
+        odd.append('сидит на родной звезде: перелётов %d, колоний кораблём %d, застав %d'
+                   % (tally['moves'], tally['colonized'], tally['outposts']))
+    if not tally['research']:
+        odd.append('не выбирала целей науки')
+    if not odd:
+        return []
+    verdict = ('КАНДИДАТ В ВЫРОЖДЕННУЮ СТРАТЕГИЮ ИГРЫ (доля %.3f выше справедливой %.2f) — чинить правилом, пункт 95'
+               % (value, FAIR_SHARE) if value is not None and value > FAIR_SHARE
+               else 'слабость сети, а не игры (доля %s не выше справедливой %.2f)' % (value, FAIR_SHARE))
+    return [verdict] + ['  ' + line for line in odd]
 
 
 def encounters(game_id, token, tally=None):
@@ -1061,6 +1103,16 @@ def train(generations, games, turns, children, sigma, resume):
         # рабочей папке проекта, а не во временной: временная живёт одну сессию.
         note(line)
     save_weights(weights)
+    # Поведение лучших весов — пункт 90: одна партия показа с отчётом, и странное, что побеждает,
+    # ложится заметкой в отчёт обучения рядом с весами.
+    tally = new_tally()
+    value, error = play_game(weights, account, SHOW_SEED, turns, name='Показ', tally=tally)
+    if not error:
+        odd = degenerate(tally, value)
+        note('поведение лучших весов (зерно %d, %d ходов): %s' % (
+            SHOW_SEED, turns, 'странного не найдено' if not odd else odd[0]))
+        for line in odd[1:]:
+            note(line)
     return best
 
 
@@ -1105,6 +1157,8 @@ def main():
                                                  for pair in tally['encounters'].most_common())
                                        or 'не было'))
         print('доля мощи: %s%s' % (value, '' if not error else ' (%s)' % error))
+        for line in degenerate(tally, value) if not error else []:
+            print(line)
         return
     best = train(args.generations, args.games, args.turns, args.children,
                  args.sigma, args.resume)

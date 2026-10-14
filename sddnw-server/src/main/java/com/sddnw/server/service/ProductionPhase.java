@@ -2,6 +2,7 @@ package com.sddnw.server.service;
 
 import com.sddnw.server.domain.Building;
 import com.sddnw.server.domain.BuildingEffects;
+import com.sddnw.server.domain.RaceEffects;
 import com.sddnw.server.domain.ColonyProject;
 import com.sddnw.server.domain.ShipStats;
 import com.sddnw.server.dto.ColonyProjectDto;
@@ -55,6 +56,8 @@ public class ProductionPhase implements TurnPhase {
     private final RaceService raceService;
     private final CommandRules commandRules;
     private final BuildingCatalog buildingCatalog;
+    /** Наука колонии до и после достройки — для строки «во что вылилось» (field-backlog, пункт 12). */
+    private final PopulationCalculator populationCalculator;
 
     public ProductionPhase(PlanetBuildingRepository planetBuildingRepository,
                            ColonyService colonyService,
@@ -63,7 +66,9 @@ public class ProductionPhase implements TurnPhase {
                            ShipDesignService shipDesignService,
                            RaceService raceService,
                            CommandRules commandRules,
-                           BuildingCatalog buildingCatalog) {
+                           BuildingCatalog buildingCatalog,
+                           PopulationCalculator populationCalculator) {
+        this.populationCalculator = populationCalculator;
         this.commandRules = commandRules;
         this.buildingCatalog = buildingCatalog;
         this.planetBuildingRepository = planetBuildingRepository;
@@ -98,6 +103,7 @@ public class ProductionPhase implements TurnPhase {
         }
 
         planetBuildingRepository.saveAll(completed);
+        trainAtAcademies(context);
         payCommandPoints(context, incomeByPlayer);
         payTreasuries(context, incomeByPlayer);
         payDebts(context);
@@ -220,8 +226,12 @@ public class ProductionPhase implements TurnPhase {
         if (!Boolean.TRUE.equals(planet.getAutoBuild())) {
             return null;
         }
-        List<ColonyProjectDto> available = colonyService.available(planet, context.colonyContext());
-        return AutoBuildRules.next(buildingCatalog.byCode(), planet.getJobs(), available);
+        RaceEffects government = context.colonyContext().race(planet);
+        List<ColonyProjectDto> available = colonyService.available(planet, context.colonyContext()).stream()
+                .filter(project -> !MoraleRules.useless(buildingCatalog.byCode().get(project.code()), government))
+                .toList();
+        return AutoBuildRules.next(buildingCatalog.byCode(), planet.getJobs(), available,
+                building -> colonyService.reliefGain(planet, context.colonyContext(), building));
     }
 
     /**
@@ -250,6 +260,16 @@ public class ProductionPhase implements TurnPhase {
 
         if (ColonyProject.FREIGHTER.equals(planet.getProjectCode())) {
             buildFreighter(planet, effects, context);
+            return Optional.empty();
+        }
+
+        if (ColonyProject.isReshape(planet.getProjectCode())) {
+            buildReshape(planet, context);
+            return Optional.empty();
+        }
+
+        if (ColonyProject.isAndroid(planet.getProjectCode())) {
+            buildAndroid(planet, context);
             return Optional.empty();
         }
 
@@ -297,7 +317,34 @@ public class ProductionPhase implements TurnPhase {
             log.info("Колония {} уже имеет {}: стройка отменена", planet.getName(), building.name());
             return Optional.empty();
         }
+        // Столица одна на империю — п. 10.1: вторая, заложенная, пока первая ещё стояла или
+        // отстроилась на другой колонии, не встаёт.
+        if (CapitolRules.CODE.equals(building.code())
+                && Boolean.TRUE.equals(context.colonyContext().hasCapitol(planet.getOwnerPlayerId()))) {
+            log.info("У империи колонии {} столица уже есть: стройка отменена", planet.getName());
+            return Optional.empty();
+        }
+        // Во что вылилось решение (field-backlog, пункт 12): выработка колонии до и после — теми
+        // же функциями, что считают её ход, а не прибавкой из справочника: процент от нуля это
+        // ноль, а прибавка на рабочего зависит от рабочих этой колонии.
+        // Только людям: у империи ИИ читателя строки нет, а ход считается и за неё.
+        ColonyService.ColonyContext colonyContext = context.colonyContext();
+        boolean reads = context.players().stream().anyMatch(player -> player.getId().equals(planet.getOwnerPlayerId())
+                && player.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.HUMAN);
+        int productionBefore = reads ? colonyService.production(planet, colonyContext) : 0;
+        int researchBefore = reads ? research(planet, colonyContext) : 0;
+        int incomeBefore = reads ? colonyService.income(planet, colonyContext) : 0;
         context.colonyContext().built(planet, building);
+        // Радиационный щит, планетарный щит и барьер делают облучённый мир бесплодным (п. 4.1.2,
+        // перенос MOO II) — вместе с вместимостью, как терраформирование.
+        if (building.amount(com.sddnw.server.domain.enums.BuildingEffectType.RADIATION_SHIELD) > 0
+                && planet.getClimate() == com.sddnw.server.domain.enums.PlanetClimate.RADIATED) {
+            planet.setClimate(com.sddnw.server.domain.enums.PlanetClimate.BARREN);
+            planet.setMaxPopulation(populationCalculator.maxPopulation(planet.getPlanetSize(), planet.getClimate()));
+        }
+        int productionGain = reads ? colonyService.production(planet, colonyContext) - productionBefore : 0;
+        int researchGain = reads ? research(planet, colonyContext) - researchBefore : 0;
+        int incomeGain = reads ? colonyService.income(planet, colonyContext) - incomeBefore : 0;
 
         PlanetBuildingEntity built = new PlanetBuildingEntity();
         built.setPlanetId(planet.getId());
@@ -310,8 +357,25 @@ public class ProductionPhase implements TurnPhase {
                 new MessageKey("turn.build.building", planet.getName(),
                         CatalogTexts.building(building.code())),
                 context.systemOf(planet), planet.getId());
+        if (productionGain != 0 || researchGain != 0 || incomeGain != 0) {
+            context.report().add(planet.getOwnerPlayerId(), "BUILDING",
+                    new MessageKey("turn.build.gain", planet.getName(), CatalogTexts.building(building.code()),
+                            signed(productionGain), signed(researchGain), signed(incomeGain)),
+                    context.systemOf(planet), planet.getId());
+        }
         log.info("Колония {} построила {} на ходу {}", planet.getName(), building.name(), turn);
         return Optional.of(built);
+    }
+
+    /** Наука колонии — тем же правилом, что считает очки хода ({@code ResearchService.researchPerTurn}). */
+    private int research(PlanetEntity planet, ColonyService.ColonyContext context) {
+        return context.withLeader(populationCalculator.research(colonyService.jobs(planet).scientists(),
+                context.effects(planet)), planet, "SCIENCE");
+    }
+
+    /** Число со знаком для строки отчёта: «+6», «−1», «0». */
+    private static String signed(int value) {
+        return value > 0 ? "+" + value : value < 0 ? "−" + (-value) : "0";
     }
 
     /**
@@ -347,6 +411,51 @@ public class ProductionPhase implements TurnPhase {
                 new MessageKey("turn.build.baseReady", planet.getName()),
                 context.systemOf(planet), planet.getId());
         log.info("Колония {} построила колониальную базу на ходу {}", planet.getName(), context.turn());
+    }
+
+    /**
+     * Вкладывает производство в переделку планеты — п. 4.1.2.1: терраформирование, Гею или
+     * искусственную планету. Достроенное меняет саму планету (или тело системы) и уходит в
+     * итоги хода; остаток производства переходит в следующую стройку.
+     */
+    private void buildReshape(PlanetEntity planet, TurnContext context) {
+        planet.setProjectPoints(planet.getProjectPoints() + colonyService.production(planet, context.colonyContext()));
+        Integer cost = colonyService.reshapeCost(planet);
+        if (planet.getProjectPoints() < cost) {
+            return;
+        }
+        Optional<MessageKey> done = colonyService.reshape(planet, context.game().getSeed());
+        planet.setProjectPoints(planet.getProjectPoints() - (done.isPresent() ? cost : 0));
+        planet.setProjectCode(null);
+        done.ifPresent(message -> context.report().add(planet.getOwnerPlayerId(), "BUILDING", message,
+                context.systemOf(planet), planet.getId()));
+    }
+
+    /**
+     * Вкладывает производство в андроида — п. 4.1 (перенос MOO II): готовый встаёт на своё дело
+     * счётчиком на планете. Колонии, где места не осталось, достроенный не нужен — стройка
+     * снимается, вложенное остаётся колонии.
+     */
+    private void buildAndroid(PlanetEntity planet, TurnContext context) {
+        planet.setProjectPoints(planet.getProjectPoints() + colonyService.production(planet, context.colonyContext()));
+        if (planet.getProjectPoints() < ColonyProject.ANDROID_COST) {
+            return;
+        }
+        String code = planet.getProjectCode();
+        planet.setProjectCode(null);
+        ColonyService.ColonyContext colonies = context.colonyContext();
+        if (!colonyService.androidRoom(planet, colonies)) {
+            return;
+        }
+        planet.setProjectPoints(planet.getProjectPoints() - ColonyProject.ANDROID_COST);
+        switch (code) {
+            case ColonyProject.ANDROID_FARMER -> planet.setAndroidFarmers(planet.getAndroidFarmers() + 1);
+            case ColonyProject.ANDROID_WORKER -> planet.setAndroidWorkers(planet.getAndroidWorkers() + 1);
+            default -> planet.setAndroidScientists(planet.getAndroidScientists() + 1);
+        }
+        context.report().add(planet.getOwnerPlayerId(), "BUILDING",
+                new MessageKey("turn.build.android." + code, planet.getName()),
+                context.systemOf(planet), planet.getId());
     }
 
     /**
@@ -392,12 +501,25 @@ public class ProductionPhase implements TurnPhase {
         }
 
         ShipDesignEntity design = design(planet, owner, context);
+        // Вытесненный проект не строится — строится корабль его ячейки (п. 8, 09.10.2026): колония,
+        // заказавшая его до правки проекта, переходит на действующий, а у пустой ячейки — на товары.
+        if (Boolean.TRUE.equals(design.getObsolete())) {
+            var successor = shipDesignService.successor(design);
+            if (successor.isEmpty()) {
+                planet.setProjectCode(ColonyProject.TRADE_GOODS);
+                planet.setProjectDesignId(null);
+                return;
+            }
+            design = successor.get();
+            planet.setProjectDesignId(design.getId());
+        }
+        ShipDesignEntity built = design;
         // ХАРАКТЕРИСТИКИ БЕРУТСЯ ИЗ ПАМЯТКИ ХОДА, а не считаются заново на каждую колонию:
         // один и тот же проект строят разом полтора десятка колоний империи, и прежде
         // каждая из них уходила за его составом в базу отдельным запросом — изнутри
         // посчитанного хода, где всякий запрос заставляет Hibernate сбросить накопленное.
-        ShipStats stats = context.shipStats(design.getId(),
-                () -> shipDesignService.stats(design, raceService.effects(owner)));
+        ShipStats stats = context.shipStats(built.getId(),
+                () -> shipDesignService.stats(built, raceService.effects(owner)));
 
         planet.setProjectPoints(planet.getProjectPoints() + colonyService.production(planet, context.colonyContext()));
         if (planet.getProjectPoints() < stats.cost()) {
@@ -409,8 +531,14 @@ public class ProductionPhase implements TurnPhase {
         planet.setProjectDesignId(null);
 
         UUID systemId = context.systemOf(planet);
+        // Корабль колонии с космической академией начинает обученным (п. 8, CrewRules).
+        boolean academy = context.colonyContext().buildings(planet).stream()
+                .anyMatch(building -> building.amount(com.sddnw.server.domain.enums.BuildingEffectType.SPACE_ACADEMY) > 0);
         var fleet = fleetService.addShip(
-                context.game().getId(), planet.getOwnerPlayerId(), systemId, context.turn(), design.getId());
+                context.game().getId(), planet.getOwnerPlayerId(), systemId, context.turn(), design.getId(), 0,
+                academy ? CrewRules.ACADEMY_START_XP : 0);
+        // Счёт построенного по проекту — «ваш лучший проект» в конце партии (пункт 98).
+        design.setBuilt(design.getBuilt() + 1);
         context.report().add(planet.getOwnerPlayerId(), "SHIP",
                 new MessageKey("turn.build.ship",
                         planet.getName(), design.getName(), fleet.getShips()),
@@ -540,8 +668,13 @@ public class ProductionPhase implements TurnPhase {
             if (points == 0) {
                 continue;
             }
-            Integer capacity = commandRules.capacity(
-                    context.coloniesOf(player.getId()).size(), raceService.effects(player));
+            List<PlanetEntity> colonies = context.coloniesOf(player.getId());
+            long bases = colonies.stream()
+                    .filter(planet -> context.colonyContext().buildings(planet).stream()
+                            .anyMatch(building -> OrbitalDefenceRules.orbital(building.code())))
+                    .count();
+            Integer capacity = commandRules.capacity(colonies.size(), raceService.effects(player), (int) bases,
+                    context.colonyContext().technologiesByOwner().getOrDefault(player.getId(), java.util.Set.of()));
             Integer cost = commandRules.upkeep(points, capacity);
             if (cost == 0) {
                 continue;
@@ -550,6 +683,22 @@ public class ProductionPhase implements TurnPhase {
             context.report().add(player.getId(), "COMMAND",
                     new MessageKey("turn.command.over", points, capacity, cost));
         }
+    }
+
+    /**
+     * Космическая академия учит стоящие в её системе флоты хозяина — п. 8 ({@link CrewRules}): по
+     * очку опыта за ход на каждую академию. Академии считаются по постройкам хода.
+     */
+    private void trainAtAcademies(TurnContext context) {
+        Map<UUID, Map<UUID, Integer>> academies = new HashMap<>();
+        for (PlanetEntity planet : context.colonies()) {
+            if (context.colonyContext().buildings(planet).stream()
+                    .anyMatch(building -> building.amount(com.sddnw.server.domain.enums.BuildingEffectType.SPACE_ACADEMY) > 0)) {
+                academies.computeIfAbsent(context.systemOf(planet), key -> new HashMap<>())
+                        .merge(planet.getOwnerPlayerId(), 1, Integer::sum);
+            }
+        }
+        fleetService.trainAtAcademies(context.game().getId(), academies);
     }
 
     /** Казна игрока пополняется доходом его колоний; уйти в минус она может — это долг. */

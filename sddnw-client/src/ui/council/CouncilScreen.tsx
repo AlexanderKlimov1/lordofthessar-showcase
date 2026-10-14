@@ -37,16 +37,22 @@ import { figureLabelClass } from '../accent';
  */
 export function CouncilScreen({
   council,
+  brief = false,
   onClose,
   onVoted,
 }: {
   council: Council;
+  /**
+   * Совет уже видели целиком — field-backlog, пункт 163: сцена открывается сразу итогом, а
+   * голоса по одному огласит кнопка. Впечатление бережётся там, где оно ещё работает.
+   */
+  brief?: boolean;
   onClose: () => void;
   /** Голос принят: вызвавший снимает напоминание «совет ждёт вашего голоса». */
   onVoted?: (session: Council) => void;
 }) {
   /** Сколько голосов уже объявлено: по нему и растут счётчики кандидатов. */
-  const [shown, setShown] = useState(0);
+  const [shown, setShown] = useState(brief ? council.voters.length : 0);
   /*
     Выборы держатся в состоянии сцены, а не читаются из свойства: отказ и голос меняют их
     (партия ожила, голос подан), и ответ сервера ложится сюда же.
@@ -199,6 +205,15 @@ export function CouncilScreen({
           </p>
         )}
 
+        {/*
+          КАК ПОДАН ВАШ ГОЛОС — словами, всегда (07.10.2026, баг хозяина проекта): кандидата совет
+          не спрашивает, он голосует за себя сам (правило оригинала), а промолчавшего — голосует
+          доверием. Прежде сцена об этом молчала, и игрок не понимал ни почему нет бюллетеня, ни
+          за кого ушёл его голос.
+        */}
+        {mine && (done || mine.candidate) ? (
+          <p className="max-w-[48rem] text-16 text-ink">{myVoteLine(mine, nameOf)}</p>
+        ) : null}
         {done && !open ? (
           <p className="text-16 text-accent">
             {session.electedName
@@ -215,11 +230,11 @@ export function CouncilScreen({
         {done && session.refused ? (
           <p className="max-w-[48rem] text-14 text-danger">{t('council.refusedNotice')}</p>
         ) : null}
-        {failure ? <p className="text-13 text-danger">{failure}</p> : null}
+        {failure ? <p className="text-13 text-danger"><span aria-hidden className="mr-1">⚠</span>{failure}</p> : null}
         {/* Отказ у нас один на партию (game.council_refused) — в оригинале такого предела нет,
             и, не зная о нём, игрок отложил бы отказ «на следующий раз»; пункт 12. */}
         {done && session.canRefuse ? (
-          <RuleNote className="max-w-[48rem] text-13" text={t('rule.councilRefuseOnce')} />
+          <RuleNote className="max-w-[48rem] text-13" hint="rule.councilRefuseOnce" text={t('rule.councilRefuseOnce')} />
         ) : null}
 
         <span className="flex gap-3">
@@ -250,6 +265,15 @@ export function CouncilScreen({
             >
               {t('council.revealAll')}
             </button>
+          ) : !open && total > 0 ? (
+            // «Огласить по одному» — наоборот «огласить всё» (пункт 163): итог уже на виду.
+            <button
+              type="button"
+              className="border border-space-600 bg-space-900 px-6 py-1 text-13 uppercase tracking-[0.2em] text-ink hover:text-accent"
+              onClick={() => setShown(0)}
+            >
+              {t('council.revealOneByOne')}
+            </button>
           ) : null}
           {/*
             «Закрыть» пропадает, пока предложен отказ: закрыть и подчиниться — одно и то
@@ -270,6 +294,24 @@ export function CouncilScreen({
     </div>
   );
 }
+
+/**
+ * Что случилось с голосом смотрящего — одной строкой, словами (07.10.2026).
+ *
+ * Кандидат голосует за себя без вопроса; промолчавший до итога — по доверию; ответивший — как
+ * выбрал. Строка нужна в каждом из трёх случаев: «нет бюллетеня» и «воздержались» без неё
+ * читаются как поломка или как чужое решение.
+ */
+const myVoteLine = (mine: CouncilVoter, nameOf: (playerId?: string) => string): string => {
+  if (mine.candidate) {
+    return t('council.mine.candidate', { n: mine.weight });
+  }
+  if (mine.pending) {
+    return t('council.ballot.silent');
+  }
+  const whom = mine.choicePlayerId ? t('council.mine.for', { name: nameOf(mine.choicePlayerId) }) : t('council.mine.abstain');
+  return mine.silent ? t('council.mine.silent', { n: mine.weight, choice: whom }) : t('council.mine.chosen', { n: mine.weight, choice: whom });
+};
 
 /**
  * Бюллетень открытого совета — п. 3.
@@ -293,6 +335,7 @@ function Ballot({
   onVote: (choicePlayerId: string | null) => void;
 }) {
   if (!session.ballot || !mine) {
+    // Кандидату бюллетеня нет — что с его голосом, сказано строкой ниже (`myVoteLine`).
     return <p className="min-h-[3rem] text-18 text-warn">{t('council.ballot.waiting')}</p>;
   }
   const cast = !mine.pending;
@@ -371,7 +414,8 @@ function Seat({
       <span className="h-4 truncate text-11 text-ink-dim">
         {voted
           ? voter.choicePlayerId
-            ? choiceName
+            // Кандидат голосует за себя — «за себя», а не собственным именем под своим же кругом.
+            ? voter.choicePlayerId === voter.playerId ? t('council.forSelf') : choiceName
             : t('council.abstained')
           : voter.pending
             ? voter.yours

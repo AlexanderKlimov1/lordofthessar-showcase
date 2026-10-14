@@ -110,3 +110,68 @@ export function fleetReach(empire: Fleet | null | undefined, group: FleetGroup |
     reachableSystemIds: (far ? empire?.reachableFarSystemIds : empire?.reachableSystemIds) ?? [],
   };
 }
+
+/**
+ * Сколько ходов флот идёт между двумя звёздами — то же правило, что на сервере
+ * (`FlightRules.travelTurns`): расстояние в парсеках, делённое на скорость самого медленного
+ * корабля, и не меньше хода. Одно место на окно отправки и подсказку неразведанной звезды
+ * (field-backlog, пункт 133).
+ */
+export function travelTurns(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  speed: number,
+  gates?: Gates,
+): number {
+  // Врата — то же правило, что `FlightRules.travelTurns` с технологиями: звёздные между двумя
+  // своими колониями дают ход, прыжковые разгоняют на 3 парсека от своей колонии.
+  // Чужой варп-перехватчик в системе цели (`FlightRules.travelTurns` с радиусом): последние
+  // парсеки — по одному за ход, звёздные врата в его поле не работают.
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
+  const boosted = speed + (gates?.jumpGate && gates.fromColony ? JUMP_GATE_PARSECS : 0);
+  const radius = gates?.interdictor ?? 0;
+  if (radius > 0) {
+    const slow = Math.min(distance, radius);
+    const before = distance - slow <= 0 ? 0 : Math.ceil((distance - slow) / Math.max(1, boosted));
+    return Math.max(1, before + Math.ceil(slow));
+  }
+  if (gates?.starGate && gates.fromColony && gates.toColony) {
+    return 1;
+  }
+  return Math.max(1, Math.ceil(distance / Math.max(1, boosted)));
+}
+
+/** Прибавка прыжковых врат к скорости — `FlightRules.JUMP_GATE_PARSECS`. */
+export const JUMP_GATE_PARSECS = 3;
+
+/** Что знает о вратах срок перелёта: изученное и населённые свои колонии на концах пути. */
+export interface Gates {
+  jumpGate?: boolean;
+  starGate?: boolean;
+  fromColony: boolean;
+  toColony: boolean;
+  /** Радиус чужого варп-перехватчика в системе цели, парсеков; 0 — его нет. */
+  interdictor?: number;
+}
+
+/** Врата для перелёта между двумя системами — населённые колонии игрока на концах пути. */
+export function gatesFor(
+  empire: { jumpGate?: boolean; starGate?: boolean } | null | undefined,
+  playerId: string | undefined,
+  from: { planets?: { ownerPlayerId?: string; population?: number }[] },
+  to: { planets?: { ownerPlayerId?: string; population?: number; interdictorParsecs?: number }[] },
+): Gates {
+  const colony = (system: typeof from) =>
+    (system.planets ?? []).some((planet) => planet.ownerPlayerId === playerId && (planet.population ?? 0) > 0);
+  // Свой перехватчик своих не держит — сервер и так отдаёт радиус только у чужих колоний.
+  const interdictor = Math.max(0, ...(to.planets ?? [])
+    .filter((planet) => planet.ownerPlayerId !== playerId)
+    .map((planet) => planet.interdictorParsecs ?? 0));
+  return {
+    jumpGate: empire?.jumpGate,
+    starGate: empire?.starGate,
+    fromColony: colony(from),
+    toColony: colony(to),
+    interdictor,
+  };
+}

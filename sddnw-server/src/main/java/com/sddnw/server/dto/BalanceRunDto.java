@@ -40,7 +40,14 @@ public record BalanceRunDto(
         String kind,
         Integer population,
         OracleDto oracle,
-        String failure
+        String failure,
+        /**
+         * Ход решённости медианой по партиям, в процентах их длины (пункт 155): с какого места
+         * будущий победитель первый до конца. Пусто — прогон старый или ещё идёт.
+         */
+        Integer decidedPercent,
+        /** Хвост — ходов после решённости, медианой. */
+        Integer tailTurns
 ) {
 
     /** Чем играла империя: название расы и её стороны — так их видно и без справочника. */

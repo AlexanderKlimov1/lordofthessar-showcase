@@ -34,12 +34,15 @@ public class StarNameCatalog {
     /**
      * Имя специальной звезды — п. 4.2.1.
      * <p>
-     * Wardenhold («Стражевая»), а не Orion: сама звезда астрономическая, но история о
-     * страже, который её сторожит, — лор Master of Orion, и имя тянуло его за собой
-     * (`docs/renaming.md`). Имя латинское на обоих языках, как и все прочие звёзды: оно
-     * ложится в базу строкой, а у хранимого имени языка быть не может.
+     * Thessar (05.10.2026, решение хозяина проекта): имя игры — «Lord of Thessar», и оно
+     * называет цель партии — удержать эту звезду. До того она звалась Wardenhold, а ещё раньше
+     * Orion: сама звезда астрономическая, но история о страже, который её сторожит, — лор
+     * Master of Orion (`docs/renaming.md`). Имя латинское на обоих языках, как и все прочие
+     * звёзды: оно ложится в базу строкой, а у хранимого имени языка быть не может, — поэтому
+     * партии, начатые раньше, доигрываются со звездой Wardenhold или Orion. Особая звезда
+     * узнаётся признаком системы, а не именем, и правило от переименования не страдает.
      */
-    public static final String SPECIAL_STAR = "Wardenhold";
+    public static final String SPECIAL_STAR = "Thessar";
 
     private static final Logger log = LoggerFactory.getLogger(StarNameCatalog.class);
     private static final String COMMENT_PREFIX = "#";

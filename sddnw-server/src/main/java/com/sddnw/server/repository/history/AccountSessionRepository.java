@@ -28,4 +28,12 @@ public interface AccountSessionRepository extends JpaRepository<AccountSessionEn
     @Modifying
     @Query("DELETE FROM AccountSessionEntity s WHERE s.accountId = :accountId")
     void deleteByAccountId(UUID accountId);
+
+    /**
+     * Погасить прочие входы записи, кроме этого, — смена пароля (backlog-promo, пункт 45): кто сменил
+     * пароль, тот остаётся в игре, а остальные пропуска записи больше не действуют.
+     */
+    @Modifying
+    @Query("DELETE FROM AccountSessionEntity s WHERE s.accountId = :accountId AND s.token <> :keep")
+    void deleteOthers(UUID accountId, String keep);
 }

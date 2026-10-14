@@ -37,6 +37,10 @@ public record FleetDto(
         /** Сколько командных очков занимают корабли империи — п. 8. */
         Integer commandUsed,
         /** Сколько их даёт империи её колонии — п. 8: у военачальников вдвое больше. */
-        Integer commandCapacity
+        Integer commandCapacity,
+        /** Изучены прыжковые врата — разгон на 3 парсека от своей колонии (п. 8, FlightRules). */
+        Boolean jumpGate,
+        /** Изучены звёздные врата — от колонии к колонии за один ход (п. 8, FlightRules). */
+        Boolean starGate
 ) {
 }

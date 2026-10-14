@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Учебная партия (field-backlog, пункт 41): звания за трудное считаются только по партиям,
+        сыгранным всерьёз. Прежде об обучении знал лишь клиент.
+    -->
+    <changeSet id="130-game-tutorial" author="sddnw">
+        <addColumn tableName="game">
+            <column name="tutorial" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!--
+        Звания за трудное (пункт 41): чем партия была трудна — выводится при записи истории,
+        потому что после удаления партии пересчитать нечем. Код готовой расы — ради звания
+        «победа каждой расой» (имя расы переводится и бывает своим).
+    -->
+    <changeSet id="130-game-record-titles" author="sddnw">
+        <addColumn tableName="game_record">
+            <column name="race_code" type="varchar(32)"/>
+            <column name="at_war" type="boolean"/>
+            <column name="warden" type="boolean"/>
+            <column name="trophy" type="boolean"/>
+            <column name="tutorial" type="boolean"/>
+        </addColumn>
+    </changeSet>
+
+    <!--
+        «Вашей расой сыграли N раз» (пункт 99): раса, взятая по ссылке, помнит, чья она, а партия,
+        начатая такой расой, — источник. Внешних ключей нет, как у библиотек записи (миграция 127):
+        автор вправе удалить свою расу, а сыгранное ею от этого не исчезает.
+    -->
+    <changeSet id="130-race-template-origin" author="sddnw">
+        <addColumn tableName="race_template">
+            <column name="origin_id" type="uuid"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="130-race-play" author="sddnw">
+        <createTable tableName="race_play">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="template_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="outcome" type="varchar(16)"/>
+            <column name="started_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="race_play" indexName="idx_race_play_template">
+            <column name="template_id"/>
+        </createIndex>
+        <addUniqueConstraint tableName="race_play" columnNames="account_id, game_id"
+                             constraintName="uq_race_play_account_game"/>
+    </changeSet>
+
+    <!--
+        Уведомления о ходе (пункт 22): письмо — по согласию (по умолчанию выключено), отписка —
+        ключом из самого письма; браузер — подписками Web Push, по одной на браузер.
+    -->
+    <changeSet id="130-account-notify" author="sddnw">
+        <addColumn tableName="account">
+            <column name="notify_mail" type="boolean"/>
+            <column name="notify_token" type="varchar(64)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="130-push-subscription" author="sddnw">
+        <createTable tableName="push_subscription">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="account_id" type="uuid">
+                <constraints nullable="false"/>
+            </column>
+            <column name="endpoint" type="varchar(1024)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uq_push_endpoint"/>
+            </column>
+            <column name="p256dh" type="varchar(256)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="auth" type="varchar(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <createIndex tableName="push_subscription" indexName="idx_push_subscription_account">
+            <column name="account_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!--
+        Ключи сервера (VAPID для Web Push): заводятся при первой надобности и живут в базе, а не в
+        файле, — иначе новый ключ после переезда сервера молча обесценил бы все подписки.
+    -->
+    <changeSet id="130-server-secret" author="sddnw">
+        <createTable tableName="server_secret">
+            <column name="name" type="varchar(64)">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="secret" type="varchar(512)">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+</databaseChangeLog>

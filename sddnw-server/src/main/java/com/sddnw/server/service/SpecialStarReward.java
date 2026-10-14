@@ -44,7 +44,7 @@ public class SpecialStarReward {
      * Три: меньше — и Страж не окупается (его берут поздно и дорогой ценой), больше — и
      * взявший уходит в отрыв, которого партия не переживает.
      */
-    private static final int TECHNOLOGIES = 3;
+    public static final Integer TECHNOLOGIES = 3;
 
     private final ResearchService researchService;
 

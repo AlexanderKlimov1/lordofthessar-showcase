@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!-- «Жители сами» (field-backlog, пункт 91): колония держит фермеров на прокорм и долю игрока. -->
+    <changeSet id="135-planet-auto-jobs" author="sddnw">
+        <addColumn tableName="planet">
+            <column name="auto_jobs" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!--
+        Пакет основателя (08.10.2026, решение хозяина проекта): право, которое звалось EARLY_ACCESS, — это
+        пакет за 100 $ или пожертвование от 100 $, и зовётся теперь FOUNDER. Имя EARLY_ACCESS отдано
+        новому, более дешёвому праву раннего доступа, которое сверх обычного игрока ничего не даёт.
+        Выданные права переезжают на новое имя: купивший пакет остаётся основателем.
+    -->
+    <changeSet id="135-entitlement-founder" author="sddnw">
+        <update tableName="account_entitlement">
+            <column name="kind" value="FOUNDER"/>
+            <where>kind = 'EARLY_ACCESS'</where>
+        </update>
+    </changeSet>
+</databaseChangeLog>

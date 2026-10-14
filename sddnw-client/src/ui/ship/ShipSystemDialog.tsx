@@ -36,6 +36,7 @@ const WEAPON_KINDS: Array<{ code: string; label: Key }> = [
   { code: 'BEAM', label: 'design.kind.BEAM' },
   { code: 'PROJECTILE', label: 'design.kind.PROJECTILE' },
   { code: 'MISSILE', label: 'design.kind.MISSILE' },
+  { code: 'BOMB', label: 'design.kind.BOMB' },
 ];
 
 export function ShipSystemDialog({
@@ -63,7 +64,7 @@ export function ShipSystemDialog({
   roomFor: (component: ShipComponentOption) => boolean;
 }) {
   const [kind, setKind] = useState('ALL');
-  useModalEscape(true, onClose);
+  useModalEscape(true, onClose, true);
   const { t } = useT();
 
   const weapons = slot === 'WEAPON';
@@ -76,7 +77,7 @@ export function ShipSystemDialog({
 
   return (
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-space-950/95 p-6">
-      <div className="panel flex max-h-full w-full max-w-3xl flex-col overflow-hidden">
+      <div className="panel flex max-h-full w-full max-w-3xl flex-col overflow-hidden" data-keeps-enter>
         <div className="flex shrink-0 items-center justify-center border-b border-space-700 pb-2">
           <h3 className="text-20 uppercase tracking-[0.3em] text-ink-bright">
             {t('design.choose', { slot: SLOT_NAMES[slot] ? t(SLOT_NAMES[slot]).toLowerCase() : t('design.slot.generic') })}
@@ -186,11 +187,11 @@ export function ShipSystemDialog({
 
         {/* Урон — верхняя граница разброса оригинала (правила проекта, ShipDesignService): ветеран
             ищет здесь «1–4» и без строки решит, что у лазера отняли разброс по ошибке. */}
-        {weapons ? <RuleNote className="mt-2 shrink-0 text-14" text={t('rule.weaponDamage')} /> : null}
+        {weapons ? <RuleNote className="mt-2 shrink-0 text-14" hint="rule.weaponDamage" text={t('rule.weaponDamage')} /> : null}
 
         <div className="mt-2 flex shrink-0 justify-end border-t border-space-700 pt-2">
           <button type="button" className="link text-18" onClick={onClose}>
-            {t('common.cancelEsc')}
+            {t('common.ok')}
           </button>
         </div>
       </div>

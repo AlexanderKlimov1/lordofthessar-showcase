@@ -132,6 +132,16 @@ export function HotkeysEditor({ onCapturing }: {
               </td>
             </tr>
           ))}
+          {/*
+            Закреплённые клавиши карты (пункт 171): не переназначаются, но о них должно быть где
+            прочитать — список в меню «Игра» убран (08.10.2026), и здесь они единственные.
+          */}
+          {MAP_KEYS.map(({ label, key }) => (
+            <tr key={label} className="border-t border-space-800">
+              <td className="py-1 text-ink">{t(label)}</td>
+              <td className="py-1"><span className="inline-block min-w-[6rem] px-3 py-0.5 text-center text-ink-dim">{key}</span></td>
+            </tr>
+          ))}
         </tbody>
       </table>
 
@@ -139,7 +149,7 @@ export function HotkeysEditor({ onCapturing }: {
         Отказ стоит под таблицей и держит её высоту постоянной: строка, появляющаяся между
         рядами, сдвигала бы кнопку из-под курсора ровно в тот миг, когда по ней метятся.
       */}
-      <p className="mt-2 h-4 text-danger">{refusal ?? ''}</p>
+      <p className="mt-2 h-4 text-danger">{refusal ? <><span aria-hidden className="mr-1">⚠</span>{refusal}</> : ''}</p>
 
       <div className="mt-2 flex items-center gap-4">
         {/*
@@ -170,3 +180,10 @@ export function HotkeysEditor({ onCapturing }: {
 /** Подпись действия — та же, что у кнопки, которую клавиша дублирует. */
 const labelOf = (action: HotkeyAction) =>
   HOTKEY_ACTIONS.find((one) => one.action === action)!.label;
+
+/** Закреплённые клавиши карты — пункт 171: навигация, а не команды раскладки. */
+const MAP_KEYS: { label: 'hotkey.map.step' | 'hotkey.map.open' | 'hotkey.map.fleet'; key: string }[] = [
+  { label: 'hotkey.map.step', key: '← ↑ → ↓' },
+  { label: 'hotkey.map.open', key: 'Enter' },
+  { label: 'hotkey.map.fleet', key: 'Space' },
+];

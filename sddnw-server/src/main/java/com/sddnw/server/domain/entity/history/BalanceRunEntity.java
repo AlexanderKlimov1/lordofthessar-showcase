@@ -163,6 +163,30 @@ public class BalanceRunEntity {
         this.population = population;
     }
 
+    /** Ход решённости медианой по партиям, в процентах длины партии (пункт 155, {@code DecidedRules}). */
+    @Column(name = "decided_percent")
+    private Integer decidedPercent;
+
+    /** Хвост — ходов после решённости, медианой по партиям. */
+    @Column(name = "tail_turns")
+    private Integer tailTurns;
+
+    public Integer getDecidedPercent() {
+        return decidedPercent;
+    }
+
+    public void setDecidedPercent(Integer decidedPercent) {
+        this.decidedPercent = decidedPercent;
+    }
+
+    public Integer getTailTurns() {
+        return tailTurns;
+    }
+
+    public void setTailTurns(Integer tailTurns) {
+        this.tailTurns = tailTurns;
+    }
+
     public String getLadder() {
         return ladder;
     }

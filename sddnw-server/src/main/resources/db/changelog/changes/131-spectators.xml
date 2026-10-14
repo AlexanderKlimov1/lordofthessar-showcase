@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Режим зрителя (field-backlog, пункт 59): согласие создателя партии и кадры галактики на
+        начало каждого хода — зритель отстаёт на пять ходов, а прошлое партии пересчитать нечем.
+    -->
+    <changeSet id="131-game-spectators" author="sddnw">
+        <addColumn tableName="game">
+            <column name="spectators" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="131-spectator-frame" author="sddnw">
+        <createTable tableName="spectator_frame">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="game_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_spectator_frame_game"
+                             references="game(id)" deleteCascade="true"/>
+            </column>
+            <column name="turn" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="frame" type="text">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint tableName="spectator_frame" columnNames="game_id, turn"
+                             constraintName="uq_spectator_frame_game_turn"/>
+        <createIndex tableName="spectator_frame" indexName="ix_spectator_frame_game">
+            <column name="game_id"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

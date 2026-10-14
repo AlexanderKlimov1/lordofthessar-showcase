@@ -45,7 +45,8 @@ public class AssimilationPhase implements TurnPhase {
             }
 
             Integer turns = rules.turnsPerColonist(
-                    context.colonyContext().race(colony));
+                    context.colonyContext().race(colony),
+                    context.colonyContext().effects(colony).alienManagement());
             Integer points = colony.getAssimilationPoints() + 1;
             if (points < turns) {
                 colony.setAssimilationPoints(points);

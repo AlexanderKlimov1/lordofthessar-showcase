@@ -24,7 +24,15 @@ import { t, useT } from '../../i18n';
  * держать лидеров в хранилище ради одной строки незачем — открытие колонии и так идёт с
  * запросом состояния.
  */
-export function ColonyLeader({ systemId, turn }: { systemId: string; turn: number }) {
+export function ColonyLeader({ systemId, turn, compact = false }: {
+  systemId: string;
+  turn: number;
+  /**
+   * Портрет без подписей (имя и звание — в подсказке): в правом нижнем углу построек колонии,
+   * квадратом 6rem (09.10.2026, решение хозяина проекта). Губернатора нет — нет и рамки.
+   */
+  compact?: boolean;
+}) {
   const game = useGameStore((state) => state.game);
   const credentials = useGameStore((state) => state.credentials);
   const [leader, setLeader] = useState<Leader | null>(null);
@@ -51,6 +59,23 @@ export function ColonyLeader({ systemId, turn }: { systemId: string; turn: numbe
   }, [game, credentials, systemId]);
 
   const travelling = leader?.arrivesTurn !== undefined && leader.arrivesTurn > turn;
+
+  if (compact) {
+    if (!leader) {
+      return null;
+    }
+    const hint = leader
+      ? `${leader.name} — ${leader.title}. ${travelling
+        ? t('leaders.travelling', { n: leader.arrivesTurn ?? 0 }).replace(/^[\s·]+/, '')
+        : t('colony.leader.serves')}`
+      : `${t('colony.leader.none')}. ${t('colony.leader.hint')}`;
+    return (
+      <span title={hint} aria-label={hint}
+            className="block h-24 w-24 flex-none border border-space-600 bg-space-950/80 p-1.5">
+        <LeaderEmblem leader={leader} />
+      </span>
+    );
+  }
 
   return (
     <section className="flex flex-none items-center gap-3 border border-space-700 bg-space-950/60 p-2">

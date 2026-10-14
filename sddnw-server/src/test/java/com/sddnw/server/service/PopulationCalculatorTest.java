@@ -141,6 +141,22 @@ class PopulationCalculatorTest {
     }
 
     @Test
+    void lossNeverStarvesFedColony() {
+        // Землетрясение унесло двоих у сытой колонии: прежде оба уходили из фермеров (их больше
+        // всех), и колония начинала голодать. Восьмерым на земном мире нужно четверо фермеров.
+        assertEquals(new PopulationJobs(4, 2, 2),
+                calculator.normalize(PlanetClimate.TERRAN, 8, new PopulationJobs(5, 3, 2)));
+
+        // Игрок держал фермеров меньше нужного нарочно (подвоз еды) — его выбор не трогаем.
+        assertEquals(new PopulationJobs(2, 4, 2),
+                calculator.normalize(PlanetClimate.TERRAN, 8, new PopulationJobs(2, 6, 2)));
+
+        // Снять больше некого — уходят и нужные фермеры: колония меньше, чем им кормить.
+        assertEquals(new PopulationJobs(1, 0, 0),
+                calculator.normalize(PlanetClimate.TERRAN, 1, new PopulationJobs(2, 1, 0)));
+    }
+
+    @Test
     @DisplayName("Прирост наибольший на половине вместимости и нулевой у заполненной колонии")
     void basicIncrementPeaksAtHalfCapacity() {
         // ROUNDDOWN(SQRT(2000 * жители * свободно / вместимость)) — формула MOO II.

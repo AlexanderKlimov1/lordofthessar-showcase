@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        13.10.2026, перенос технологий MOO II: эволюционная мутация. Изучивший получает 4 очка на новые
+        стороны расы; пока человек их не потратил, они ждут здесь.
+    -->
+    <changeSet id="149-mutation" author="sddnw">
+        <addColumn tableName="player">
+            <column name="mutation_picks" type="integer" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

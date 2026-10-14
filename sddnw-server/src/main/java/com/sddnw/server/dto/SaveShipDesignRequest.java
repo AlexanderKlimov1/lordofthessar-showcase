@@ -18,7 +18,7 @@ import java.util.List;
  * @param components состав: коды компонентов и сколько раз каждый взят
  */
 public record SaveShipDesignRequest(
-        @NotNull @Min(1) @Max(6) Integer slot,
+        @NotNull @Min(1) @Max(8) Integer slot,
         @NotBlank @Size(max = 64) String name,
         @NotBlank String hullCode,
         @NotEmpty List<@Valid ShipComponentChoice> components

@@ -79,6 +79,15 @@ public class Messages {
         return (String) resolve(LocaleContextHolder.getLocale(), value);
     }
 
+    /**
+     * Подстановка, показанная сама по себе, на языке запроса: ключ с подстановками, отказ,
+     * перечисление — переводом, строка — как хранимое имя. Так собирается ответ, где рядом
+     * лежат и названия, и причины (пропущенное из шаблона стройки, пункт 97).
+     */
+    public String display(Object value) {
+        return String.valueOf(resolve(LocaleContextHolder.getLocale(), value));
+    }
+
     /** Отказ API на языке текущего запроса. */
     public String get(ApiException exception) {
         return get(exception.key(), exception.args());
@@ -98,7 +107,7 @@ public class Messages {
         for (int i = 0; i < resolved.length; i++) {
             String arg = args.get(i);
             String known = arg == null ? null : source.getMessage(arg, null, null, locale);
-            resolved[i] = known == null ? arg : known;
+            resolved[i] = known == null ? empire(locale, arg) : known;
         }
         return source.getMessage(key, resolved, key, locale);
     }
@@ -118,7 +127,39 @@ public class Messages {
             return null;
         }
         String found = source.getMessage(text, null, null, LocaleContextHolder.getLocale());
-        return found == null ? text : found;
+        return found == null ? shown(text) : found;
+    }
+
+    /**
+     * Имя империи на языке запроса. Империя ИИ зовётся названием своей расы, и в базе оно
+     * лежит по-английски — хранимое имя языка не имеет (иначе язык выбирал бы тот, кто завёл
+     * партию). Показывая, его узнают по словарю ({@code empire.name.<имя>}) и отдают на языке
+     * читателя: иначе русский игрок читал бы «Earthlings» посреди русской фразы. Имя, которого
+     * словарь не знает (империя человека), проходит как есть.
+     */
+    public String empire(String name) {
+        return empire(LocaleContextHolder.getLocale(), name);
+    }
+
+    /**
+     * Хранимое имя на языке запроса: имя империи ИИ (см. {@link #empire(String)}) или имя
+     * проекта, которое дала сама игра, — корпус («Frigate») или гражданский род («Colony
+     * Ship», {@code design.name.<имя>}). Оба лежат в базе по-английски по той же причине.
+     * Имя, данное игроком, словарь не знает, и оно проходит как есть.
+     */
+    public String shown(String name) {
+        return empire(LocaleContextHolder.getLocale(), name);
+    }
+
+    private String empire(Locale locale, String name) {
+        if (name == null) {
+            return null;
+        }
+        String empire = source.getMessage("empire.name." + name, null, null, locale);
+        if (empire != null) {
+            return empire;
+        }
+        return source.getMessage("design.name." + name.replace(' ', '_'), null, name, locale);
     }
 
     /**
@@ -147,6 +188,9 @@ public class Messages {
         if (arg instanceof Enum<?> value) {
             String key = "enum." + value.getDeclaringClass().getSimpleName() + "." + value.name();
             return source.getMessage(key, null, value.name(), locale);
+        }
+        if (arg instanceof String text) {
+            return empire(locale, text);
         }
         return arg;
     }

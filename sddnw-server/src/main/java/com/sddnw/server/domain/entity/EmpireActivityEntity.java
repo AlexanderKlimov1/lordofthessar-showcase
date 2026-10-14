@@ -59,6 +59,22 @@ public class EmpireActivityEntity {
     @Column(name = "times", nullable = false)
     private Integer times = 0;
 
+    /**
+     * Ход первого такого события — field-backlog, пункт 93: по нему видно, когда империя впервые
+     * встретила механику и где в партии тянутся отрезки без нового. Пусто — у строк, заведённых до
+     * этого поля.
+     */
+    @Column(name = "first_turn")
+    private Integer firstTurn;
+
+    public Integer getFirstTurn() {
+        return firstTurn;
+    }
+
+    public void setFirstTurn(Integer firstTurn) {
+        this.firstTurn = firstTurn;
+    }
+
     public UUID getId() {
         return id;
     }

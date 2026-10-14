@@ -43,12 +43,62 @@ public class LeaderCatalog {
     private static final long RELOAD_CHECK_MS = 1_000L;
 
     private final Path file;
+
+    /**
+     * Набор справочников партии основателя — field-backlog, пункт 42. Поток занят партией с
+     * набором ({@link ModScope}) — справочник отдаёт разобранный набор этой партии, иначе файл.
+     * Набор у партии не меняется, поэтому разбирается один раз и помнится по партии.
+     */
+    private final GameMods gameMods;
+    private final java.util.Map<java.util.UUID, Snapshot> modSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Текст набора, который сейчас разбирается вместо файла: разбор один и тот же. */
+    private static final ThreadLocal<byte[]> PARSING = new ThreadLocal<>();
+
+    private byte[] source() throws IOException {
+        byte[] text = PARSING.get();
+        return text != null ? text : Files.readAllBytes(file);
+    }
+
+    private <T> T parsing(String text, java.util.function.Supplier<T> work) {
+        PARSING.set(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            return work.get();
+        } finally {
+            PARSING.remove();
+        }
+    }
+
+    /** Проверить текст набора тем же разбором, каким читается файл; неверный — исключение. */
+    public void check(String text) {
+        parsing(text, () -> read(0L));
+    }
+
+    /** Разобранный набор партии, которую считает поток; {@code null} — справочник обычный. */
+    private Snapshot modded() {
+        java.util.UUID game = ModScope.current();
+        if (game == null) {
+            return null;
+        }
+        String text = gameMods.content(game, GameMods.Kind.LEADERS);
+        if (text == null) {
+            return null;
+        }
+        return modSnapshots.computeIfAbsent(game, id -> parsing(text, () -> read(0L)));
+    }
     private final ObjectMapper objectMapper;
 
     private volatile Snapshot snapshot;
     private volatile long checkedAt = 0L;
 
+    /** Без наборов партий — так справочник собирают проверки (пункт 42). */
     public LeaderCatalog(GameProperties gameProperties, ObjectMapper objectMapper) {
+        this(gameProperties, objectMapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public LeaderCatalog(GameProperties gameProperties, ObjectMapper objectMapper, GameMods gameMods) {
+        this.gameMods = gameMods;
         this.file = Path.of(gameProperties.leadersFile()).toAbsolutePath();
         this.objectMapper = objectMapper;
     }
@@ -114,6 +164,10 @@ public class LeaderCatalog {
     }
 
     private Snapshot current() {
+        Snapshot mod = modded();
+        if (mod != null) {
+            return mod;
+        }
         long modifiedAt = modifiedAtCached();
         Snapshot known = snapshot;
         if (known == null || known.modifiedAt() != modifiedAt) {
@@ -144,7 +198,7 @@ public class LeaderCatalog {
     private Snapshot read(long modifiedAt) {
         LeadersFile parsed;
         try {
-            parsed = objectMapper.readValue(Files.readAllBytes(file), LeadersFile.class);
+            parsed = objectMapper.readValue(source(), LeadersFile.class);
         } catch (IOException e) {
             throw new UncheckedIOException("Не удалось разобрать описание лидеров: " + file, e);
         }

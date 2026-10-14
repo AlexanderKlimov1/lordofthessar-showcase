@@ -1,0 +1,183 @@
+{
+  "races": {
+    "ALKARI": {
+      "buildings": [
+        "marine-barracks",
+        "automated-factory",
+        "research-laboratory",
+        "star-base"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "GNOLAM": {
+      "buildings": [
+        "marine-barracks",
+        "automated-factory",
+        "research-laboratory",
+        "star-base"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "HUMANS": {
+      "buildings": [
+        "automated-factory",
+        "marine-barracks",
+        "research-laboratory"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "KLACKONS": {
+      "buildings": [
+        "automated-factory",
+        "marine-barracks",
+        "research-laboratory"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "MEKLAR": {
+      "buildings": [
+        "marine-barracks",
+        "automated-factory",
+        "research-laboratory"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "PSILONS": {
+      "buildings": [
+        "marine-barracks",
+        "automated-factory",
+        "research-laboratory",
+        "supercomputer"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "SAKKRA": {
+      "buildings": [
+        "marine-barracks",
+        "star-base",
+        "automated-factory",
+        "research-laboratory"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "SILICOIDS": {
+      "buildings": [
+        "marine-barracks",
+        "automated-factory",
+        "research-laboratory",
+        "supercomputer"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    },
+    "TRILARIAN": {
+      "buildings": [
+        "marine-barracks",
+        "automated-factory",
+        "research-laboratory",
+        "star-base",
+        "supercomputer"
+      ],
+      "sections": [
+        "power",
+        "chemistry",
+        "power",
+        "engineering",
+        "engineering",
+        "computers",
+        "computers",
+        "computers"
+      ]
+    }
+  },
+  "default": {
+    "buildings": [
+      "marine-barracks",
+      "automated-factory",
+      "star-base",
+      "research-laboratory"
+    ],
+    "sections": [
+      "power",
+      "chemistry",
+      "power",
+      "engineering",
+      "engineering",
+      "computers",
+      "computers",
+      "computers"
+    ]
+  },
+  "note": "Книга дебютов сложного ИИ (field-backlog, пункт 9): собрана tools/ai_openings.py из 104 партий ИИ — начала империй, занявших первое место по мощи. Руками не правится."
+}

@@ -21,6 +21,8 @@ public record BattleMissileDto(
         Integer y,
         Integer count,
         Integer speed,
-        Integer fuel
+        Integer fuel,
+        /** Пехота на борту, если это штурмовые шаттлы (п. 8, абордаж); у ракет — пусто. */
+        Integer marines
 ) {
 }

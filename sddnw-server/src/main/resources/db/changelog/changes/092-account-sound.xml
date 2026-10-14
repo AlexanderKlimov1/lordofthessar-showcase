@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+      Громкость музыки и звуковых эффектов живёт в учётной записи — рядом с языком, размером
+      текста и раскладкой клавиш, и по той же причине: настройка из localStorage теряется на
+      второй машине, а выключенный однажды звук не должен заиграть снова.
+
+      Хранится СТУПЕНЬЮ (0 — выключено, 1…3), а не долей: переключатель ступенчатый, и в
+      колонке не может оказаться громкости, которой нет на экране.
+
+      Колонки не обязательные: пусто значит «игрок звука не трогал», то есть ВЫКЛЮЧЕНО —
+      решение хозяина проекта. Звук, заигравший сам при первом входе, раздражает сильнее,
+      чем тишина, которую надо включить.
+    -->
+    <changeSet id="092-account-sound" author="sddnw">
+        <addColumn tableName="account">
+            <column name="music_volume" type="integer"/>
+            <column name="sfx_volume" type="integer"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,7 +1,11 @@
+import { useEffect, useState } from 'react';
 import { tf, useT } from '../i18n';
 import { Figure } from './Figure';
 import { figureLabelClass } from './accent';
 import { useGameStore } from '../state/gameStore';
+import { galaxySizeName } from './planetLabels';
+import { InviteLink } from './invite/InviteLink';
+import { CompanionMark, EarlyBirdMark } from './EarlyBirdMark';
 
 interface LobbyProps {
   onStart: () => void;
@@ -20,6 +24,15 @@ export function Lobby({ onStart, onLeave }: LobbyProps) {
   const players = useGameStore((state) => state.players);
   const credentials = useGameStore((state) => state.credentials);
   const lastError = useGameStore((state) => state.lastError);
+  // Отсчёт стола подбора (пункт 65) идёт секундами: лобби само перечитывается раз в три.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!game?.autoStartAt) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [game?.autoStartAt]);
 
   if (!game) {
     return null;
@@ -36,7 +49,7 @@ export function Lobby({ onStart, onLeave }: LobbyProps) {
         <header className="mb-4">
           <h1 className="text-lg tracking-[0.25em] text-accent">{game.name}</h1>
           <p className={`mt-1 ${figureLabelClass('note')}`}>
-            {tf('lobby.summary', { size: game.galaxySize, w: <Figure accent="note">{game.widthParsecs}</Figure>, h: <Figure accent="note">{game.heightParsecs}</Figure>, stars: <Figure accent="note">{game.starCount}</Figure> })}
+            {tf('lobby.summary', { size: galaxySizeName(game.galaxySize), w: <Figure accent="note">{game.widthParsecs}</Figure>, h: <Figure accent="note">{game.heightParsecs}</Figure>, stars: <Figure accent="note">{game.starCount}</Figure> })}
           </p>
         </header>
 
@@ -62,6 +75,8 @@ export function Lobby({ onStart, onLeave }: LobbyProps) {
                 <span className={player.id === credentials?.playerId ? 'text-accent' : ''}>
                   {player.name}
                 </span>
+                <EarlyBirdMark on={player.earlyBird} />
+                <CompanionMark count={player.companions} />
                 <span className="text-ink-faint">{player.raceName ?? player.raceCode}</span>
                 {player.id === game.hostPlayerId ? (
                   <span className="text-10 uppercase tracking-widest text-ink-faint">{t('lobby.host')}</span>
@@ -88,8 +103,27 @@ export function Lobby({ onStart, onLeave }: LobbyProps) {
           </button>
         </div>
 
+        {game.autoStartAt ? (
+          /*
+            Стол подбора — пункт 65: пустоту не показывают пустотой. Сколько ждать — числом, и что
+            будет, если второй не придёт: создатель вправе начать с ИИ и сейчас.
+          */
+          <p className="mt-3 text-14 text-ink-soft">
+            {players.length >= 2
+              ? t('lobby.autoStart', { time: countdown(game.autoStartAt, now) })
+              : t('lobby.autoStart.waiting', { time: countdown(game.autoStartAt, now) })}
+          </p>
+        ) : null}
         {isHost ? null : <p className="mt-3 text-11 text-ink-faint">{t('lobby.hostNote')}</p>}
+        {/* Пригласить друга (пункт 15): ссылка за этот стол — гостю регистрация не нужна. */}
+        <InviteLink className="mt-3 text-11" />
       </div>
     </div>
   );
+}
+
+/** Сколько осталось до автостарта — «м:сс»; вышедший срок — ноль, стол стартует с ближайшим обходом. */
+function countdown(at: string, now: number): string {
+  const left = Math.max(0, Math.round((Date.parse(at) - now) / 1000));
+  return `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
 }

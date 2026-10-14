@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.29.xsd">
+
+    <!--
+        Знаки знамён у хозяев на карте — особая возможность (field-backlog, пункт 202). Пусто у
+        всех — знаки выключены: прежде они стояли всегда.
+    -->
+    <changeSet id="115-account-banner-glyphs" author="sddnw">
+        <addColumn tableName="account">
+            <column name="banner_glyphs" type="boolean"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

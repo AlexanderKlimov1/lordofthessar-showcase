@@ -2,8 +2,10 @@ package com.sddnw.server.service;
 
 import com.sddnw.server.config.GameProperties;
 import com.sddnw.server.domain.ColonyProject;
+import com.sddnw.server.domain.RaceEffects;
 import com.sddnw.server.domain.entity.GameEntity;
 import com.sddnw.server.domain.entity.PlanetBuildingEntity;
+import com.sddnw.server.domain.entity.PlanetEntity;
 import com.sddnw.server.domain.entity.PlayerEntity;
 import com.sddnw.server.domain.entity.ShipDesignEntity;
 import com.sddnw.server.domain.entity.StarSystemEntity;
@@ -47,9 +49,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.domain.PageRequest;
 
 import java.time.OffsetDateTime;
+import com.sddnw.server.domain.enums.SpaceMonster;
+
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
@@ -72,6 +79,21 @@ public class GameService {
     private static final Logger log = LoggerFactory.getLogger(GameService.class);
 
     /**
+     * Автосохранения пишутся ЗА ответом, а не перед ним (12.10.2026, замер хозяина проекта:
+     * «ход должен передаваться почти мгновенно»). Слепок вычитывает всю галактику и стоил в
+     * запросе конца хода 0,2–0,3 с — игрок ждал записи, которая ему не нужна до следующего
+     * входа. Поток один: слепки одной партии ложатся по порядку ходов и не дерутся за строку
+     * {@code game_save}. Демон — остановку сервера он не держит; недописанный слепок — это
+     * прошлое автосохранение, а не потерянная партия.
+     */
+    private final java.util.concurrent.ExecutorService autoSaves =
+            java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "autosave");
+                thread.setDaemon(true);
+                return thread;
+            });
+
+    /**
      * Нужен ровно для одного — убрать за удалённой партией то, что связано с ней полем,
      * а не ссылкой (см. {@link #deleteBelongings}). Пятнадцать репозиториев ради
      * одиннадцати удалений завести можно, но читать их будет труднее, чем этот список.
@@ -85,6 +107,7 @@ public class GameService {
     private final GalaxyGenerator galaxyGenerator;
     private final HomeworldAllocator homeworldAllocator;
     private final GameMapper gameMapper;
+    private final MyGamesContextService myGamesContext;
     private final GameProperties gameProperties;
     private final GameAccess gameAccess;
     private final PlayerRoster playerRoster;
@@ -94,11 +117,22 @@ public class GameService {
     private final TurnService turnService;
     private final GameSaveService gameSaveService;
     private final ExplorationService explorationService;
+    private final IntelService intelService;
     private final RaceService raceService;
     private final GameEventPublisher gameEvents;
     private final GameEventService gameEventService;
     private final PresenceService presence;
     private final FleetService fleetService;
+    private final RaceTemplateService raceTemplates;
+    private final TurnNotifyService turnNotify;
+    private final SpectatorService spectators;
+
+    /** Метки наставника на карте ученика — пункт 184. Полем: конструктор службы и так длинен. */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.sddnw.server.repository.MapMarkRepository mapMarks;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private Messages messages;
 
     /**
      * Сколько партий отдаётся списком. Партий в базе накапливаются сотни, а в лобби
@@ -112,6 +146,7 @@ public class GameService {
                        GalaxyGenerator galaxyGenerator,
                        HomeworldAllocator homeworldAllocator,
                        GameMapper gameMapper,
+                       MyGamesContextService myGamesContext,
                        GameProperties gameProperties,
                        GameAccess gameAccess,
                        PlayerRoster playerRoster,
@@ -121,17 +156,22 @@ public class GameService {
                        TurnService turnService,
                        GameSaveService gameSaveService,
                        ExplorationService explorationService,
+                       IntelService intelService,
                        RaceService raceService,
                        GameEventPublisher gameEvents,
                        GameEventService gameEventService,
                        PresenceService presence,
-                       FleetService fleetService) {
+                       FleetService fleetService,
+                       RaceTemplateService raceTemplates,
+                       TurnNotifyService turnNotify,
+                       SpectatorService spectators) {
         this.gameRepository = gameRepository;
         this.playerRepository = playerRepository;
         this.starSystemRepository = starSystemRepository;
         this.galaxyGenerator = galaxyGenerator;
         this.homeworldAllocator = homeworldAllocator;
         this.gameMapper = gameMapper;
+        this.myGamesContext = myGamesContext;
         this.gameProperties = gameProperties;
         this.gameAccess = gameAccess;
         this.playerRoster = playerRoster;
@@ -141,11 +181,15 @@ public class GameService {
         this.turnService = turnService;
         this.gameSaveService = gameSaveService;
         this.explorationService = explorationService;
+        this.intelService = intelService;
         this.raceService = raceService;
         this.gameEvents = gameEvents;
         this.gameEventService = gameEventService;
         this.fleetService = fleetService;
         this.presence = presence;
+        this.raceTemplates = raceTemplates;
+        this.turnNotify = turnNotify;
+        this.spectators = spectators;
     }
 
     /**
@@ -160,6 +204,9 @@ public class GameService {
         List<GameEntity> games = Boolean.TRUE.equals(openOnly)
                 ? gameRepository.findAllByStatusOrderByCreatedAtDesc(GameStatus.LOBBY, page)
                 : gameRepository.findAllByOrderByCreatedAtDesc(page);
+        // Закрытая партия (пункт 67) в общем списке не видна: в неё входят только по приглашению.
+        games = games.stream().filter(game -> !(game.getStatus() == GameStatus.LOBBY
+                && Boolean.TRUE.equals(game.getInviteOnly()))).toList();
         if (games.isEmpty()) {
             return List.of();
         }
@@ -173,10 +220,55 @@ public class GameService {
                 .toList();
     }
 
+    /**
+     * Свои в лобби видны — field-backlog, пункт 148: в группу своих входят охотнее, чем к
+     * незнакомым. Для каждой открытой партии — сколько других партий у спрашивающего общих с кем-то
+     * из её участников. Только число: чужие победы и поражения сюда не входят.
+     */
+    @Transactional(readOnly = true)
+    public Map<UUID, Integer> playedTogether(UUID accountId) {
+        Set<UUID> mine = new java.util.HashSet<>(playerRepository.gameIdsOfAccount(accountId));
+        Map<UUID, Integer> together = new java.util.LinkedHashMap<>();
+        Map<UUID, Set<UUID>> gamesOf = new HashMap<>();
+        for (GameEntity game : gameRepository.findAllByStatusOrderByCreatedAtDesc(GameStatus.LOBBY,
+                PageRequest.of(0, GAMES_PAGE))) {
+            if (Boolean.TRUE.equals(game.getInviteOnly())) {
+                continue;
+            }
+            Set<UUID> shared = new java.util.HashSet<>();
+            for (PlayerEntity player : playerRepository.findEmpiresByGameIdOrderBySlotAsc(game.getId())) {
+                if (player.getAccountId() == null || player.getAccountId().equals(accountId)) {
+                    continue;
+                }
+                Set<UUID> theirs = gamesOf.computeIfAbsent(player.getAccountId(),
+                        id -> new java.util.HashSet<>(playerRepository.gameIdsOfAccount(id)));
+                theirs.stream().filter(mine::contains).filter(id -> !id.equals(game.getId())).forEach(shared::add);
+            }
+            if (!shared.isEmpty()) {
+                together.put(game.getId(), shared.size());
+            }
+        }
+        return together;
+    }
+
     /** Создание игры — п. 3.1. Создатель занимает слот 1 и становится хостом. */
     @Transactional
     public CreateGameResponse createGame(CreateGameRequest request, UUID accountId) {
         return createGame(request, accountId, Boolean.FALSE);
+    }
+
+    /**
+     * Партия на своих справочниках основателя — field-backlog, пункт 42: одиночная (второго
+     * человека не пустят — у всех за столом должны быть одни правила) и закрытая (в списке
+     * открытых её нет). Копию набора кладёт {@code ModService.attach} рядом.
+     */
+    @Transactional
+    public void makeModded(UUID gameId) {
+        GameEntity game = gameAccess.requireGame(gameId);
+        game.setModded(Boolean.TRUE);
+        game.setMaxHumanPlayers(1);
+        game.setInviteOnly(Boolean.TRUE);
+        gameRepository.save(game);
     }
 
     /**
@@ -206,13 +298,49 @@ public class GameService {
         game.setAiActive(request.aiActiveOrDefault());
         game.setWardenholdVictory(request.wardenholdVictoryOrDefault());
         game.setMightVictory(request.mightVictoryOrDefault());
+        // Срок итога — партия под вечер (пункт 24): только из списка правила.
+        if (request.mightTurn() != null && !MightVictoryRules.ALLOWED_TURNS.contains(request.mightTurn())) {
+            throw new BadRequestException("game.mightTurnInvalid", request.mightTurn());
+        }
+        game.setMightTurn(request.mightTurn() == null || request.mightTurn() == MightVictoryRules.TURN_LIMIT
+                ? null : request.mightTurn());
+        // Тихая галактика (пункт 186): признак партии, как aiActive; гостю не назначается.
+        game.setPeacefulAi(!Boolean.TRUE.equals(guest) && Boolean.TRUE.equals(request.peacefulAi()));
         // Срок хода — backlog-promo, пункт 11: только из предложенных окном новой игры.
         if (!TurnClockRules.allowed(request.turnSeconds())) {
             throw new BadRequestException("game.turnSecondsInvalid", request.turnSeconds());
         }
         game.setTurnSeconds(request.turnSeconds());
-        game.setCloseStart(guest);
+        // Особенность галактики (пункт 94): у гостя её нет — первая партия учит обычной игре.
+        String feature = guest ? null : com.sddnw.server.domain.enums.GalaxyFeature.resolve(
+                request.galaxyFeature(), game.getSeed());
+        game.setGalaxyFeature(feature);
+        game.setCloseStart(guest || com.sddnw.server.domain.enums.GalaxyFeature.is(feature,
+                com.sddnw.server.domain.enums.GalaxyFeature.CLOSE));
         game.setRichStart(guest);
+        // Галактика недели (пункт 146): одиночная партия, условия назначил контроллер.
+        if (Boolean.TRUE.equals(request.weekly())) {
+            game.setWeeklyWeek(WeeklyGalaxyRules.currentWeek());
+            game.setMaxHumanPlayers(1);
+        }
+        game.setTutorial(Boolean.TRUE.equals(request.tutorial()));
+        // Уровень сложности — field-backlog, пункт 9: только из перечня (незнакомый код — отказ, а не
+        // молчаливый «обычный»). Обучение без явного уровня — новичок: соперник обучения учит, а не
+        // наказывает. Галактика недели — обычный: условия одни на всех, иначе итоги по расам врут.
+        String skill = request.aiSkill();
+        if (skill != null && java.util.Arrays.stream(com.sddnw.server.domain.enums.AiSkill.values())
+                .noneMatch(one -> one.name().equals(skill))) {
+            throw new BadRequestException("game.aiSkillInvalid", skill);
+        }
+        if (Boolean.TRUE.equals(request.weekly())) {
+            game.setAiSkill(null);
+        } else if (skill == null && Boolean.TRUE.equals(request.tutorial())) {
+            game.setAiSkill(com.sddnw.server.domain.enums.AiSkill.BEGINNER.name());
+        } else {
+            game.setAiSkill(skill);
+        }
+        game.setSpectators(Boolean.TRUE.equals(request.spectators()));
+        game.setInviteOnly(Boolean.TRUE.equals(request.inviteOnly()));
         game.setCreatedAt(OffsetDateTime.now());
 
         PlayerEntity host = playerRoster.human(request.playerName(), 1, request.raceCode(), Set.of(),
@@ -220,6 +348,7 @@ public class GameService {
         // Хозяин места — учётная запись, с которой партию завели (п. 3.1). Пусто бывает
         // только у балансового прогона: у его партий человека нет вовсе.
         host.setAccountId(accountId);
+        host.setLastActionAt(OffsetDateTime.now());
         host.setHomeStarName(playerRoster.homeStarName(request.homeStarName()));
         playerRoster.applyRaceDesign(host, request.raceName(), request.raceTraits());
         game.addPlayer(host);
@@ -230,10 +359,14 @@ public class GameService {
         if (Boolean.TRUE.equals(request.observerOrDefault())) {
             host.setPlayerType(PlayerType.AI);
             playerRoster.giveCharacter(host, game, host.getSlot());
+            // Империя наблюдателя играет уровнем партии (пункт 9), как и соседи.
+            host.setAiSkill(game.getAiSkill());
         }
 
         gameRepository.saveAndFlush(game);
         game.setHostPlayerId(host.getId());
+        // Раса по чужой ссылке (пункт 99): автору прибавится сыгравший.
+        raceTemplates.started(accountId, request.raceTemplateId(), game.getId());
 
         log.info("Создана игра {} ({}), хост {}{}", game.getName(), galaxySize, host.getName(),
                 Boolean.TRUE.equals(request.observerOrDefault()) ? " (наблюдатель)" : "");
@@ -248,7 +381,19 @@ public class GameService {
     /** Присоединение игрока — п. 3.2, не более {@code maxHumanPlayers} человек. */
     @Transactional
     public CreateGameResponse joinGame(UUID gameId, JoinGameRequest request, UUID accountId) {
+        return joinGame(gameId, request, accountId, Boolean.FALSE);
+    }
+
+    /**
+     * Вход в лобби; {@code invited} — по ссылке-приглашению ({@code InviteService}). Закрытая партия
+     * (пункт 67) пускает только так: прямой вход по идентификатору ей отказывает.
+     */
+    @Transactional
+    public CreateGameResponse joinGame(UUID gameId, JoinGameRequest request, UUID accountId, Boolean invited) {
         GameEntity game = gameAccess.requireGame(gameId);
+        if (Boolean.TRUE.equals(game.getInviteOnly()) && !Boolean.TRUE.equals(invited)) {
+            throw new com.sddnw.server.web.error.ForbiddenException("game.inviteOnly");
+        }
         gameAccess.requireLobby(game);
 
         List<PlayerEntity> players = playerRepository.findEmpiresByGameIdOrderBySlotAsc(gameId);
@@ -263,10 +408,12 @@ public class GameService {
                 request.playerName(), playerRoster.nextFreeSlot(players), request.raceCode(), takenRaces,
                 request.banner(), takenColors);
         player.setAccountId(accountId);
+        player.setLastActionAt(OffsetDateTime.now());
         player.setHomeStarName(playerRoster.homeStarName(request.homeStarName()));
         playerRoster.applyRaceDesign(player, request.raceName(), request.raceTraits());
         player.setGame(game);
         playerRepository.saveAndFlush(player);
+        raceTemplates.started(accountId, request.raceTemplateId(), game.getId());
         gameEvents.playerJoined(game, player);
         log.info("Игрок {} присоединился к игре {}", player.getName(), game.getName());
         return joinedResponse(game, player);
@@ -281,9 +428,109 @@ public class GameService {
         GameEntity game = gameAccess.requireGame(gameId);
         gameAccess.requireLobby(game);
         gameAccess.requireHost(game, request.accessToken());
+        return start(game, request.aiEmpires());
+    }
 
+    /**
+     * «Сыграть с людьми» — field-backlog, пункт 65: вход в ближайшую открытую партию подбора или,
+     * если такой нет, новая с ожиданием. Пустой список открытых партий — холодный старт, видимый
+     * каждому; здесь пустоты нет: человек сразу оказывается за столом, и стол стартует САМ, как
+     * только за ним двое людей и вышел срок ожидания ({@link #autoStart}).
+     * <p>
+     * Настройки стола назначает сервер, а не пришедший: подбор сводит незнакомых, и спорить о
+     * размере галактики им не с кем. Малая галактика на четверых, все пути к победе и срок хода —
+     * часы нужны, иначе один задумавшийся держит всех ({@link MatchmakingRules}).
+     */
+    /** История партий для подбора соперников по силе (пункт 119); необязательна — тестам не нужна. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private GameRecordService gameRecords;
+
+    @Transactional
+    public CreateGameResponse quickMatch(UUID accountId, String playerName) {
+        // Уже сидит за столом подбора — возвращаем его место, а не второе.
+        for (GameEntity game : gameRepository.findAllByStatusAndAutoStartAtNotNullOrderByCreatedAtAsc(GameStatus.LOBBY)) {
+            List<PlayerEntity> seated = playerRepository.findEmpiresByGameIdOrderBySlotAsc(game.getId());
+            if (seated.stream().anyMatch(player -> accountId.equals(player.getAccountId()))) {
+                return rejoin(game.getId(), accountId);
+            }
+        }
+        // Соперники по силе (пункт 119): из столов со свободным местом — самый похожий по опыту и
+        // рейтингу тех, кто за ним сидит, а не первый. Пустого лобби ради сходства не заводим: есть
+        // свободный стол — человек садится за него, пусть и не за равный (холодный старт, пункт 63).
+        List<GameEntity> open = new ArrayList<>();
+        Map<UUID, List<PlayerEntity>> seatedAt = new HashMap<>();
+        for (GameEntity game : gameRepository.findAllByStatusAndAutoStartAtNotNullOrderByCreatedAtAsc(GameStatus.LOBBY)) {
+            List<PlayerEntity> seated = playerRepository.findEmpiresByGameIdOrderBySlotAsc(game.getId());
+            if (seated.size() < Math.min(game.getMaxHumanPlayers(), game.getTotalPlayers())) {
+                open.add(game);
+                seatedAt.put(game.getId(), seated);
+            }
+        }
+        if (open.size() > 1 && gameRecords != null) {
+            java.util.Set<UUID> accountIds = new java.util.HashSet<>();
+            accountIds.add(accountId);
+            seatedAt.values().forEach(seated -> seated.stream().map(PlayerEntity::getAccountId)
+                    .filter(java.util.Objects::nonNull).forEach(accountIds::add));
+            Map<UUID, PeerRules.Profile> profiles = gameRecords.profiles(accountIds);
+            PeerRules.Profile mine = profiles.get(accountId);
+            // Сортировка устойчивая: при равном сходстве остаётся прежний порядок — старший стол первым.
+            open.sort(java.util.Comparator.comparingDouble(game -> PeerRules.distanceToTable(mine,
+                    seatedAt.get(game.getId()).stream().map(PlayerEntity::getAccountId)
+                            .filter(java.util.Objects::nonNull).map(profiles::get).toList())));
+        }
+        if (!open.isEmpty()) {
+            GameEntity game = open.get(0);
+            List<PlayerEntity> seated = seatedAt.get(game.getId());
+            CreateGameResponse joined = joinGame(game.getId(),
+                    new JoinGameRequest(playerName, null, null, null, null, null, null, null), accountId);
+            int humans = seated.size() + 1;
+            if (humans >= Math.min(game.getMaxHumanPlayers(), game.getTotalPlayers())) {
+                // Стол полон — ждать некого: стартует сразу, со следующим обходом часов.
+                game.setAutoStartAt(OffsetDateTime.now());
+            } else if (humans >= MatchmakingRules.MIN_HUMANS) {
+                // Двое уже есть — партия состоялась; третьего ждём недолго, а не остаток срока.
+                OffsetDateTime soon = OffsetDateTime.now().plus(MatchmakingRules.GRACE);
+                if (game.getAutoStartAt().isAfter(soon)) {
+                    game.setAutoStartAt(soon);
+                }
+            }
+            return joined;
+        }
+        CreateGameResponse created = createGame(MatchmakingRules.request(playerName), accountId, Boolean.FALSE);
+        GameEntity game = gameAccess.requireGame(created.game().id());
+        game.setAutoStartAt(OffsetDateTime.now().plus(MatchmakingRules.WAIT));
+        gameRepository.save(game);
+        return joinedResponse(game, playerRepository.findById(created.credentials().playerId()).orElseThrow());
+    }
+
+    /**
+     * Стол подбора стартует сам — field-backlog, пункт 65: срок ожидания вышел и людей хотя бы двое.
+     * Один человек — ждём дальше: партия подбора и есть обещание сыграть с людьми, а не с ИИ;
+     * играть с ИИ сейчас он вправе сам, кнопкой старта (место для второго останется
+     * приглашением, пункт 66). Замок берётся ДО чтения партии: создатель мог нажать старт в ту же
+     * секунду.
+     */
+    @Transactional
+    public void autoStart(UUID gameId) {
+        GameEntity game = gameRepository.lockById(gameId).orElse(null);
+        if (game == null || game.getStatus() != GameStatus.LOBBY || game.getAutoStartAt() == null
+                || game.getAutoStartAt().isAfter(OffsetDateTime.now())) {
+            return;
+        }
+        long humans = playerRepository.findEmpiresByGameIdOrderBySlotAsc(gameId).stream()
+                .filter(player -> player.getPlayerType() == PlayerType.HUMAN).count();
+        if (humans < MatchmakingRules.MIN_HUMANS) {
+            return;
+        }
+        log.info("Стол подбора {} стартует сам: людей {}", game.getName(), humans);
+        start(game, null);
+    }
+
+    /** Общее для старта создателем и автостарта: добор ИИ, галактика, стартовое хозяйство. */
+    private GameDetailsDto start(GameEntity game, List<StartGameRequest.AiEmpireDesign> aiEmpires) {
+        UUID gameId = game.getId();
         List<PlayerEntity> humans = playerRepository.findEmpiresByGameIdOrderBySlotAsc(gameId);
-        playerRepository.saveAll(playerRoster.aiPlayers(game, humans, request.aiEmpires()));
+        playerRepository.saveAll(playerRoster.aiPlayers(game, humans, aiEmpires));
         playerRepository.flush();
 
         List<StarSystemEntity> systems = starSystemRepository.saveAll(galaxyGenerator.generate(game));
@@ -331,19 +578,32 @@ public class GameService {
         // мире с начала партии: колонию защищают обученные бойцы, а не жители с винтовками.
         // Строятся они и на всякой новой колонии — технологии у них нет, и список стройки
         // предлагает их с первого хода (resources/Buildings/buildings.json).
+        //
+        // Столица — п. 10.1: престол империи стоит на родном мире с начала партии, кроме
+        // объединения, у которого столицы нет вовсе (CapitolRules).
+        Map<UUID, RaceEffects> startRaces = raceService.effectsByPlayer(
+                allPlayers.stream().map(PlayerEntity::getId).toList());
         planetBuildingRepository.saveAll(systems.stream()
                 .flatMap(system -> system.getPlanets().stream())
                 .filter(planet -> Boolean.TRUE.equals(planet.getHomeworld()))
-                .flatMap(planet -> Stream.of(
-                        building(planet.getId(), ShipDesignRules.STAR_BASE, game.getTurn()),
-                        building(planet.getId(), MARINE_BARRACKS, game.getTurn())))
+                .flatMap(planet -> Stream.concat(
+                        Stream.of(
+                                building(planet.getId(), ShipDesignRules.STAR_BASE, game.getTurn()),
+                                building(planet.getId(), MARINE_BARRACKS, game.getTurn())),
+                        Boolean.TRUE.equals(startRaces.getOrDefault(planet.getOwnerPlayerId(), RaceEffects.NONE)
+                                .hasCapitol())
+                                ? Stream.of(building(planet.getId(), CapitolRules.CODE, game.getTurn()))
+                                : Stream.empty()))
                 .toList());
 
         if (Boolean.TRUE.equals(game.getRichStart())) {
             allPlayers.forEach(player -> startingFleet(game, player));
+            guestLairs(game, systems, allPlayers, startRaces);
+            guestFinds(systems, allPlayers);
         }
 
         gameEvents.gameStarted(game);
+        spectatorFrame(game);
         log.info("Игра {} стартовала: {} игроков, {} звёздных систем",
                 game.getName(), allPlayers.size(), systems.size());
         return details(game);
@@ -381,6 +641,113 @@ public class GameService {
         ShipDesignEntity colonyShip = shipDesignService.civilDesign(game, player, ShipRole.COLONY);
         fleetService.addShip(game.getId(), player.getId(), player.getHomeSystemId(), game.getTurn(),
                 colonyShip.getId(), ColonyProject.COLONY_SHIP_SETTLERS);
+    }
+
+    /**
+     * Сторож у старта гостевой партии — field-backlog, пункты 190 и 105: восхищающее обязано
+     * случиться рано, а бросивший на 20-м ходу не встретил ни одного чудища. Замер
+     * ({@code tools/guest_delight.py}, восемь партий) показал: посол приходит к 19-му ходу, бой
+     * и чудище — ни разу за 60 ходов, а в двух партиях из восьми не случилось ничего вовсе.
+     * <p>
+     * Поэтому в ближайшей к каждой родной звезде системе (не родной, не особой, без своего
+     * чудища и с планетами) встаёт амёба, ОСЛАБЛЕННАЯ под стартовых разведчиков: её сила —
+     * {@link GuestGameRules#LAIR_PERCENT} от их силы. Первый бой на поле получается своим и
+     * честным (пункт 105): его выигрывают тем, что дали, но не даром. Сторож у каждой империи,
+     * а не только у человека, — старт в этой игре у всех одинаков; ИИ чудищ обходит и так.
+     * Жребий не тратится: выбор — ближайшая система, спор равных — по названию.
+     */
+    private void guestLairs(GameEntity game, List<StarSystemEntity> systems, List<PlayerEntity> players,
+                            Map<UUID, RaceEffects> races) {
+        int range = com.sddnw.server.domain.enums.FuelTech.baseRangeParsecs(Set.of());
+        Set<UUID> homes = players.stream().map(PlayerEntity::getHomeSystemId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        for (PlayerEntity player : players) {
+            StarSystemEntity home = systems.stream()
+                    .filter(system -> system.getId().equals(player.getHomeSystemId()))
+                    .findFirst().orElse(null);
+            if (home == null) {
+                continue;
+            }
+            Integer scouts = shipDesignService.allDesignsOf(player).values().stream()
+                    .filter(design -> Boolean.TRUE.equals(design.getAuto()) && !Boolean.TRUE.equals(design.getObsolete()))
+                    .filter(design -> GuestGameRules.SCOUT_HULL.equals(design.getHullCode()))
+                    .findFirst()
+                    .map(design -> shipDesignService.power(design, races.getOrDefault(player.getId(), RaceEffects.NONE))
+                            * GuestGameRules.STARTING_SCOUTS)
+                    .orElse(0);
+            if (scouts <= 0) {
+                continue;
+            }
+            systems.stream()
+                    .filter(system -> !homes.contains(system.getId()) && !Boolean.TRUE.equals(system.getSpecial())
+                            && system.getMonster() == null && !system.getPlanets().isEmpty())
+                    // Сперва — в пределах стартовой дальности (пункт 105): сторож, до которого
+                    // разведчикам не долететь, первым успехом не станет. Таких нет — ближайшая.
+                    .min(Comparator.comparing((StarSystemEntity system) -> Math.hypot(
+                                    system.getXParsec() - home.getXParsec(), system.getYParsec() - home.getYParsec()) > range)
+                            .thenComparingDouble((StarSystemEntity system) -> Math.hypot(
+                                    system.getXParsec() - home.getXParsec(), system.getYParsec() - home.getYParsec()))
+                            .thenComparing(StarSystemEntity::getName))
+                    .ifPresent(lair -> {
+                        lair.setMonster(SpaceMonster.AMOEBA);
+                        lair.setMonsterStrength(Math.max(1, Math.min(SpaceMonster.AMOEBA.getStrength(),
+                                scouts * GuestGameRules.LAIR_PERCENT / 100)));
+                        starSystemRepository.save(lair);
+                        // Сторож виден на карте с первого хода (пункт 105) — памятью империи, как
+                        // слух о нём: сама система остаётся неразведанной, её состав — награда.
+                        intelService.sawMonster(game.getId(), player.getId(), lair, 0);
+                    });
+        }
+    }
+
+    /**
+     * Первая находка — в пределах первых перелётов (backlog-promo, пункт 35), только в гостевой
+     * партии. Пока поведение не закрепилось, награда должна прийти рано: случайная находка
+     * встречается в среднем у одной системы из пяти-шести, и новичок до неё не доживает. Здесь у
+     * каждой империи в пределах стартовой дальности (стандартные топливные элементы) лежат
+     * АРТЕФАКТЫ — находка, которая награждает того, кто долетел, а не того, кто поселился, то есть
+     * сразу, первым же разведчиком. Поровну всем: каждая империя получает свою, в разных системах,
+     * ближайшую к своему дому после логова сторожа. Стартовые системы не трогаются — честность
+     * старта остаётся. Без жребия: ближайшая система и первая годная планета в ней.
+     */
+    private void guestFinds(List<StarSystemEntity> systems, List<PlayerEntity> players) {
+        Set<UUID> homes = players.stream().map(PlayerEntity::getHomeSystemId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<UUID> taken = new java.util.HashSet<>();
+        int range = com.sddnw.server.domain.enums.FuelTech.baseRangeParsecs(Set.of());
+        for (PlayerEntity player : players) {
+            StarSystemEntity home = systems.stream()
+                    .filter(system -> system.getId().equals(player.getHomeSystemId()))
+                    .findFirst().orElse(null);
+            if (home == null) {
+                continue;
+            }
+            systems.stream()
+                    .filter(system -> !homes.contains(system.getId()) && !taken.contains(system.getId())
+                            && !Boolean.TRUE.equals(system.getSpecial()) && system.getMonster() == null
+                            && Math.hypot(system.getXParsec() - home.getXParsec(),
+                                    system.getYParsec() - home.getYParsec()) <= range
+                            && system.getPlanets().stream().anyMatch(this::takesGuestFind))
+                    .min(Comparator.comparingDouble((StarSystemEntity system) -> Math.hypot(
+                                    system.getXParsec() - home.getXParsec(), system.getYParsec() - home.getYParsec()))
+                            .thenComparing(StarSystemEntity::getName))
+                    .ifPresent(system -> {
+                        taken.add(system.getId());
+                        system.getPlanets().stream().filter(this::takesGuestFind)
+                                .min(Comparator.comparing(PlanetEntity::getOrbit))
+                                .ifPresent(planet -> {
+                                    planet.setFind(com.sddnw.server.domain.enums.PlanetFind.ARTIFACTS);
+                                    planet.setFindClaimed(Boolean.FALSE);
+                                });
+                        starSystemRepository.save(system);
+                    });
+        }
+    }
+
+    /** Годится ли планета под находку гостевой партии: пригодная, без хозяина и без своей находки. */
+    private boolean takesGuestFind(PlanetEntity planet) {
+        return planet.getOwnerPlayerId() == null && planet.getFind() == null
+                && planet.getMaxPopulation() != null && planet.getMaxPopulation() > 0;
     }
 
     private PlanetBuildingEntity building(UUID planetId, String code, Integer turn) {
@@ -426,11 +793,14 @@ public class GameService {
                 .orElseThrow();
 
         player.setEndedTurn(game.getTurn());
+        player.setLastActionAt(OffsetDateTime.now());
         playerRepository.save(player);
         gameEvents.playerReady(game, player);
 
         List<UUID> waiting = waitingFor(game, players);
         if (!waiting.isEmpty()) {
+            // Зов вне игры (пункт 22): «соперники закончили ход» — тем, кого ещё ждут.
+            turnNotify.waiting(game, players, waiting);
             log.info("Игрок {} закончил ход {} в игре {}: ждём ещё {}",
                     player.getName(), game.getTurn(), game.getName(), waiting.size());
             return new EndTurnResponse(details(game, players), Boolean.FALSE, waiting, null);
@@ -455,8 +825,11 @@ public class GameService {
         // Отчёты ложатся в базу и уходят подписчикам: тот, кто закончил первым, узнает
         // о пересчёте только отсюда — его собственный запрос ответил ожиданием.
         gameEvents.turnAdvanced(game, players, report);
+        // Зов вне игры (пункт 22): «ход посчитан» и «на колонию напали» — после фиксации.
+        turnNotify.advanced(game, players, report);
 
         autoSave(game, players, completedTurn);
+        spectatorFrame(game);
 
         log.info("Игра {}: ход {} посчитан, наступил {}", game.getName(), completedTurn, game.getTurn());
         return report;
@@ -484,18 +857,18 @@ public class GameService {
         OffsetDateTime now = OffsetDateTime.now();
         List<PlayerEntity> late = players.stream()
                 .filter(player -> player.getPlayerType() == PlayerType.HUMAN)
-                .filter(player -> !Boolean.TRUE.equals(presence.isAway(player.getId())))
+                .filter(player -> !Boolean.TRUE.equals(presence.away(player)))
                 .filter(player -> player.getEndedTurn() < game.getTurn())
                 .toList();
         for (PlayerEntity player : late) {
-            if (Boolean.TRUE.equals(TurnClockRules.idle(presence.lastAction(player.getId()), now))) {
+            if (Boolean.TRUE.equals(TurnClockRules.idle(presence.lastAction(player.getId()), now, game.getTurnSeconds()))) {
                 goAway(game, player, "бездействие");
             }
         }
         Boolean expired = TurnClockRules.expired(game.getTurnStartedAt(), game.getTurnSeconds(), now);
         if (Boolean.TRUE.equals(expired)) {
             for (PlayerEntity player : late) {
-                if (!Boolean.TRUE.equals(presence.isAway(player.getId()))
+                if (!Boolean.TRUE.equals(presence.away(player))
                         && presence.miss(player.getId()) >= TurnClockRules.MISSED_LIMIT) {
                     goAway(game, player, "пропущенные сроки");
                 }
@@ -506,6 +879,47 @@ public class GameService {
                     Boolean.TRUE.equals(expired) ? "срок вышел" : "ждать больше некого");
             advance(game, players);
         }
+    }
+
+    /**
+     * Забрать объявленный ход — field-backlog, пункт 128: случайное «ход» в партии с людьми
+     * необратимо до пересчёта, а сервер и так ждёт всех. Отмена снимает отметку игрока.
+     * <p>
+     * Под замком партии, как и сам конец хода: иначе отмена пришла бы в миг, когда последний
+     * закончил и пересчёт уже идёт. Ход посчитан — отказ словами: забирать уже нечего (так
+     * всегда в одиночной партии: там ход считается сразу).
+     */
+    @Transactional
+    public GameDetailsDto undoEndTurn(UUID gameId, String accessToken) {
+        UUID playerId = gameAccess.requireToken(gameId, accessToken);
+        GameEntity game = gameRepository.lockById(gameId)
+                .orElseThrow(() -> new NotFoundException("game.notFound", gameId));
+        gameAccess.requireInProgress(game);
+        List<PlayerEntity> players = playerRepository.findEmpiresByGameIdOrderBySlotAsc(gameId);
+        PlayerEntity player = players.stream()
+                .filter(candidate -> candidate.getId().equals(playerId))
+                .findFirst()
+                .orElseThrow();
+        if (player.getEndedTurn() < game.getTurn()) {
+            throw new ConflictException("turn.undo.counted");
+        }
+        player.setEndedTurn(game.getTurn() - 1);
+        playerRepository.save(player);
+        gameEvents.playerReady(game, player);
+        log.info("Игрок {} забрал объявленный ход {} в игре {}", player.getName(), game.getTurn(), game.getName());
+        return details(game, players);
+    }
+
+    /**
+     * «Я здесь» — field-backlog, пункт 127: лёгкое действие, которым игрок отвечает на
+     * предупреждение «через минуту вашей империей займётся ИИ» или забирает империю у ИИ.
+     * Делать ему ничего не нужно: присутствие отмечает сам пропуск изменяющего запроса
+     * ({@link GameAccess#requireToken}), а ответ — свежий состав с новым сроком.
+     */
+    @Transactional(readOnly = true)
+    public GameDetailsDto here(UUID gameId, String accessToken) {
+        gameAccess.requireToken(gameId, accessToken);
+        return details(gameAccess.requireGame(gameId));
     }
 
     /**
@@ -552,10 +966,7 @@ public class GameService {
      * отошёл от стола.
      */
     private Boolean somebodyWaits(GameEntity game, List<PlayerEntity> players) {
-        return players.stream()
-                .filter(player -> player.getPlayerType() == PlayerType.HUMAN)
-                .filter(player -> !Boolean.TRUE.equals(presence.isAway(player.getId())))
-                .anyMatch(player -> player.getEndedTurn() >= game.getTurn());
+        return presence.somebodyWaits(game, players);
     }
 
     /**
@@ -581,12 +992,31 @@ public class GameService {
         }
         UUID gameId = game.getId();
         String name = game.getName();
-        afterCommit(() -> {
+        afterCommit(() -> autoSaves.execute(() -> {
             try {
-                gameSaveService.autoSave(gameRepository.findById(gameId).orElseThrow(), completedTurn);
+                gameRepository.findById(gameId)
+                        .ifPresent(saved -> gameSaveService.autoSave(saved, completedTurn));
             } catch (RuntimeException e) {
                 log.warn("Не удалось автосохранить партию {} на конец хода {}: {}",
                         name, completedTurn, e.toString());
+            }
+        }));
+    }
+
+    /**
+     * Кадр начала хода для зрителей — field-backlog, пункт 59. После фиксации и в своей
+     * транзакции, как автосохранение; партия без зрителей не стоит ничего, отказ — строка журнала.
+     */
+    private void spectatorFrame(GameEntity game) {
+        if (!Boolean.TRUE.equals(game.getSpectators())) {
+            return;
+        }
+        UUID gameId = game.getId();
+        afterCommit(() -> {
+            try {
+                spectators.record(gameId);
+            } catch (RuntimeException e) {
+                log.warn("Кадр зрителя партии {} не записан: {}", gameId, e.toString());
             }
         });
     }
@@ -619,8 +1049,9 @@ public class GameService {
     private List<UUID> waitingFor(GameEntity game, List<PlayerEntity> players) {
         return players.stream()
                 .filter(player -> player.getPlayerType() == PlayerType.HUMAN)
-                // Ушедшего не ждут — его империю ведёт ИИ (backlog-promo, пункт 11).
-                .filter(player -> !Boolean.TRUE.equals(presence.isAway(player.getId())))
+                // Ушедшего не ждут — его империю ведёт ИИ (backlog-promo, пункт 11). Отпускника —
+                // тоже (field-backlog, пункт 177).
+                .filter(player -> !Boolean.TRUE.equals(presence.away(player)))
                 .filter(player -> player.getEndedTurn() < game.getTurn())
                 .sorted(Comparator.comparing(PlayerEntity::getSlot))
                 .map(PlayerEntity::getId)
@@ -674,7 +1105,16 @@ public class GameService {
      */
     @Transactional
     public CreateGameResponse loadSave(UUID saveId, UUID accountId) {
-        GameEntity game = gameSaveService.restore(saveId, accountId);
+        return seat(gameSaveService.restore(saveId, accountId), accountId);
+    }
+
+    /** Партия из файла — field-backlog, пункт 160: садится за неё принёсший файл. */
+    @Transactional
+    public CreateGameResponse importSave(String content, UUID accountId) {
+        return seat(gameSaveService.importFile(content, accountId), accountId);
+    }
+
+    private CreateGameResponse seat(GameEntity game, UUID accountId) {
         List<PlayerEntity> players = playerRepository.findEmpiresByGameIdOrderBySlotAsc(game.getId());
         PlayerEntity player = players.stream()
                 .filter(candidate -> candidate.getPlayerType() == PlayerType.HUMAN)
@@ -705,11 +1145,18 @@ public class GameService {
                 .filter(candidate -> accountId.equals(candidate.getAccountId()))
                 .findFirst()
                 .orElseThrow(() -> new ForbiddenException("game.notYourGame"));
+        // Признавший поражение за империю не возвращается (field-backlog, пункт 81): её ведёт ИИ.
+        if (player.getConcededTurn() != null) {
+            throw new ForbiddenException("game.conceded", player.getConcededTurn());
+        }
         // Вернулся — снова за столом: ИИ больше не ведёт его империю (пункт 11).
         presence.act(player.getId());
         log.info("Игрок {} вернулся в партию {}", player.getName(), game.getName());
         return joinedResponse(game, player);
     }
+
+    /** Сколько оконченных партий показывать в «Ваших партиях»: сцена конца — не архив. */
+    private static final int FINISHED_SHOWN = 5;
 
     /**
      * Партии, в которых у этой записи есть место, — «вернуться в партию» в главном меню.
@@ -717,15 +1164,41 @@ public class GameService {
      * Без такого списка возврат был бы невозможен по существу: партию, поднятую из
      * автосохранения соседом, остальные не найдут ничем — в списке открытых её нет (она
      * уже идёт), а её опознавателя им никто не сообщал.
+     * <p>
+     * <b>Оконченные партии тоже здесь — последние {@link #FINISHED_SHOWN}</b> (field-backlog,
+     * пункт 33): сцену конца партии открывают ещё раз отсюда, а вспоминают её не в день победы.
+     * Идущие стоят первыми — в них ждут.
      */
     @Transactional(readOnly = true)
     public List<GameSummaryDto> myGames(UUID accountId) {
-        List<GameEntity> games = playerRepository.findByAccountId(accountId).stream()
+        List<PlayerEntity> seats = playerRepository.findByAccountId(accountId);
+        // Признавший поражение (пункт 81) партию для себя закончил, даже если она идёт дальше
+        // без него: в списке она стоит среди оконченных и предлагает итоги, а не возврат.
+        Map<UUID, Integer> conceded = new HashMap<>();
+        seats.stream()
+                .filter(seat -> seat.getConcededTurn() != null)
+                .forEach(seat -> conceded.put(seat.getGame().getId(), seat.getConcededTurn()));
+        java.util.function.Predicate<GameEntity> over = game -> game.getStatus() == GameStatus.FINISHED
+                || conceded.containsKey(game.getId());
+        List<GameEntity> mine = seats.stream()
                 .map(PlayerEntity::getGame)
-                .filter(game -> game.getStatus() != GameStatus.FINISHED)
                 .distinct()
-                .sorted(Comparator.comparing(GameEntity::getCreatedAt).reversed())
                 .toList();
+        // Идущие — по последнему посчитанному ходу (field-backlog, пункт 194): первой стоит та,
+        // где играли последней, и клиент открывает её сразу, без меню. Ход в одиночной партии
+        // считается по нажатию игрока, поэтому начало хода и есть его последнее действие; у
+        // партии без единого хода — время создания.
+        List<GameEntity> games = new ArrayList<>(mine.stream()
+                .filter(over.negate())
+                .sorted(Comparator.comparing((GameEntity game) -> game.getTurnStartedAt() == null
+                        ? game.getCreatedAt() : game.getTurnStartedAt()).reversed())
+                .toList());
+        mine.stream()
+                .filter(over)
+                .sorted(Comparator.comparing((GameEntity game) -> game.getFinishedAt() == null
+                        ? game.getCreatedAt() : game.getFinishedAt()).reversed())
+                .limit(FINISHED_SHOWN)
+                .forEach(games::add);
         if (games.isEmpty()) {
             return List.of();
         }
@@ -733,7 +1206,16 @@ public class GameService {
                 .findAllByGameIdInOrderBySlotAsc(games.stream().map(GameEntity::getId).toList()).stream()
                 .collect(Collectors.groupingBy(player -> player.getGame().getId()));
         return games.stream()
-                .map(game -> gameMapper.toSummary(game, playersByGame.getOrDefault(game.getId(), List.of())))
+                .map(game -> {
+                    PlayerEntity seat = seats.stream()
+                            .filter(candidate -> candidate.getGame().getId().equals(game.getId()))
+                            .findFirst()
+                            .orElse(null);
+                    return gameMapper.toSummary(game, playersByGame.getOrDefault(game.getId(), List.of()))
+                            .withConcededTurn(conceded.get(game.getId()))
+                            .withMine(seat == null ? null : myGamesContext.context(game, seat,
+                                    playersByGame.getOrDefault(game.getId(), List.of())));
+                })
                 .toList();
     }
 
@@ -746,10 +1228,38 @@ public class GameService {
      * Флаг {@code revealAll} — «Показать галактику» в интерфейсе — раскрывает подробности
      * по всей галактике.
      */
+    /**
+     * Администратор открыл всю галактику — field-backlog, пункт 197 (решение хозяина
+     * проекта, 05.10.2026). Показ ему не отнимается: им живут отладка и проверки. Но если за
+     * столом сидят ДРУГИЕ люди, партия для всех помечается «под наблюдением администратора»:
+     * один видит карты остальных, и сидящие за столом вправе это знать. В своей одиночной
+     * партии и в партиях одного ИИ пометки нет — смотреть там не на кого.
+     *
+     * @param adminAccountId запись администратора: его собственное место в партии людьми
+     *                       «другими» не считается
+     */
+    @Transactional
+    public void markAdminWatch(UUID gameId, UUID adminAccountId) {
+        boolean othersAtTable = playerRepository.findEmpiresByGameIdOrderBySlotAsc(gameId).stream()
+                .anyMatch(player -> player.getPlayerType() == PlayerType.HUMAN
+                        && player.getAccountId() != null
+                        && !player.getAccountId().equals(adminAccountId));
+        if (othersAtTable && gameRepository.markAdminWatched(gameId) > 0) {
+            log.warn("Партия {} помечена: администратор смотрит всю галактику при других людях", gameId);
+        }
+    }
+
     @Transactional(readOnly = true)
-    public GalaxyMapDto getMap(UUID gameId, String accessToken, Boolean revealAll) {
+    public GalaxyMapDto getMap(UUID gameId, String accessToken, Boolean requestedReveal) {
         GameEntity game = gameAccess.requireGame(gameId);
         PlayerEntity player = gameAccess.requirePlayer(game, accessToken);
+        /*
+          Раскрытие в конце партии — field-backlog, пункт 136: когда партия окончена, туман и
+          знакомство больше ничего не защищают, и разрывы, копившиеся всю партию, закрываются
+          разом — вся карта, чьи были системы, где стояли сторожа. Тот же путь, что «Показать
+          галактику» администратора, только по признаку «партия окончена».
+        */
+        Boolean revealAll = Boolean.TRUE.equals(requestedReveal) || game.getStatus() == GameStatus.FINISHED;
 
         List<StarSystemEntity> systems = starSystemRepository
                 .findAllByGameIdWithPlanets(gameId).stream()
@@ -769,9 +1279,29 @@ public class GameService {
 
         // Всевидящая раса (п. 7) видит и сторожей систем, куда не летала, — п. 11.1:
         // в этом и состоит её сторона, знать галактику, не летая.
-        return gameMapper.toMap(game, systems, explored, scanned, occupied,
+        // Чужие колонии — глазами игрока (п. 15, туман войны): правда под глазами,
+        // память без них. Показ всей галактики — взгляд администратора (его проверяет
+        // контроллер) — снимает и туман: им пользуются отладка и проверки партий ИИ.
+        // Чьи неразведанные системы известны знакомством и сканером — п. 15 (только хозяин).
+        Map<UUID, List<UUID>> knownOwners = Boolean.TRUE.equals(revealAll)
+                ? Map.of()
+                : explorationService.knownOwnersBy(systems, player, explored, scanned);
+        GalaxyMapDto map = gameMapper.toMap(game, systems, explored, scanned, occupied, knownOwners,
                 gameProperties.minStarDistanceParsecs(),
-                raceService.effects(player).omniscient());
+                Boolean.TRUE.equals(raceService.effects(player).omniscient()) || game.getStatus() == GameStatus.FINISHED,
+                Boolean.TRUE.equals(revealAll) ? null : intelService.lensOf(player, systems),
+                intelService.foreignFleets(player, systems, game.getTurn(), Boolean.TRUE.equals(revealAll)));
+        // Метки наставника (пункт 184) — только у того, кто наставника назвал.
+        if (player.getMentorPlayerId() == null) {
+            return map;
+        }
+        Map<UUID, String> names = new HashMap<>();
+        playerRepository.findEmpiresByGameIdOrderBySlotAsc(gameId)
+                .forEach(one -> names.put(one.getId(), messages.empire(one.getName())));
+        return map.withMentorMarks(mapMarks.findAllByStudentPlayerIdOrderByTurnAsc(player.getId()).stream()
+                .map(row -> new com.sddnw.server.dto.MapMarkDto(row.getSystemId(), row.getCode(),
+                        names.getOrDefault(row.getAuthorPlayerId(), ""), row.getTurn()))
+                .toList());
     }
 
     /**
@@ -827,6 +1357,10 @@ public class GameService {
                 "delete from empire_history where game_id = ?1",
                 "delete from turn_report where game_id = ?1",
                 "delete from council_vote where game_id = ?1",
+                "delete from turn_action where game_id = ?1",
+                "delete from diplomacy_proposal where game_id = ?1",
+                "delete from game_signal where game_id = ?1",
+                "delete from artifact_choice where game_id = ?1",
                 // Постройки колоний: у планеты своего списка построек нет (ни одного
                 // @OneToMany), и Hibernate за ней их не уносит. С новым ИИ это самая
                 // толстая из оставшихся куч — зданий на партию идут тысячи.
@@ -838,6 +1372,14 @@ public class GameService {
                         + "(select id from player where game_id = ?1)",
                 "delete from player_explored_system where player_id in "
                         + "(select id from player where game_id = ?1)",
+                "delete from planet_intel where game_id = ?1",
+                "delete from game_milestone where game_id = ?1",
+                "delete from spectator_frame where game_id = ?1",
+                "delete from map_mark where game_id = ?1",
+                "delete from turn_undo where game_id = ?1",
+                "delete from steward_decision where game_id = ?1",
+                "delete from observed_tech where game_id = ?1",
+                "delete from monster_intel where game_id = ?1",
                 "delete from player_leader where player_id in "
                         + "(select id from player where game_id = ?1)",
                 "delete from spy where owner_player_id in "
@@ -871,6 +1413,36 @@ public class GameService {
         return new CreateGameResponse(details.game(), details.players(), credentials(game, player));
     }
 
+    /**
+     * «Играть дальше» после победы — field-backlog, пункт 131 (решение хозяина проекта 08.10.2026):
+     * победа удержанием Тессара, советом или итогом по могуществу обрывает партию посреди замысла,
+     * и её можно продолжить без новых побед. После покорения играть не с кем — там продолжения нет.
+     * Победа остаётся записанной: история, звания и сцена конца её уже знают.
+     */
+    @Transactional
+    public GameDetailsDto playOn(UUID gameId, String accessToken) {
+        GameEntity game = gameRepository.lockById(gameId)
+                .orElseThrow(() -> new com.sddnw.server.web.error.NotFoundException("game.notFound"));
+        PlayerEntity player = gameAccess.requirePlayer(game, accessToken);
+        if (player.getPlayerType() != PlayerType.HUMAN) {
+            throw new ConflictException("game.playOnNotYours");
+        }
+        boolean allowed = game.getStatus() == GameStatus.FINISHED && game.getVictoryKind() != null
+                && java.util.Set.of(com.sddnw.server.domain.enums.VictoryKind.WARDENHOLD,
+                        com.sddnw.server.domain.enums.VictoryKind.COUNCIL,
+                        com.sddnw.server.domain.enums.VictoryKind.MIGHT).contains(game.getVictoryKind());
+        if (!allowed) {
+            throw new ConflictException("game.playOnNotAllowed");
+        }
+        game.setStatus(GameStatus.IN_PROGRESS);
+        game.setPlayedOn(Boolean.TRUE);
+        game.setCouncilOpen(Boolean.FALSE);
+        game.setTurnStartedAt(OffsetDateTime.now());
+        gameRepository.save(game);
+        log.info("Партию {} продолжили после победы ({})", game.getName(), game.getVictoryKind());
+        return details(game);
+    }
+
     private GameDetailsDto details(GameEntity game) {
         return details(game, playerRepository.findEmpiresByGameIdOrderBySlotAsc(game.getId()));
     }
@@ -890,7 +1462,9 @@ public class GameService {
 
     private String gameName(CreateGameRequest request) {
         if (request.name() == null || request.name().isBlank()) {
-            return "Игра " + request.playerName();
+            // Название хранится в базе и видно всем участникам, у каждого свой язык, — поэтому
+            // без слова на одном из них: по-английски, как имена империй ИИ и проектов.
+            return request.playerName() + "'s game";
         }
         return request.name();
     }

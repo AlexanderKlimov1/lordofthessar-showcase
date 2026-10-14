@@ -35,7 +35,7 @@ class RaceAbilityRulesTest {
     private final CommandRules command = new CommandRules();
     private final AssimilationRules assimilation = new AssimilationRules();
     private final GroundCombatService ground =
-            new GroundCombatService(null, null, null, null, null, null, null, assimilation, null, null, new OrbitalDefenceRules());
+            new GroundCombatService(null, null, null, null, null, null, null, assimilation, null, null, new OrbitalDefenceRules(), null);
 
     private static RaceEffects race(Map<RaceEffectType, Integer> amounts) {
         return new RaceEffects(BuildingEffects.NONE, amounts);
@@ -105,6 +105,11 @@ class RaceAbilityRulesTest {
         assertThat(command.capacity(5, plain)).isEqualTo(10);
         assertThat(command.capacity(5, warlord)).isEqualTo(20);
         assertThat(command.capacity(5, imperium)).isEqualTo(15);
+        // Связь (перенос MOO II): +1 за базу с тахионной, +2 с подпространственной — лучшая, не сумма.
+        assertThat(command.capacity(5, plain, 2, java.util.Set.of())).isEqualTo(10);
+        assertThat(command.capacity(5, plain, 2, java.util.Set.of(CommandRules.TACHYON_COMMUNICATIONS))).isEqualTo(12);
+        assertThat(command.capacity(5, plain, 2, java.util.Set.of(CommandRules.TACHYON_COMMUNICATIONS,
+                CommandRules.SUBSPACE_COMMUNICATIONS))).isEqualTo(14);
 
         // Пока флот укладывается в запас, он бесплатен; за перебор платят по кредиту.
         assertThat(command.upkeep(10, 10)).isZero();

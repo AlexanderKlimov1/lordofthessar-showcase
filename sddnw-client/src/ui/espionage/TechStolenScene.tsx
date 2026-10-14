@@ -74,7 +74,7 @@ export function TechStolenScene({
           className="border border-space-600 bg-space-900 px-8 py-1 text-13 uppercase tracking-[0.2em] text-ink hover:text-accent"
           onClick={onClose}
         >
-          {t('common.close')}
+          {t('common.ok')}
         </button>
       </footer>
     </div>

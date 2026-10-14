@@ -85,7 +85,9 @@ export function BattleScanDialog({
           <System
             name={ship.shieldName ?? t('battle.systems.noShield')}
             wrecked={ship.shieldWrecked}
-            lines={[tf('battle.scan.blocked', { n: <Figure accent="value">{ship.shield}</Figure> })]}
+            lines={[tf('battle.scan.blocked', { n: <Figure accent="value">{ship.shieldClass ?? 0}</Figure>,
+              pool: <Figure accent="value">{ship.shield}</Figure>,
+              max: <Figure accent="value">{ship.maxShield ?? ship.shield}</Figure> })]}
           />
         </div>
 
@@ -135,7 +137,7 @@ export function BattleScanDialog({
             className="border border-space-600 bg-space-900 px-6 py-1 text-13 uppercase tracking-[0.2em] text-ink hover:text-accent"
             onClick={onClose}
           >
-            {t('common.close')}
+            {t('common.ok')}
           </button>
         </footer>
       </div>

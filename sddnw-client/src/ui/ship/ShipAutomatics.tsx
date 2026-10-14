@@ -63,7 +63,8 @@ export function ShipAutomatics({
         ];
       case 'SHIELD':
         return pickOf('SHIELD')
-          ? [tf('design.lines.shield', { n: <Figure accent="value">{stats.shield}</Figure> })]
+          ? [tf('design.lines.shield', { n: <Figure accent="value">{stats.shieldClass}</Figure>,
+              pool: <Figure accent="value">{stats.shield}</Figure> })]
           : [t('design.lines.noShield')];
       case 'COMPUTER':
         return pickOf('COMPUTER')

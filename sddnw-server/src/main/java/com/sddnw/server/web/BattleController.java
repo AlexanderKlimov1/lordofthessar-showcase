@@ -61,4 +61,16 @@ public class BattleController {
         return battleService.act(gameId, battleId, accessToken, request);
     }
 
+    /**
+     * Ходы ИИ и чудищ, стоящих в очереди раньше игрока, — п. 8: бой может начаться с их хода
+     * (чудище быстрее фрегата). Экран зовёт это, открывшись не на своём ходу, и проигрывает
+     * события ответа; если очередь у человека, ничего не происходит.
+     */
+    @PostMapping("/{battleId}/opponents")
+    public BattleDto playOpponents(@PathVariable UUID gameId,
+                                   @PathVariable UUID battleId,
+                                   @AccessToken String accessToken) {
+        return battleService.playOpponents(gameId, battleId, accessToken);
+    }
+
 }

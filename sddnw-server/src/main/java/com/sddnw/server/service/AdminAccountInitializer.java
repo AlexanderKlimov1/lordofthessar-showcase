@@ -88,7 +88,7 @@ public class AdminAccountInitializer implements ApplicationRunner {
     private void write(String login, String password) {
         Path file = Path.of(properties.adminFile()).toAbsolutePath();
         String text = """
-                Учётная запись администратора Stellar Dominion 3 — п. 3.1.
+                Учётная запись администратора Lord of Thessar — п. 3.1.
 
                 логин:  %s
                 пароль: %s

@@ -48,7 +48,24 @@ public class VictoryService {
     private final CouncilService councilService;
     private final EmpireInfoService empireInfoService;
 
+    /** История партий (пункт 18); пусто в проверках, которым она ни к чему. */
+    private final GameRecordService gameRecords;
+
+    /**
+     * Союзы — для общей победы (field-backlog, пункт 145). Полем: службу собирают руками юнит-тесты,
+     * и без отношений они проверяют прежнее правило «колонии у одного».
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.sddnw.server.repository.DiplomacyRelationRepository relations;
+
     public VictoryService(CouncilService councilService, EmpireInfoService empireInfoService) {
+        this(councilService, empireInfoService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public VictoryService(CouncilService councilService, EmpireInfoService empireInfoService,
+                          GameRecordService gameRecords) {
+        this.gameRecords = gameRecords;
         this.councilService = councilService;
         this.empireInfoService = empireInfoService;
     }
@@ -64,6 +81,10 @@ public class VictoryService {
         if (game.getStatus() != GameStatus.IN_PROGRESS) {
             return;
         }
+        // Продолженная после победы партия (пункт 131) новых побед не ищет: победа уже записана.
+        if (Boolean.TRUE.equals(game.getPlayedOn())) {
+            return;
+        }
 
         Map<UUID, Integer> population = populationByPlayer(context);
         PlayerEntity conqueror = conqueror(context, population);
@@ -72,6 +93,12 @@ public class VictoryService {
             // чем, а спрашивать людей о выборах в оконченной партии было бы враньём сцены.
             game.setCouncilOpen(Boolean.FALSE);
             finish(context, conqueror, VictoryKind.CONQUEST);
+            return;
+        }
+        List<PlayerEntity> alliance = alliedConquest(context, population);
+        if (!alliance.isEmpty()) {
+            game.setCouncilOpen(Boolean.FALSE);
+            finishAllied(context, alliance);
             return;
         }
 
@@ -105,15 +132,22 @@ public class VictoryService {
      * Итог по могуществу — п. 3, {@link MightVictoryRules}: на сроке победа отдаётся
      * сильнейшей живой империи. До срока — напоминания всем, за полсотни, десять и один ход:
      * срок, о котором не знали, — это обрыв, а не цель.
+     * <p>
+     * <b>С согласия людей</b> (09.10.2026, {@link MightConsentService}): есть за столом другие люди —
+     * на сроке они спрошены, и итог подводится в конце следующего хода; один отказ снимает путь.
      */
     private PlayerEntity mightVerdict(TurnContext context, Map<UUID, Integer> population) {
         GameEntity game = context.game();
         if (!Boolean.TRUE.equals(game.getMightVictory())) {
             return null;
         }
-        if (!MightVictoryRules.due(context.turn())) {
-            if (Boolean.TRUE.equals(MightVictoryRules.remind(context.turn()))) {
-                Integer left = MightVictoryRules.TURN_LIMIT - context.turn();
+        if (game.getMightPendingPlayerId() != null) {
+            return mightAnswered(context, population);
+        }
+        int limit = MightVictoryRules.limit(game);
+        if (!MightVictoryRules.due(context.turn(), limit) && !earlyVerdict(context, population, limit)) {
+            if (Boolean.TRUE.equals(MightVictoryRules.remind(context.turn(), limit))) {
+                Integer left = limit - context.turn();
                 for (PlayerEntity player : context.players()) {
                     context.report().add(player.getId(), "MIGHT_VERDICT",
                             new MessageKey("turn.might.soon", left));
@@ -121,8 +155,83 @@ public class VictoryService {
             }
             return null;
         }
-        return MightVictoryRules.winner(empireInfoService.mightByPlayer(context),
+        PlayerEntity strongest = MightVictoryRules.winner(empireInfoService.mightByPlayer(context),
                 context.players(), population.keySet());
+        if (strongest == null || !MightConsentService.anyoneAsked(context.players(), strongest.getId())) {
+            return strongest;
+        }
+        game.setMightPendingPlayerId(strongest.getId());
+        game.setMightPendingTurn(context.turn());
+        game.setMightLeadPlayerId(null);
+        game.setMightLeadSinceTurn(null);
+        for (PlayerEntity player : context.players()) {
+            player.setMightAnswer(null);
+            context.report().add(player.getId(), "MIGHT_VERDICT", new MessageKey("turn.might.ask", strongest.getName()));
+        }
+        return null;
+    }
+
+    /**
+     * Досрочный итог — field-backlog, пункт 80: сильнейший держит огромный отрыв
+     * ({@link MightVictoryRules#crushing}) {@link MightVictoryRules#EARLY_HOLD_TURNS} ходов подряд.
+     * Отрыв называется всем в тот ход, когда начался, — галактика знает, сколько у неё времени
+     * ответить; оборвался — счёт сбрасывается молча, как у удержания Тессара.
+     *
+     * @return пора ли подводить итог (дальше — тот же путь, что на сроке, с согласием людей)
+     */
+    private boolean earlyVerdict(TurnContext context, Map<UUID, Integer> population, int limit) {
+        GameEntity game = context.game();
+        if (context.turn() < MightVictoryRules.earlyFrom(limit)) {
+            return false;
+        }
+        Map<UUID, Integer> might = empireInfoService.mightByPlayer(context);
+        PlayerEntity leader = MightVictoryRules.winner(might, context.players(), population.keySet());
+        if (leader == null || !MightVictoryRules.crushing(might, leader, context.players(), population.keySet())) {
+            game.setMightLeadPlayerId(null);
+            game.setMightLeadSinceTurn(null);
+            return false;
+        }
+        if (!leader.getId().equals(game.getMightLeadPlayerId())) {
+            game.setMightLeadPlayerId(leader.getId());
+            game.setMightLeadSinceTurn(context.turn());
+            for (PlayerEntity player : context.players()) {
+                context.report().add(player.getId(), "MIGHT_VERDICT", new MessageKey("turn.might.lead",
+                        leader.getName(), MightVictoryRules.EARLY_RATIO, MightVictoryRules.EARLY_HOLD_TURNS));
+            }
+            return false;
+        }
+        return context.turn() - game.getMightLeadSinceTurn() + 1 >= MightVictoryRules.EARLY_HOLD_TURNS;
+    }
+
+    /**
+     * Итог, ждавший согласия: подводится в конце хода, следующего за вопросом. Хоть один отказ —
+     * путь снимается (партия идёт дальше иными путями), иначе победа сильнейшему, названному на
+     * сроке, — если он ещё жив; нет — сильнейшему из живых сейчас.
+     */
+    private PlayerEntity mightAnswered(TurnContext context, Map<UUID, Integer> population) {
+        GameEntity game = context.game();
+        if (context.turn() <= game.getMightPendingTurn()) {
+            return null;
+        }
+        UUID candidate = game.getMightPendingPlayerId();
+        boolean refused = context.players().stream()
+                .anyMatch(player -> MightConsentService.asked(player, candidate)
+                        && MightConsentService.REFUSE.equals(player.getMightAnswer()));
+        game.setMightPendingPlayerId(null);
+        game.setMightPendingTurn(null);
+        context.players().forEach(player -> player.setMightAnswer(null));
+        if (refused) {
+            game.setMightVictory(Boolean.FALSE);
+            for (PlayerEntity player : context.players()) {
+                context.report().add(player.getId(), "MIGHT_VERDICT", new MessageKey("turn.might.refused"));
+            }
+            return null;
+        }
+        return context.players().stream()
+                .filter(player -> player.getId().equals(candidate) && population.containsKey(candidate))
+                .findFirst()
+                .orElseGet(() -> MightVictoryRules.winner(empireInfoService.mightByPlayer(context),
+                        context.players(), population.keySet()));
     }
 
     /**
@@ -199,6 +308,11 @@ public class VictoryService {
     private Map<UUID, Integer> populationByPlayer(TurnContext context) {
         Map<UUID, Integer> population = new HashMap<>();
         for (PlanetEntity colony : context.colonies()) {
+            // Список колоний взят на начало хода: стёртая бомбёжкой колония к концу хода ничья (14.10.2026 — без
+            // этой оговорки ничья колония считалась «империей» и роняла ход: NullPointerException в союзном покорении).
+            if (colony.getOwnerPlayerId() == null) {
+                continue;
+            }
             population.merge(colony.getOwnerPlayerId(), colony.getPopulation(), Integer::sum);
         }
         return population;
@@ -221,8 +335,69 @@ public class VictoryService {
                 .orElse(null);
     }
 
+    /**
+     * Покорение союзом — field-backlog, пункт 145, отступление от MOO II (решение хозяина проекта
+     * 08.10.2026): колонии остались у нескольких империй, но каждая пара из них связана союзом
+     * ({@code ALLIANCE}), — побеждают все. Без этого кооперативная партия с другом против ИИ к
+     * концу превращалась в партию друг против друга. Совет, удержание Тессара и итог по
+     * могуществу остаются единоличными.
+     * <p>
+     * Отношения спрашиваются одной выборкой и лишь когда хоть одна империя уже пала: в начале
+     * партии союзу побеждать некого, а выборка изнутри посчитанного хода дорога.
+     *
+     * @return союзники-победители, первым — самый населённый (он и запишется победителем партии);
+     *         пусто — покорения союзом нет
+     */
+    private List<PlayerEntity> alliedConquest(TurnContext context, Map<UUID, Integer> population) {
+        if (relations == null || population.size() < 2 || population.size() >= context.players().size()) {
+            return List.of();
+        }
+        java.util.Set<String> allied = new java.util.HashSet<>();
+        for (var relation : relations.findAllByPlayerIdIn(population.keySet())) {
+            if (relation.getTreaties().contains(com.sddnw.server.domain.enums.DiplomacyTreaty.ALLIANCE)) {
+                allied.add(relation.getPlayerId() + ":" + relation.getOtherPlayerId());
+            }
+        }
+        List<UUID> survivors = new java.util.ArrayList<>(population.keySet());
+        for (UUID first : survivors) {
+            for (UUID second : survivors) {
+                if (!first.equals(second) && !allied.contains(first + ":" + second)) {
+                    return List.of();
+                }
+            }
+        }
+        return context.players().stream()
+                .filter(player -> population.containsKey(player.getId()))
+                .sorted(java.util.Comparator.comparing((PlayerEntity player) -> -population.get(player.getId()))
+                        .thenComparing(PlayerEntity::getSlot))
+                .toList();
+    }
+
+    /** Конец партии победой союза: победитель — первый, прочие союзники — рядом (пункт 145). */
+    private void finishAllied(TurnContext context, List<PlayerEntity> alliance) {
+        PlayerEntity winner = alliance.get(0);
+        context.game().setCoWinners(alliance.subList(1, alliance.size()).stream()
+                .map(player -> player.getId().toString())
+                .collect(java.util.stream.Collectors.joining(",")));
+        String names = alliance.stream().map(PlayerEntity::getName)
+                .collect(java.util.stream.Collectors.joining(", "));
+        java.util.Set<UUID> winners = alliance.stream().map(PlayerEntity::getId)
+                .collect(java.util.stream.Collectors.toSet());
+        for (PlayerEntity player : context.players()) {
+            if (winners.contains(player.getId())) {
+                context.report().add(player.getId(), "VICTORY", new MessageKey("turn.victory.alliedWith", names));
+            }
+        }
+        finish(context, winner, VictoryKind.CONQUEST, winners, names);
+    }
+
     /** Записывает конец партии: дальше ходов в ней нет. */
     private void finish(TurnContext context, PlayerEntity winner, VictoryKind kind) {
+        finish(context, winner, kind, java.util.Set.of(winner.getId()), winner.getName());
+    }
+
+    private void finish(TurnContext context, PlayerEntity winner, VictoryKind kind,
+                        java.util.Set<UUID> winners, String winnerNames) {
         GameEntity game = context.game();
         game.setStatus(GameStatus.FINISHED);
         game.setWinnerPlayerId(winner.getId());
@@ -231,11 +406,17 @@ public class VictoryService {
 
         for (PlayerEntity player : context.players()) {
             context.report().add(player.getId(), "VICTORY",
-                    player.getId().equals(winner.getId())
+                    winners.contains(player.getId())
                             ? new MessageKey("turn.victory.won", kind)
-                            : new MessageKey("turn.victory.lost", winner.getName(), kind));
+                            : new MessageKey("turn.victory.lost", winnerNames, kind));
         }
         log.info("Партия {} окончена на ходу {}: победила империя {} ({})",
                 game.getName(), context.turn(), winner.getName(), kind.getLabel());
+        // История своих партий (пункт 18): людям, кто ещё за столом; признавшие уже записаны.
+        if (gameRecords != null) {
+            gameRecords.record(game, context.players(), context.players().stream()
+                    .filter(player -> player.getPlayerType() == com.sddnw.server.domain.enums.PlayerType.HUMAN && player.getConcededTurn() == null)
+                    .toList(), winner.getId(), kind.name(), context.turn(), null);
+        }
     }
 }

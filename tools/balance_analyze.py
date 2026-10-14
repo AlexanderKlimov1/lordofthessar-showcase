@@ -28,6 +28,7 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_FILE = os.path.join(ROOT, 'tools', 'balance', 'telemetry.jsonl')
 REPORT = os.path.join(ROOT, 'tools', 'balance', 'balance-analysis.txt')
+DECIDED_REPORT = os.path.join(ROOT, 'tools', 'balance', 'decided-report.txt')
 
 report = []
 
@@ -436,10 +437,96 @@ def traits(games):
     say()
 
 
+def quartiles(values):
+    """Нижняя четверть, медиана и верхняя четверть — разброс, а не одно среднее."""
+    ordered = sorted(values)
+    pick = lambda share: ordered[min(len(ordered) - 1, int(round(share * (len(ordered) - 1))))]
+    return pick(0.25), pick(0.5), pick(0.75)
+
+
+def decided(games):
+    """
+    Когда партия решена — field-backlog, пункты 150 и 79.
+
+    «Ход решённости» — первый ход, с которого будущий победитель (или сильнейший к концу, если
+    партия кончилась без победы) держит первое место по мощи (`EmpireMightRules`, поле
+    `might`) до самого конца, ни разу его не уступив. «Хвост» — ходы от решённости до конца:
+    пока они идут, проигрывающему играть без надежды, а лидеру — без сопротивления. Ничья по
+    мощи лидерства не отнимает. Империя, выбывшая из партии, считается с нулём мощи.
+
+    Разбивка — по размеру галактики и числу империй: малая на четверых — это гостевая партия
+    новичка, и её хвост важнее прочих. Без этого числа пункты «признать решённое» и «лекарства
+    от снежного кома» — догадки.
+    """
+    say('КОГДА ПАРТИЯ РЕШЕНА (пункты 150 и 79)')
+    groups = collections.defaultdict(list)
+    for game in games.values():
+        rows = [row for history in game.values() for row in history]
+        if not rows:
+            continue
+        sample = rows[0]
+        end = max(row['turn'] for row in rows)
+        if end < 30:
+            continue
+        might = collections.defaultdict(dict)
+        for row in rows:
+            might[row['turn']][row['slot']] = row['might'] or 0
+        slots = list(game.keys())
+        turns = sorted(might)
+        last = might[end]
+        strongest = max(slots, key=lambda s: last.get(s, 0))
+        final = sample['winner_slot'] if sample.get('winner_slot') else strongest
+
+        def leads_since(slot):
+            settled = end
+            for turn in reversed(turns):
+                top = max(might[turn].get(s, 0) for s in slots)
+                if might[turn].get(slot, 0) < top:
+                    break
+                settled = turn
+            return settled
+        key = '%s, %d империй' % (sample['galaxy'], len(slots))
+        groups[key].append({'settled': leads_since(final), 'strong': leads_since(strongest), 'end': end,
+                            'victory': sample.get('victory') or 'нет', 'upset': final != strongest})
+    if not groups:
+        say('  партий длиннее 30 ходов в телеметрии нет')
+        say()
+        return
+    for key in sorted(groups):
+        items = groups[key]
+        settled = quartiles([i['settled'] for i in items])
+        ends = quartiles([i['end'] for i in items])
+        tails = quartiles([i['end'] - i['settled'] for i in items])
+        shares = quartiles([100 * (i['end'] - i['settled']) / i['end'] for i in items])
+        strong = quartiles([i['strong'] for i in items])
+        strong_tails = quartiles([100 * (i['end'] - i['strong']) / i['end'] for i in items])
+        upsets = sum(1 for i in items if i['upset'])
+        kinds = collections.Counter(i['victory'] for i in items)
+        say('  %s — партий %d; чем кончились: %s' % (key, len(items),
+            ', '.join('%s %d' % kv for kv in kinds.most_common())))
+        say('    кончилась на ходу %d (четверти %d–%d)' % (ends[1], ends[0], ends[2]))
+        say('    победитель лидирует по мощи без перерыва с хода %d (%d–%d): хвост %d ходов (%d–%d) — %d %% партии (%d–%d %%)'
+            % (settled[1], settled[0], settled[2], tails[1], tails[0], tails[2], shares[1], shares[0], shares[2]))
+        say('    сильнейший к концу лидирует без перерыва с хода %d (%d–%d) — %d %% партии (%d–%d %%)'
+            % (strong[1], strong[0], strong[2], strong_tails[1], strong_tails[0], strong_tails[2]))
+        say('    победил не сильнейший по мощи: %d из %d' % (upsets, len(items)))
+    say('  Хвост — ходы, когда первое место уже не менялось. Больше трети партии — изъян баланса')
+    say('  по правилу пункта 155: лечится снежный ком, а не скука.')
+    say()
+
+
 def main():
     parser = argparse.ArgumentParser(description='Разбор телеметрии балансировки (этап 1)')
     parser.add_argument('--file', default=DEFAULT_FILE, help='файл телеметрии JSONL')
+    parser.add_argument('--decided', action='store_true',
+                        help='только «когда партия решена» (пункты 150 и 79)')
     options = parser.parse_args()
+    if options.decided:
+        rows = load(options.file)
+        decided(by_game(rows))
+        io.open(DECIDED_REPORT, 'w', encoding='utf-8').write(chr(10).join(report) + chr(10))
+        say('Отчёт: %s' % os.path.relpath(DECIDED_REPORT, ROOT))
+        return
 
     rows = load(options.file)
     games = by_game(rows)
@@ -451,6 +538,7 @@ def main():
     curve(games)
     usage(rows)
     traits(games)
+    decided(games)
 
     io.open(REPORT, 'w', encoding='utf-8').write(chr(10).join(report) + chr(10))
     say('Отчёт: %s' % os.path.relpath(REPORT, ROOT))

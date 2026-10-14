@@ -21,5 +21,11 @@ public interface AccountRepository extends JpaRepository<AccountEntity, UUID> {
     /** Запись по ссылке из письма — п. 3.1. */
     Optional<AccountEntity> findByConfirmToken(String confirmToken);
 
+    /** Отписка от писем о ходе ключом из письма — field-backlog, пункт 22. */
+    Optional<AccountEntity> findByNotifyToken(String notifyToken);
+
+    /** Запись по ссылке сброса пароля — backlog-promo, пункт 45. */
+    Optional<AccountEntity> findByResetToken(String resetToken);
+
     Boolean existsByRole(AccountRole role);
 }

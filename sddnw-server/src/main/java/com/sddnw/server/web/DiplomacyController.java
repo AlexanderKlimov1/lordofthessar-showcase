@@ -43,6 +43,24 @@ public class DiplomacyController {
     }
 
     /**
+     * Предложения, ждущие итога, — field-backlog, пункт 182: те, на которые игрок отвечает сам,
+     * и его собственные, ждущие ответа другого человека.
+     */
+    @GetMapping("/proposals")
+    public com.sddnw.server.dto.DiplomacyProposalsDto proposals(@PathVariable UUID gameId,
+                                                               @AccessToken String accessToken) {
+        return empireService.proposals(gameId, accessToken);
+    }
+
+    /** Принять или отклонить предложение — пункт 182; исполнится в конце хода. */
+    @PostMapping("/proposals/{proposalId}")
+    public com.sddnw.server.dto.DiplomacyProposalsDto answer(@PathVariable UUID gameId,
+                                                            @PathVariable UUID proposalId,
+                                                            @Valid @RequestBody com.sddnw.server.dto.ProposalAnswerRequest request) {
+        return empireService.answerProposal(gameId, proposalId, request);
+    }
+
+    /**
      * Что можно обменять с этой империей — п. 15: чем поделиться и что попросить.
      * <p>
      * Обмен в MOO II называет обе технологии сразу, поэтому окну нужны оба списка. Знать

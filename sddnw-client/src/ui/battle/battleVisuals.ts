@@ -39,10 +39,17 @@ export function shipSize(hullSize: number): number {
 /**
  * Сколько клеток корабль занимает НА ПОЛЕ БОЯ в длину по размеру корпуса (1..6) — решение
  * хозяина проекта (03.10.2026): корабль не должен выглядеть больше клеток, чем занимает.
- * Фрегат — половина клетки, эсминец 70 %, крейсер 80 %, линкор 90 %, титан ровно клетка,
- * Левиафан — 120 % клетки, заходит на соседние.
+ * Фрегат — на десятую меньше эсминца (63 %, 03.10.2026: при половине клетки он был мельче
+ * ракеты), эсминец 70 %, крейсер 80 %, линкор 90 %, титан ровно клетка, Левиафан — 120 %
+ * клетки, заходит на соседние.
  */
-const FIELD_LENGTH = [0.5, 0.7, 0.8, 0.9, 1, 1.2];
+const FIELD_LENGTH = [0.63, 0.7, 0.8, 0.9, 1, 1.2];
+
+/**
+ * Масштаб рисунка ракеты на поле (пункт 30, 03.10.2026): ракета обязана быть мельче самого
+ * мелкого корабля. В полный размер её тело с огнём сопла было длиннее фрегата.
+ */
+export const MISSILE_SCALE = 0.5;
 
 /**
  * Какую долю рамки 100 × 100 (`ui/ship/shipArt.tsx`) занимает металл корпуса в длину —
@@ -69,6 +76,11 @@ export function shipRect(ship: BattleShip): { x: number; y: number; size: number
   };
 }
 
+/** Корабль стоит на поле: не погиб и не ушёл отходом (п. 8). */
+export function onField(ship: BattleShip): boolean {
+  return !ship.destroyed && !ship.retreated;
+}
+
 /** Цвет стороны: свои — цветом акцента, чужие — красным, как в правой панели карты. */
 export function sideColor(ship: BattleShip): string {
   return ship.yours ? '#7dd3fc' : '#f87171';
@@ -81,7 +93,7 @@ export function distance(fromX: number, fromY: number, toX: number, toY: number)
 
 /** Клетка свободна: на ней нет живого корабля. */
 export function free(battle: Battle, x: number, y: number): boolean {
-  return !battle.ships.some((ship) => !ship.destroyed && ship.x === x && ship.y === y);
+  return !battle.ships.some((ship) => onField(ship) && ship.x === x && ship.y === y);
 }
 
 /** Куда корабль может дойти в этом ходу — по ним и подсвечиваются клетки. */
@@ -127,10 +139,32 @@ export function chosenRange(battle: Battle, ship: BattleShip, rows: number[] | n
   return rows.reduce((best, row) => Math.max(best, weapons[row]?.range ?? battle.weaponRange), 0);
 }
 
+/** На сколько процентов противоракеты слабеют за клетку — число MOO II (`BattleRules`). */
+const ANTI_MISSILE_STEP_PERCENT = 3;
+
+/**
+ * Докуда корабль достаёт до ракет в полёте (пункт 30): выбранные ЛУЧИ И СНАРЯДЫ — ракетой
+ * ракету не сбить, поэтому ракетные строки здесь не считаются, — и противоракеты, которые
+ * строкой оружия не числятся и бьют при любом выборе, пока шанс выше нуля. Ноль — сбивать нечем.
+ */
+export function gunRange(battle: Battle, ship: BattleShip, rows: number[] | null): number {
+  const weapons = ship.weapons ?? [];
+  const rockets = ship.antiMissile > 0
+    ? Math.floor((ship.antiMissile - 1) / ANTI_MISSILE_STEP_PERCENT)
+    : 0;
+  return weapons.reduce((best, weapon, row) => {
+    const chosen = rows === null || rows.includes(row);
+    const live = weapon.count - weapon.wrecked > 0;
+    return chosen && live && weapon.kind !== 'MISSILE'
+      ? Math.max(best, weapon.range ?? battle.weaponRange)
+      : best;
+  }, rockets);
+}
+
 /** Достанет ли залп этого корабля до цели выбранным оружием. */
 export function inRange(battle: Battle, ship: BattleShip, target: BattleShip, rows: number[] | null = null): boolean {
   // Дальность у каждого ствола своя — п. 8: тяжёлая установка бьёт вдвое дальше,
-  // ближняя оборона вдвое ближе, ракета — через всё поле.
+  // ближняя оборона вдвое ближе, ракета — на свой путь на топливе (пункт 30).
   const range = chosenRange(battle, ship, rows);
   return range > 0 && distance(ship.x, ship.y, target.x, target.y) <= range;
 }

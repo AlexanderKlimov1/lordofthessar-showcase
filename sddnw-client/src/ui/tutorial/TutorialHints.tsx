@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
+import { progressKey } from '../progressLabel';
 
 import { useT } from '../../i18n';
 import { useGameStore } from '../../state/gameStore';
 import { clearTutorial, readTutorial, writeTutorial } from '../../state/session';
 import { TUTORIAL_STEPS } from './tutorialSteps';
+import { funnelStep } from '../../state/funnel';
 import { useModalOpen } from '../useModalEscape';
+import { dismissHint, isDismissed, noviceHintsOn, TUTORIAL_HINT, useHints } from '../../state/hints';
 
 /**
  * Подсказки обучающей партии — п. 3.
@@ -36,6 +39,9 @@ export function TutorialHints() {
    */
   const [saved, setSaved] = useState(() => readTutorial());
   const modal = useModalOpen();
+  // Подсказки новичку выключены (ветеран, пункт 30) или карточка отклонена насовсем (пункт 130).
+  useHints();
+  const silenced = !noviceHintsOn() || isDismissed(TUTORIAL_HINT);
   // Раскрыта ли карточка поверх окна нажатием на строку; закрылось окно — снова свёрнута.
   const [peek, setPeek] = useState(false);
   useEffect(() => {
@@ -47,6 +53,12 @@ export function TutorialHints() {
   const mine = saved !== null && gameId !== null && saved.gameId === gameId;
   const step = mine ? Math.min(saved.step, TUTORIAL_STEPS.length) : 0;
   const current = mine && step < TUTORIAL_STEPS.length ? TUTORIAL_STEPS[step] : null;
+  // Шаг обучения — в воронку (field-backlog, пункт 2): на каком шаге подсказок ушли.
+  useEffect(() => {
+    if (mine) {
+      funnelStep('tutorial.step', { gameId, detail: `step-${step}` });
+    }
+  }, [mine, gameId, step]);
 
   /*
     Шаг закрывается сам, как только его примета сбылась. Смотрим на КАЖДОЕ изменение
@@ -66,7 +78,7 @@ export function TutorialHints() {
     setSaved(next);
   }, [mine, current, state, saved, step]);
 
-  if (!mine) {
+  if (!mine || silenced) {
     return null;
   }
 
@@ -138,16 +150,35 @@ export function TutorialHints() {
         <span className="text-11 text-ink-faint">
           {done
             ? t('tutorial.done.badge')
-            : t('tutorial.step', { n: step + 1, total: TUTORIAL_STEPS.length })}
+            : (() => {
+                // До половины — «шаг N из M», с половины — «осталось шагов» (пункт 52). Шаги до
+                // карты (раса, знамя, вход в партию) уже сделаны и считаются (пункт 53).
+                const given = saved?.given ?? 0;
+                const total = TUTORIAL_STEPS.length + given;
+                const label = progressKey(step + given, total, { done: 'tutorial.step', left: 'tutorial.stepsLeft' });
+                return t(label.key, { n: step + given + 1, left: label.left, total });
+              })()}
         </span>
       </div>
 
       <h2 className="mb-1 text-sm font-semibold text-ink-bright">
         {done ? t('tutorial.done.title') : t(current.title)}
       </h2>
+      {/* Первая карточка называет, что уже сделано до карты (пункт 53): шаги засчитаны не даром. */}
+      {!done && step === 0 && (saved?.given ?? 0) > 0 ? (
+        <p className="mb-1 text-xs text-good">
+          ✓ {t(saved!.given! >= 3 ? 'tutorial.given.choices' : 'tutorial.given.entered')}
+        </p>
+      ) : null}
       <p className="text-xs leading-relaxed text-ink-soft">
         {done ? t('tutorial.done.text') : t(current.textFor?.(state) ?? current.text)}
       </p>
+      {/* Выходы из выбора — только в партии обучения (field-backlog, пункт 124). */}
+      {saved!.tutorial && (done || current.exit) ? (
+        <p className="mt-2 text-xs leading-relaxed text-lamp">
+          {t(done ? 'tutorial.exit.summary' : current.exit!)}
+        </p>
+      ) : null}
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-space-700 pt-2">
         {done ? (
@@ -161,6 +192,12 @@ export function TutorialHints() {
           {done ? t('tutorial.done.close') : t('tutorial.quit')}
         </button>
       </div>
+      {/* Больше не показывать — пункт 130: запись помнит, вернуть можно в настройках. */}
+      {done ? null : (
+        <button type="button" className="link mt-2 text-11 text-ink-dim" onClick={() => dismissHint(TUTORIAL_HINT)}>
+          {t('hint.dismiss')}
+        </button>
+      )}
     </aside>
   );
 }
