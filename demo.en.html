@@ -1,0 +1,1566 @@
+<html lang="en">
+<title>Lord of Thessar</title>
+<link rel="alternate" hreflang="ru" href="demo.html">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --ground: #05070f;
+    --panel: #0d1424;
+    --panel-2: #121829;
+    --edge: #1e2a44;
+    --edge-soft: #16203a;
+    --ink-bright: #eef4ff;
+    --ink: #ccd8ea;
+    --ink-soft: #a3b4cc;
+    --ink-dim: #8a9bb4;
+    --ink-faint: #73839c;
+    --accent: #7fd4ff;
+    --accent-dim: #3f7fa8;
+    --good: #4ade80;
+    --warn: #fbbf24;
+    --danger: #fb8a8a;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding-inline: 16px;
+  }
+
+  /* --- оглавление ------------------------------------------------------- */
+
+  .toc { padding-block: 24px 8px; }
+
+  .toc-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 10px;
+  }
+
+  .toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .toc a {
+    display: block;
+    padding: 8px 12px;
+    border: 1px solid var(--edge);
+    border-radius: 2px;
+    background: var(--panel);
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: 14px;
+  }
+
+  .toc a:hover, .toc a:focus-visible { color: var(--ink-bright); border-color: var(--accent-dim); }
+
+  .toc .num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    margin-right: 8px;
+  }
+
+  /* --- шапка ------------------------------------------------------------ */
+
+  header.hero {
+    position: relative;
+    padding-block: 40px 28px;
+    border-bottom: 1px solid var(--edge-soft);
+  }
+
+  /* Переключатель языка: страница на каждом языке своя (demo.html и demo.en.html), а не
+     перевод скриптом на лету — так её читают поисковики и читалки без JavaScript. Нынешний
+     язык не ссылка и выделен рамкой, а не только цветом. */
+  .lang {
+    position: absolute;
+    top: 10px;
+    right: 0;
+    display: flex;
+    gap: 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+  }
+
+  .lang a, .lang span {
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    text-decoration: none;
+  }
+
+  .lang a { color: var(--ink-soft); }
+  .lang a:hover, .lang a:focus-visible { color: var(--ink-bright); border-color: var(--accent-dim); }
+  .lang span { color: var(--ink-bright); border-color: var(--edge); background: var(--panel); }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 14px;
+  }
+
+  h1 {
+    font-size: clamp(34px, 6vw, 58px);
+    line-height: 1.04;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+    color: var(--ink-bright);
+    text-wrap: balance;
+    font-weight: 600;
+  }
+
+  .lede {
+    font-size: clamp(16px, 2.1vw, 19px);
+    color: var(--ink-soft);
+    max-width: 62ch;
+    margin: 0;
+  }
+
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 28px;
+    margin-top: 26px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-dim);
+  }
+
+  .facts b {
+    color: var(--ink-bright);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* --- разделы ---------------------------------------------------------- */
+
+  section { padding-block: 44px; border-bottom: 1px solid var(--edge-soft); }
+  section:last-of-type { border-bottom: 0; }
+
+  h2 {
+    font-size: clamp(24px, 3.4vw, 32px);
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    color: var(--ink-bright);
+    margin: 0 0 6px;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-size: 18px;
+    color: var(--ink-bright);
+    margin: 34px 0 10px;
+    font-weight: 600;
+  }
+
+  h4 {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 26px 0 8px;
+    font-weight: 500;
+  }
+
+  p { max-width: 68ch; margin: 0 0 14px; }
+  p.wide { max-width: none; }
+
+  a { color: var(--accent); }
+
+  code, .mono { font-family: var(--mono); font-size: 0.9em; }
+  code { color: var(--ink-bright); }
+
+  .note { color: var(--ink-dim); font-size: 14px; }
+
+  ul.plain { margin: 0 0 14px; padding-left: 18px; max-width: 68ch; }
+  ul.plain li { margin-bottom: 6px; }
+
+  /* --- схемы ------------------------------------------------------------ */
+
+  .figure { margin: 22px 0 8px; }
+
+  .figure-scroll { overflow-x: auto; }
+
+  .figure svg { display: block; width: 100%; max-width: 100%; height: auto; min-width: 560px; }
+
+  figcaption {
+    font-size: 13px;
+    color: var(--ink-dim);
+    margin-top: 10px;
+    max-width: 72ch;
+  }
+
+  .svg-label { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.12em; }
+  .svg-name { font-family: "IBM Plex Sans", sans-serif; font-size: 14px; font-weight: 600; }
+  .svg-small { font-family: "IBM Plex Sans", sans-serif; font-size: 11.5px; }
+
+  /* --- карточки --------------------------------------------------------- */
+
+  .grid {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin: 18px 0;
+  }
+
+  .card {
+    border: 1px solid var(--edge);
+    background: var(--panel);
+    border-radius: 3px;
+    padding: 16px 16px 14px;
+  }
+
+  .card h5 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    color: var(--ink-bright);
+    font-weight: 600;
+  }
+
+  .card p { font-size: 14px; color: var(--ink-soft); margin: 0; max-width: none; }
+
+  .card .tag {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 8px;
+  }
+
+  /* --- таблицы ---------------------------------------------------------- */
+
+  .table-scroll { overflow-x: auto; margin: 18px 0; }
+
+  table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 14px; }
+
+  th, td {
+    text-align: left;
+    padding: 9px 14px 9px 0;
+    border-bottom: 1px solid var(--edge-soft);
+    vertical-align: top;
+  }
+
+  th {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+  }
+
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink-bright); }
+  td.code { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+  td small { color: var(--ink-dim); }
+
+  /* --- лента фаз хода --------------------------------------------------- */
+
+  .phases { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0; }
+
+  .phase {
+    border: 1px solid var(--edge);
+    border-left: 2px solid var(--accent-dim);
+    background: var(--panel);
+    padding: 6px 10px;
+    font-size: 13px;
+    border-radius: 2px;
+  }
+
+  .phase b { font-family: var(--mono); color: var(--ink-faint); font-weight: 500; margin-right: 6px; font-size: 11px; }
+
+  /* --- снимки ----------------------------------------------------------- */
+
+  .shots { display: grid; gap: 22px; margin-top: 22px; }
+
+  @media (min-width: 760px) { .shots { grid-template-columns: 1fr 1fr; } }
+
+  .shot { border: 1px solid var(--edge); background: var(--panel); border-radius: 3px; overflow: hidden; }
+
+  .shot img { display: block; width: 100%; height: auto; background: var(--ground); }
+
+  .shot .cap { padding: 12px 14px 14px; }
+
+  .shot .cap b { display: block; color: var(--ink-bright); font-size: 15px; margin-bottom: 4px; }
+
+  .shot .cap span { font-size: 13.5px; color: var(--ink-soft); }
+
+  /* --- палитра ролей ---------------------------------------------------- */
+
+  .roles { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+
+  .role {
+    border: 1px solid var(--edge);
+    background: var(--panel);
+    border-radius: 2px;
+    padding: 8px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .role i { font-style: normal; display: block; font-size: 11px; color: var(--ink-faint); }
+
+  footer {
+    padding-block: 30px 44px;
+    color: var(--ink-faint);
+    font-size: 13px;
+  }
+
+  @media (min-width: 1000px) {
+    .shell { grid-template-columns: 220px 1fr; column-gap: 48px; }
+    .toc {
+      grid-column: 1;
+      position: sticky;
+      top: env(safe-area-inset-top, 0px);
+      align-self: start;
+      padding-block: 40px;
+      max-height: 100vh;
+      overflow-y: auto;
+    }
+    .toc ol { flex-direction: column; gap: 4px; }
+    .toc a { border: 0; background: none; padding: 6px 0 6px 2px; border-left: 2px solid transparent; padding-left: 10px; }
+    .toc a:hover, .toc a:focus-visible { border-left-color: var(--accent); }
+    .main { grid-column: 2; }
+    header.hero { grid-column: 2; }
+  }
+
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="shell">
+  <header class="hero">
+    <nav class="lang" aria-label="Page language">
+      <a href="demo.html" hreflang="ru" lang="ru" title="Русский">RU</a>
+      <span aria-current="page" title="English">EN</span>
+    </nav>
+    <p class="eyebrow">Turn-based strategy · a remake of Master of Orion II</p>
+    <h1>Lord of Thessar</h1>
+    <p class="lede">
+      A game on Spring&nbsp;Boot and React&nbsp;+&nbsp;Phaser with a whole workshop of instruments
+      living right next to it: they measure the balance, try to break it, learn the controls by
+      watching the real MOO&nbsp;II in DOSBox and teach a neural network to play. This page is a
+      tour of what it is all built from.
+    </p>
+    <div class="facts">
+      <span><b>369</b> server classes</span>
+      <span><b>116</b> client modules</span>
+      <span><b>24</b> entities</span>
+      <span><b>15</b> turn phases</span>
+      <span><b>1145</b> translation keys</span>
+      <span><b>18</b> tools</span>
+      <span><b>36</b> scenes of the original</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="toc-title">Contents</p>
+    <ol>
+      <li><a href="#components"><span class="num">01</span>Components and links</a></li>
+      <li><a href="#balance"><span class="num">02</span>Balancing instruments</a></li>
+      <li><a href="#brain"><span class="num">03</span>Neural network</a></li>
+      <li><a href="#orion"><span class="num">04</span>Capturing the original's scenes</a></li>
+      <li><a href="#screens"><span class="num">05</span>Game screens</a></li>
+      <li><a href="#instruments"><span class="num">06</span>Console and oracle in detail</a></li>
+      <li><a href="#tech"><span class="num">07</span>Technical details</a></li>
+    </ol>
+  </nav>
+
+  <main class="main">
+
+    <!-- ================================================================== -->
+    <section id="components">
+      <p class="eyebrow">Section 1</p>
+      <h2>System components and how they connect</h2>
+      <p>
+        The core is simple: the client talks to the server over REST and listens to game events,
+        the server keeps games in PostgreSQL and reads the rules of the game from JSON reference
+        files on disk. Everything else in the diagram is the workshop: tools that measure, shake
+        and teach the very same game.
+      </p>
+
+      <figure class="figure">
+        <div class="figure-scroll">
+          <svg viewBox="0 0 980 560" role="img" aria-label="Component diagram: client, server, storage and tools">
+            <defs>
+              <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#7fd4ff"></path>
+              </marker>
+              <marker id="arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#8a9bb4"></path>
+              </marker>
+            </defs>
+
+            <!-- client -->
+            <rect x="24" y="60" width="240" height="150" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="44" y="88" class="svg-label" fill="#73839c">CLIENT</text>
+            <text x="44" y="112" class="svg-name" fill="#eef4ff">React + Phaser</text>
+            <text x="44" y="136" class="svg-small" fill="#a3b4cc">ui/ — screens, game/ — the map</text>
+            <text x="44" y="155" class="svg-small" fill="#a3b4cc">state/ — Zustand + XState</text>
+            <text x="44" y="174" class="svg-small" fill="#a3b4cc">i18n/ — two languages</text>
+            <text x="44" y="193" class="svg-small" fill="#73839c">116 modules</text>
+
+            <!-- server -->
+            <rect x="370" y="40" width="250" height="190" rx="3" fill="#0d1424" stroke="#3f7fa8"></rect>
+            <text x="390" y="68" class="svg-label" fill="#73839c">SERVER</text>
+            <text x="390" y="92" class="svg-name" fill="#eef4ff">Spring Boot · Java 23</text>
+            <text x="390" y="116" class="svg-small" fill="#a3b4cc">web/ — 29 controllers</text>
+            <text x="390" y="135" class="svg-small" fill="#a3b4cc">service/ — 105 services</text>
+            <text x="390" y="154" class="svg-small" fill="#a3b4cc">galaxy/ — map generation</text>
+            <text x="390" y="173" class="svg-small" fill="#a3b4cc">15 end-of-turn phases</text>
+            <text x="390" y="197" class="svg-small" fill="#73839c">369 classes, 49 tests</text>
+
+            <!-- database -->
+            <rect x="726" y="40" width="230" height="96" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="746" y="68" class="svg-label" fill="#73839c">GAME STORAGE</text>
+            <text x="746" y="92" class="svg-name" fill="#eef4ff">PostgreSQL 15 · 5433</text>
+            <text x="746" y="113" class="svg-small" fill="#a3b4cc">schema — Liquibase</text>
+            <text x="746" y="130" class="svg-small" fill="#a3b4cc">in-memory H2 — for runs</text>
+
+            <!-- reference data -->
+            <rect x="726" y="152" width="230" height="78" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="746" y="180" class="svg-label" fill="#73839c">REFERENCE DATA</text>
+            <text x="746" y="203" class="svg-small" fill="#a3b4cc">tech · buildings · ships</text>
+            <text x="746" y="221" class="svg-small" fill="#a3b4cc">leaders · race-traits · pairs</text>
+
+            <!-- core links -->
+            <line x1="264" y1="118" x2="362" y2="118" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#arrow)"></line>
+            <text x="270" y="110" class="svg-small" fill="#7fd4ff">REST</text>
+            <line x1="362" y1="152" x2="264" y2="152" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#arrow)"></line>
+            <text x="270" y="170" class="svg-small" fill="#7fd4ff">SSE — events</text>
+
+            <line x1="620" y1="88" x2="718" y2="88" stroke="#8a9bb4" stroke-width="1.5" marker-end="url(#arrow-dim)"></line>
+            <text x="626" y="80" class="svg-small" fill="#8a9bb4">JPA</text>
+            <line x1="620" y1="188" x2="718" y2="188" stroke="#8a9bb4" stroke-width="1.5" marker-end="url(#arrow-dim)"></line>
+            <text x="626" y="180" class="svg-small" fill="#8a9bb4">read on the fly</text>
+
+            <!-- workshop -->
+            <text x="24" y="282" class="svg-label" fill="#73839c">WORKSHOP — DEVELOPMENT TOOLS</text>
+            <line x1="24" y1="294" x2="956" y2="294" stroke="#16203a"></line>
+
+            <rect x="24" y="312" width="222" height="104" rx="3" fill="#121829" stroke="#1e2a44"></rect>
+            <text x="42" y="338" class="svg-name" fill="#eef4ff">Balancing console</text>
+            <text x="42" y="360" class="svg-small" fill="#a3b4cc">inside the server; plays games</text>
+            <text x="42" y="378" class="svg-small" fill="#a3b4cc">in batches and passes a verdict</text>
+            <text x="42" y="396" class="svg-small" fill="#a3b4cc">on every race trait price</text>
+
+            <rect x="262" y="312" width="222" height="104" rx="3" fill="#121829" stroke="#1e2a44"></rect>
+            <text x="280" y="338" class="svg-name" fill="#eef4ff">Build oracle</text>
+            <text x="280" y="360" class="svg-small" fill="#a3b4cc">same place; hunts the strongest</text>
+            <text x="280" y="378" class="svg-small" fill="#a3b4cc">race over generations with culling —</text>
+            <text x="280" y="396" class="svg-small" fill="#a3b4cc">the "breaker" against the assessor</text>
+
+            <rect x="500" y="312" width="222" height="104" rx="3" fill="#121829" stroke="#1e2a44"></rect>
+            <text x="518" y="338" class="svg-name" fill="#eef4ff">Orionometer</text>
+            <text x="518" y="360" class="svg-small" fill="#a3b4cc">a console in the game menu plus</text>
+            <text x="518" y="378" class="svg-small" fill="#a3b4cc">a Python recorder that watches</text>
+            <text x="518" y="396" class="svg-small" fill="#a3b4cc">MOO II running in DOSBox</text>
+
+            <rect x="738" y="312" width="218" height="104" rx="3" fill="#121829" stroke="#1e2a44"></rect>
+            <text x="756" y="338" class="svg-name" fill="#eef4ff">Neural network</text>
+            <text x="756" y="360" class="svg-small" fill="#a3b4cc">four heads, selection over</text>
+            <text x="756" y="378" class="svg-small" fill="#a3b4cc">generations; runs its own</text>
+            <text x="756" y="396" class="svg-small" fill="#a3b4cc">empire over the same REST</text>
+
+            <rect x="24" y="436" width="300" height="86" rx="3" fill="#0d1424" stroke="#16203a"></rect>
+            <text x="42" y="462" class="svg-name" fill="#ccd8ea">End-to-end check</text>
+            <text x="42" y="484" class="svg-small" fill="#a3b4cc">596 checks across all subsystems</text>
+            <text x="42" y="502" class="svg-small" fill="#73839c">regress.py</text>
+
+            <rect x="340" y="436" width="300" height="86" rx="3" fill="#0d1424" stroke="#16203a"></rect>
+            <text x="358" y="462" class="svg-name" fill="#ccd8ea">A whole game without a human</text>
+            <text x="358" y="484" class="svg-small" fill="#a3b4cc">eight AI empires play to victory</text>
+            <text x="358" y="502" class="svg-small" fill="#73839c">ai_game.py · ai_audit.py</text>
+
+            <rect x="656" y="436" width="300" height="86" rx="3" fill="#0d1424" stroke="#16203a"></rect>
+            <text x="674" y="462" class="svg-name" fill="#ccd8ea">Dead mechanics finder</text>
+            <text x="674" y="484" class="svg-small" fill="#a3b4cc">what costs resources and gives nothing</text>
+            <text x="674" y="502" class="svg-small" fill="#73839c">waste_check.py</text>
+
+            <!-- tool arrows to the server -->
+            <line x1="135" y1="312" x2="420" y2="238" stroke="#8a9bb4" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow-dim)"></line>
+            <line x1="373" y1="312" x2="470" y2="238" stroke="#8a9bb4" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow-dim)"></line>
+            <line x1="611" y1="312" x2="545" y2="238" stroke="#8a9bb4" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow-dim)"></line>
+            <line x1="847" y1="312" x2="600" y2="238" stroke="#8a9bb4" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arrow-dim)"></line>
+          </svg>
+        </div>
+        <figcaption>
+          Solid arrows are what the game runs on; dashed ones are what it is measured with. The
+          balancing console and the oracle live <em>inside</em> the server: they play games with
+          its own code, not with a copy of the rules of their own.
+        </figcaption>
+      </figure>
+
+      <div class="grid">
+        <div class="card">
+          <span class="tag">Rule</span>
+          <h5>Data, not code</h5>
+          <p>A new building, technology, gun, hull or leader is a JSON entry, not a branch in a
+          service. The database keeps only their codes.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Rule</span>
+          <h5>One calculation, one place</h5>
+          <p>All of MoO2's numeric rules live in <code>PopulationCalculator</code>, combat in
+          <code>BattleRules</code>, flight in <code>FlightRules</code>. A value computed twice
+          will one day disagree with itself.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Rule</span>
+          <h5>A turn is read once</h5>
+          <p>The galaxy is loaded once per turn and handed to the phases as a context. A query
+          "per player" inside a turn hits the whole turn.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <section id="balance">
+      <p class="eyebrow">Section 2</p>
+      <h2>How the balancing instruments work together</h2>
+      <p>
+        They share a single task: to set a fair price for every race trait. There are about
+        fifty of them, and the player assembles a race from them on a fixed budget. A price is
+        not set by eye: it is <em>measured</em>, in four stages, each of which checks the
+        previous one.
+      </p>
+
+      <figure class="figure">
+        <div class="figure-scroll">
+          <svg viewBox="0 0 980 420" role="img" aria-label="Diagram of the balancing stages">
+            <defs>
+              <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#7fd4ff"></path>
+              </marker>
+              <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"></path>
+              </marker>
+            </defs>
+
+            <rect x="20" y="40" width="200" height="112" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="38" y="66" class="svg-label" fill="#73839c">STAGE 0</text>
+            <text x="38" y="90" class="svg-name" fill="#eef4ff">Telemetry</text>
+            <text x="38" y="112" class="svg-small" fill="#a3b4cc">games in batches, a turn-by-</text>
+            <text x="38" y="130" class="svg-small" fill="#a3b4cc">turn chronicle, counters of</text>
+            <text x="38" y="148" class="svg-small" fill="#a3b4cc">what each empire used</text>
+
+            <rect x="256" y="40" width="200" height="112" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="274" y="66" class="svg-label" fill="#73839c">STAGE 1</text>
+            <text x="274" y="90" class="svg-name" fill="#eef4ff">Point rate</text>
+            <text x="274" y="112" class="svg-small" fill="#a3b4cc">how much strength one</text>
+            <text x="274" y="130" class="svg-small" fill="#a3b4cc">budget point brings —</text>
+            <text x="274" y="148" class="svg-small" fill="#a3b4cc">the scale for verdicts</text>
+
+            <rect x="492" y="40" width="200" height="112" rx="3" fill="#0d1424" stroke="#3f7fa8"></rect>
+            <text x="510" y="66" class="svg-label" fill="#73839c">STAGE 2 · ASSESSOR</text>
+            <text x="510" y="90" class="svg-name" fill="#eef4ff">Console</text>
+            <text x="510" y="112" class="svg-small" fill="#a3b4cc">random legal builds,</text>
+            <text x="510" y="130" class="svg-small" fill="#a3b4cc">regression on seven measures,</text>
+            <text x="510" y="148" class="svg-small" fill="#a3b4cc">a verdict on every price</text>
+
+            <rect x="728" y="40" width="200" height="112" rx="3" fill="#0d1424" stroke="#fbbf24"></rect>
+            <text x="746" y="66" class="svg-label" fill="#73839c">STAGE 3 · BREAKER</text>
+            <text x="746" y="90" class="svg-name" fill="#eef4ff">Build oracle</text>
+            <text x="746" y="112" class="svg-small" fill="#a3b4cc">generations with culling hunt</text>
+            <text x="746" y="130" class="svg-small" fill="#a3b4cc">for a race that beats</text>
+            <text x="746" y="148" class="svg-small" fill="#a3b4cc">everything else</text>
+
+            <line x1="220" y1="96" x2="248" y2="96" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a2)"></line>
+            <line x1="456" y1="96" x2="484" y2="96" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a2)"></line>
+            <line x1="692" y1="96" x2="720" y2="96" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a2)"></line>
+
+            <!-- price list -->
+            <rect x="256" y="240" width="436" height="96" rx="3" fill="#121829" stroke="#3f7fa8"></rect>
+            <text x="276" y="266" class="svg-label" fill="#73839c">THE ONLY THING THAT MOVES</text>
+            <text x="276" y="292" class="svg-name" fill="#eef4ff">race-traits.json — race trait prices</text>
+            <text x="276" y="316" class="svg-small" fill="#a3b4cc">balancing changes the PRICE, not what the trait does</text>
+
+            <path d="M592 152 L592 232" stroke="#7fd4ff" stroke-width="1.5" fill="none" marker-end="url(#a2)"></path>
+            <text x="602" y="196" class="svg-small" fill="#7fd4ff">verdicts</text>
+
+            <path d="M828 152 L828 288 L700 288" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#a3)"></path>
+            <text x="716" y="220" class="svg-small" fill="#fbbf24">the breaker's finds</text>
+
+            <path d="M256 288 L120 288 L120 160" stroke="#8a9bb4" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow-dim)"></path>
+            <text x="34" y="220" class="svg-small" fill="#8a9bb4">the next round measures anew</text>
+
+            <rect x="20" y="356" width="908" height="48" rx="3" fill="#0d1424" stroke="#16203a"></rect>
+            <text x="40" y="386" class="svg-small" fill="#a3b4cc">Price log: every change is recorded together with what it was measured on — without it, a month later you can neither roll back nor tell where a price came from.</text>
+          </svg>
+        </div>
+        <figcaption>
+          The loop is closed: verdicts and finds move the prices in the reference file, and the
+          raised prices shift the point rate as well — so the next round measures everything
+          again. A round's success is measured by the <b>residual</b>: the median gap between a
+          price and the measured return.
+        </figcaption>
+      </figure>
+
+      <h3>Why the assessor needs a breaker</h3>
+      <p>
+        The console sets prices from <em>random</em> builds, but a live player does not play a
+        random one: they look for the strongest. A combination that beats everything else cannot
+        be caught with random builds — it turns up once in a thousand. The oracle hunts for it on
+        purpose and answers two questions of the plan: is there a dominant build, and which traits
+        never made it to the top.
+      </p>
+
+      <h4>Seven measures of strength</h4>
+      <p class="wide">
+        Production and research with a weight of 1; money, military strength, ground combat,
+        breadth of research and espionage with a weight of ½. One measure is not enough: in
+        MOO&nbsp;II a colonist is put either at the workbench or in the lab, and without a research
+        measure "poor scientists" at −3 points came out as a <em>bargain</em> (+1.19); with it
+        they fell into place (−3.43).
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <span class="tag">Subtlety</span>
+          <h5>Weight comes from regression</h5>
+          <p>Traits are not bought one at a time, and a strong one would drag along everything that
+          usually sits next to it. The share is centred to zero within a game, and the starting
+          position goes in as columns.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Subtlety</span>
+          <h5>A combo has its own price</h5>
+          <p>Trait prices add up, while the strength of some pairs multiplies. So a pair carries a
+          surcharge — and it is measured too, not assigned.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Subtlety</span>
+          <h5>Empty ≠ zero</h5>
+          <p>A measure that never fired in a game returns empty. Zero for everyone means "nothing
+          to measure with", not "everyone is equally weak".</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <section id="brain">
+      <p class="eyebrow">Section 3</p>
+      <h2>Neural network: structure and training</h2>
+      <p>
+        The network learns to play our game, not the original, and the reason is simple: here a
+        game is computed over REST in seconds, while in DOSBox it is half an hour of a real mouse.
+        Thousands of games there cannot be played in any amount of time.
+      </p>
+
+      <figure class="figure">
+        <div class="figure-scroll">
+          <svg viewBox="0 0 980 400" role="img" aria-label="Network structure: four heads and selection over generations">
+            <defs>
+              <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#4ade80"></path>
+              </marker>
+            </defs>
+
+            <text x="20" y="34" class="svg-label" fill="#73839c">ONE HEAD = ONE DECISION</text>
+
+            <g>
+              <rect x="20" y="52" width="216" height="128" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+              <text x="38" y="78" class="svg-name" fill="#eef4ff">Construction</text>
+              <text x="38" y="100" class="svg-small" fill="#a3b4cc">input: 10 colony features</text>
+              <text x="38" y="118" class="svg-small" fill="#a3b4cc">+ 15 project features</text>
+              <text x="38" y="142" class="svg-small" fill="#73839c">scores each project in</text>
+              <text x="38" y="160" class="svg-small" fill="#73839c">turn, builds the best one</text>
+            </g>
+            <g>
+              <rect x="252" y="52" width="216" height="128" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+              <text x="270" y="78" class="svg-name" fill="#eef4ff">Research</text>
+              <text x="270" y="100" class="svg-small" fill="#a3b4cc">input: 4 empire features</text>
+              <text x="270" y="118" class="svg-small" fill="#a3b4cc">+ 10 tier features</text>
+              <text x="270" y="142" class="svg-small" fill="#73839c">eight fields of the tree</text>
+            </g>
+            <g>
+              <rect x="484" y="52" width="216" height="128" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+              <text x="502" y="78" class="svg-name" fill="#eef4ff">Fleet</text>
+              <text x="502" y="100" class="svg-small" fill="#a3b4cc">input: 6 fleet features</text>
+              <text x="502" y="118" class="svg-small" fill="#a3b4cc">+ 9 target features</text>
+              <text x="502" y="142" class="svg-small" fill="#73839c">without it the network never</text>
+              <text x="502" y="160" class="svg-small" fill="#73839c">left its home system once</text>
+            </g>
+            <g>
+              <rect x="716" y="52" width="216" height="128" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+              <text x="734" y="78" class="svg-name" fill="#eef4ff">Colonists</text>
+              <text x="734" y="100" class="svg-small" fill="#a3b4cc">input: 10 + 3 jobs</text>
+              <text x="734" y="124" class="svg-small" fill="#73839c">added last: the power share</text>
+              <text x="734" y="142" class="svg-small" fill="#73839c">sat at 0.101 against</text>
+              <text x="734" y="160" class="svg-small" fill="#73839c">a fair 0.25</text>
+            </g>
+
+            <!-- layers -->
+            <rect x="252" y="208" width="448" height="60" rx="3" fill="#121829" stroke="#3f7fa8"></rect>
+            <text x="272" y="234" class="svg-name" fill="#eef4ff">Hidden layer: 48 nodes, tanh</text>
+            <text x="272" y="256" class="svg-small" fill="#a3b4cc">each head has its own weights; the output is one number, "how good is this"</text>
+
+            <line x1="128" y1="180" x2="330" y2="200" stroke="#8a9bb4" stroke-width="1" marker-end="url(#arrow-dim)"></line>
+            <line x1="360" y1="180" x2="420" y2="200" stroke="#8a9bb4" stroke-width="1" marker-end="url(#arrow-dim)"></line>
+            <line x1="592" y1="180" x2="540" y2="200" stroke="#8a9bb4" stroke-width="1" marker-end="url(#arrow-dim)"></line>
+            <line x1="824" y1="180" x2="630" y2="200" stroke="#8a9bb4" stroke-width="1" marker-end="url(#arrow-dim)"></line>
+
+            <!-- training -->
+            <text x="20" y="310" class="svg-label" fill="#73839c">TRAINING — BY SELECTION, NOT BY GRADIENT</text>
+            <rect x="20" y="326" width="912" height="58" rx="3" fill="#0d1424" stroke="#16203a"></rect>
+            <text x="40" y="350" class="svg-small" fill="#ccd8ea">a generation of weights → games over REST → own share of all empires' power → the best stay → offspring with noise sigma</text>
+            <text x="40" y="370" class="svg-small" fill="#a3b4cc">sigma tunes itself: it grows on improvement, shrinks on stagnation, and a long stagnation triggers a warm-up</text>
+          </svg>
+        </div>
+        <figcaption>
+          The reward is the outcome of a whole game, not of a single turn, and there is no way to
+          tell which click brought how much. Selection only needs a comparison: play with one set
+          of weights, play with another — whichever is better stays.
+        </figcaption>
+      </figure>
+
+      <p>
+        Each head was added not for completeness but after a measurement showed that without it
+        there was nothing to learn. A network that could only build never once left its home
+        system in sixty turns — one colony, zero fleets; a network that did not touch the
+        colonists played with whatever distribution the colony got at its founding.
+      </p>
+    </section>
+
+    <!-- ================================================================== -->
+    <section id="orion">
+      <p class="eyebrow">Section 4</p>
+      <h2>Development method: capturing scenes from the original</h2>
+      <p>
+        Half of MOO&nbsp;II's windows are not published anywhere, and their layout cannot be
+        restored from memory. So the layout of our screens is checked <em>against screenshots of
+        the real game</em> taken in DOSBox. The tools for this grew into a subsystem of their own.
+      </p>
+
+      <figure class="figure">
+        <div class="figure-scroll">
+          <svg viewBox="0 0 980 420" role="img" aria-label="The chain of capturing scenes from the original">
+            <defs>
+              <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#7fd4ff"></path>
+              </marker>
+            </defs>
+
+            <rect x="20" y="44" width="180" height="104" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="38" y="70" class="svg-label" fill="#73839c">SOURCE</text>
+            <text x="38" y="94" class="svg-name" fill="#eef4ff">MOO II in DOSBox</text>
+            <text x="38" y="116" class="svg-small" fill="#a3b4cc">build 1.50.26,</text>
+            <text x="38" y="134" class="svg-small" fill="#a3b4cc">window 640×480 ×2</text>
+
+            <rect x="232" y="44" width="180" height="104" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="250" y="70" class="svg-label" fill="#73839c">EYES</text>
+            <text x="250" y="94" class="svg-name" fill="#eef4ff">Window capture</text>
+            <text x="250" y="116" class="svg-small" fill="#a3b4cc">PrintWindow grabs a frame</text>
+            <text x="250" y="134" class="svg-small" fill="#a3b4cc">even if the window is covered</text>
+
+            <rect x="444" y="44" width="212" height="104" rx="3" fill="#0d1424" stroke="#3f7fa8"></rect>
+            <text x="462" y="70" class="svg-label" fill="#73839c">RECOGNITION</text>
+            <text x="462" y="94" class="svg-name" fill="#eef4ff">32×24 signature</text>
+            <text x="462" y="116" class="svg-small" fill="#a3b4cc">mean brightness NOT of the frame,</text>
+            <text x="462" y="134" class="svg-small" fill="#a3b4cc">but of an area that stays put</text>
+
+            <rect x="688" y="44" width="244" height="104" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="706" y="70" class="svg-label" fill="#73839c">CATALOGUE</text>
+            <text x="706" y="94" class="svg-name" fill="#eef4ff">scenes.json — 36 scenes</text>
+            <text x="706" y="116" class="svg-small" fill="#a3b4cc">name, area, what to click;</text>
+            <text x="706" y="134" class="svg-small" fill="#a3b4cc">11 marked as "overlay"</text>
+
+            <line x1="200" y1="96" x2="224" y2="96" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a5)"></line>
+            <line x1="412" y1="96" x2="436" y2="96" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a5)"></line>
+            <line x1="656" y1="96" x2="680" y2="96" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a5)"></line>
+
+            <!-- two branches -->
+            <rect x="120" y="212" width="340" height="120" rx="3" fill="#121829" stroke="#1e2a44"></rect>
+            <text x="140" y="238" class="svg-label" fill="#73839c">BRANCH A — THE TOOL PLAYS ITSELF</text>
+            <text x="140" y="264" class="svg-name" fill="#eef4ff">moo2_play.py</text>
+            <text x="140" y="286" class="svg-small" fill="#a3b4cc">reads the bitmap font by a dictionary,</text>
+            <text x="140" y="304" class="svg-small" fill="#a3b4cc">measures the map in pixels, and decides</text>
+            <text x="140" y="322" class="svg-small" fill="#a3b4cc">with excerpts from our AiEmpireService</text>
+
+            <rect x="500" y="212" width="360" height="120" rx="3" fill="#121829" stroke="#fbbf24"></rect>
+            <text x="520" y="238" class="svg-label" fill="#73839c">BRANCH B — THE ORIONOMETER WATCHES</text>
+            <text x="520" y="264" class="svg-name" fill="#eef4ff">moo2_record.py</text>
+            <text x="520" y="286" class="svg-small" fill="#a3b4cc">records every human click: the time,</text>
+            <text x="520" y="304" class="svg-small" fill="#a3b4cc">the point in game coordinates, the scene,</text>
+            <text x="520" y="322" class="svg-small" fill="#a3b4cc">the recognition gap and a frame BEFORE the click</text>
+
+            <path d="M810 148 L810 180 L680 180 L680 204" stroke="#fbbf24" stroke-width="1.5" fill="none" marker-end="url(#a3)"></path>
+            <path d="M550 148 L550 180 L290 180 L290 204" stroke="#7fd4ff" stroke-width="1.5" fill="none" marker-end="url(#a5)"></path>
+
+            <rect x="120" y="356" width="740" height="48" rx="3" fill="#0d1424" stroke="#16203a"></rect>
+            <text x="140" y="386" class="svg-small" fill="#a3b4cc">The recorder saves an unknown screen as a frame and stops — that is how the catalogue grows: 21 scenes in the morning, 36 by evening.</text>
+          </svg>
+        </div>
+        <figcaption>
+          The two branches solve different problems. The tool that plays by itself checks the
+          <em>course of the game</em>: what the original lets you build, in what order and at what
+          price. The orionometer answers "which click does this" — and does so more cheaply than
+          any amount of guesswork.
+        </figcaption>
+      </figure>
+
+      <h3>Why recording a human turned out cheaper than guessing</h3>
+      <p>
+        The tool could not move colonists from one job to another — it never could. This was
+        fixed in four attempts in a row, and each one cost a game: dragging the figure, clicking
+        the figure, clicking an empty slot, trying the whole row. The observations contradicted
+        each other. The project owner stated the rule in one sentence: a click picks up everyone
+        to the <em>right</em> of the point, and the next one drops them where the cursor is.
+        Everything worked on the first try. That is the reckoning the orionometer was born from:
+        <b>a question costs one sentence, while guesswork costs hours and ruined games.</b>
+      </p>
+
+      <h4>Three pitfalls that broke scene recognition</h4>
+      <div class="grid">
+        <div class="card">
+          <span class="tag">Signature</span>
+          <h5>Take it from what stays still</h5>
+          <p>The colony signature was taken from the corner with the governor's portrait — and a
+          freshly founded colony was not recognised at all. The buy-out window's was taken from
+          the question line, where the price and amount sit, and those change every time.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Signature</span>
+          <h5>A poor one swallows others</h5>
+          <p>A dark stripe running the full height of the screen matches almost anything: it ended
+          up labelling 50 clicks on 32 different points — in a window with a single button.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Signature</span>
+          <h5>A window over the map is an "overlay"</h5>
+          <p>The map signature was taken from the bottom bar, and that bar shows from under any
+          window. This hid exactly the two things the whole effort was for: sending a fleet and
+          the start of a battle — 37 frames under someone else's name.</p>
+        </div>
+      </div>
+
+      <p class="note">
+        The conclusion, written into the project's pitfalls: the absence of something in a log
+        is a statement about the <em>instrument</em>, not about the world.
+      </p>
+    </section>
+
+    <!-- ================================================================== -->
+    <section id="screens">
+      <p class="eyebrow">Section 5</p>
+      <h2>Game screens</h2>
+      <p>
+        Captured from a working build: server on 8080, client on 5173, a game in a medium galaxy
+        with four empires. The layout of every screen was checked against a screenshot of the
+        matching window of the original.
+      </p>
+
+      <div class="shots">
+        <figure class="shot">
+          <img src="docs/shots/first-screen.png" alt="Login screen: the Stellar Dominion title, the login form, language and text size switches" loading="lazy" width="1584" height="849">
+          <figcaption class="cap">
+            <b>The first scene — login</b>
+            <span>This screen comes before the main menu: the server asks for a pass at the entrance
+            to any game. Top right are the language switch and four text size steps; size and
+            language live in the account, not in the browser.</span>
+          </figcaption>
+        </figure>
+
+        <figure class="shot">
+          <img src="docs/shots/milky-way.png" alt="Milky Way map: a spiral galaxy of a hundred thousand stars, a panel controlling rotation and tilt" loading="lazy" width="1584" height="849">
+          <figcaption class="cap">
+            <b>Map of the Milky Way</b>
+            <span>One hundred thousand and one hundred points: a hundred named features plus a
+            hundred thousand background stars. A frame takes 4.5 ms: coordinates in a typed array,
+            rotation sines computed once per frame, stars drawn as pixels into a buffer in a single
+            call.</span>
+          </figcaption>
+        </figure>
+
+        <figure class="shot">
+          <img src="docs/shots/galaxy-map.png" alt="Galaxy map: stars of different colours, the home star Denebola, a right-hand panel with treasury, fleet, food and research" loading="lazy" width="1584" height="849">
+          <figcaption class="cap">
+            <b>Galaxy map</b>
+            <span>A Phaser scene with a single bottom bar of sections — there is no top bar, the
+            whole top is given to the galaxy. On the right are the empire's segments: treasury,
+            fleet, food, transport, research. The mouse wheel zooms.</span>
+          </figcaption>
+        </figure>
+
+        <figure class="shot">
+          <img src="docs/shots/research.png" alt="Research selection screen: eight fields of the technology tree in two columns" loading="lazy" width="1584" height="849">
+          <figcaption class="cap">
+            <b>Choosing research</b>
+            <span>The layout of the CHANGE CURRENT RESEARCH window: two columns of four rows, with
+            the description of the technology under the cursor on the left. The window has two
+            titles — "choose new" and "change current" — and that is the original too.</span>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <section id="instruments">
+      <p class="eyebrow">Section 6</p>
+      <h2>Measuring instruments: the console and the oracle in detail</h2>
+      <p>
+        Both answer one question — <em>what is a race trait worth</em> — and answer it differently.
+        The console measures prices on random builds and passes a verdict on each. The oracle does
+        the opposite: it deliberately hunts for a build that beats everything else. The assessor
+        and the breaker take turns, and whatever the breaker finds goes into the next measurement.
+      </p>
+      <p class="note">
+        Below is how both work, straight from the code: <code>BalanceRunService</code>,
+        <code>BalanceVerdictRules</code>, <code>RaceBuildGenerator</code>,
+        <code>LeastSquares</code>, <code>BalanceOracleService</code>,
+        <code>BalanceOracleRules</code>. Every number comes from these files, not from general
+        considerations: each one sits there with an explanation of where it came from.
+      </p>
+
+      <h3>The balancing console — the assessor</h3>
+      <p>
+        The game owner describes a run from the browser: the galaxy, how many empires and what each
+        one plays, how many games and how many turns each, which combo to plant. The server plays
+        them in the background and returns not raw measurements but a <b>verdict on every
+        price</b>.
+      </p>
+
+      <h4>What the instrument does before it starts counting</h4>
+      <ul class="plain">
+        <li><b>It snapshots the prices before the first game.</b> A run takes tens of minutes, and
+        prices are edited from the neighbouring screen and directly in the file. The snapshot sits
+        in the run record itself — otherwise a day later nobody could tell which prices it
+        measured.</li>
+        <li><b>It starts after the transaction commits.</b> The background thread first reads the
+        run record and cannot find it in an uncommitted transaction: the run silently froze with
+        the words "running" and zero games.</li>
+        <li><b>One at a time</b> — the executor has a single thread. As many games run at once as
+        <code>BalanceLoad</code> allows: full power at night, less in the daytime, and the limit is
+        asked <em>before each game</em> rather than at start — otherwise changing it would mean
+        restarting the server, that is, killing the run in progress.</li>
+      </ul>
+
+      <h4>Where builds come from</h4>
+      <p>
+        <code>RaceBuildGenerator</code> produces a <b>legal</b> build exactly on budget — the same
+        one a player could assemble: no more than one trait from a toggle group, no incompatible
+        pairs, with surcharges for combos. Three decisions inside it matter more than the rest.
+      </p>
+      <div class="grid">
+        <div class="card">
+          <span class="tag">Build</span>
+          <h5>It can sell weaknesses</h5>
+          <p>While the generator took only positive traits, the whole negative half of the table was
+          a blind spot: fourteen traits out of fifty-three never made it into a measurement, and
+          their prices had nothing to be checked against.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Build</span>
+          <h5>The refund is chosen in advance</h5>
+          <p>A greedy pick would always take weaknesses — they only free up points — and the refund
+          would almost always hit the ceiling. Then the measurement would compare not "with the
+          weakness and without" but "with this weakness and with that one".</p>
+        </div>
+        <div class="card">
+          <span class="tag">Build</span>
+          <h5>Free picks are filled in at the end</h5>
+          <p>Wherever a group was left empty. This way a build always has a government: every race
+          in the designer has one, dictatorship simply costs nothing. Without it a zero-point build
+          was a race with no government at all — a state a player is never in.</p>
+        </div>
+      </div>
+      <p class="note">
+        A random build is re-rolled <b>for every game</b>, not once per run: such a sample holds as
+        many observations as there are builds, not empires. And builds are shuffled across seats
+        from game to game — the starting position is the main source of spread, and a build pinned
+        to a seat would take its luck for itself.
+      </p>
+
+      <h4>Seven measures of strength</h4>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Measure</th><th>Weight</th><th>Computed from</th><th>Why that much</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="code">PRODUCTION</td><td class="num">1</td><td>share of the game's production</td><td>the base: with it the gap between budgets shows confidently, whereas by power it drowned in its own error</td></tr>
+            <tr><td class="code">RESEARCH</td><td class="num">1</td><td>share of the game's research</td><td>the other half of the economy: a colonist goes either to the workbench or to the lab</td></tr>
+            <tr><td class="code">MONEY</td><td class="num">0.5</td><td>income per turn</td><td>a secondary flow: gc turn into production at 2–4 per unit. Not the treasury — that is a reserve</td></tr>
+            <tr><td class="code">MILITARY</td><td class="num">0.5</td><td>strength of the ships built</td><td>a fleet is not a flow but an investment; whoever built no fleet gets zero — and rightly so</td></tr>
+            <tr><td class="code">GROUND</td><td class="num">0.5</td><td>colonies taken by landing <b>minus</b> colonies lost</td><td>captures alone did not tell fighters apart at all: 0.73 / 0.56 / 1.04 at prices 2 / 1 / −1</td></tr>
+            <tr><td class="code">TECHNOLOGY</td><td class="num">0.5</td><td>number of technologies researched</td><td>introduced for creativity: its benefit is breadth, and the research measure cannot see that difference</td></tr>
+            <tr><td class="code">ESPIONAGE</td><td class="num">0.5</td><td>missions carried out to the end</td><td>not a flow but a weapon: a handful of events per game, and the share jumps more than the others</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The verdict is passed on the <b>sum</b> (<code>TOTAL</code>), but the console shows the
+        terms as well: "strong" and "strong, but only in research" are different things, and it is
+        the project owner who decides them, not the instrument.
+      </p>
+      <ul class="plain">
+        <li><b>The share is centred to zero within a game.</b> The mean is known in advance — one
+        hundred percent divided by the number of empires — and subtracting it removes the galaxy
+        effect entirely, without a separate column per game.</li>
+        <li><b>Ground combat is handled its own way.</b> It is already the difference between
+        taken and lost, and its mean over a game is identically zero: every capture is someone's
+        loss. Subtracting 100/n from it would punish everyone who did not fight on the ground in
+        that game.</li>
+        <li><b>Empty is not zero.</b> A measure that never fired in a game gives exactly zero, not
+        minus the mean: otherwise the absence of a measurement would become a measurement.</li>
+      </ul>
+
+      <h4>How a measurement becomes a verdict</h4>
+      <figure class="figure">
+        <div class="figure-scroll">
+          <svg viewBox="0 0 980 300" role="img" aria-label="The path from empire measurements to a verdict on a price">
+            <defs>
+              <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="#7fd4ff"></path>
+              </marker>
+            </defs>
+
+            <rect x="16" y="52" width="196" height="120" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="34" y="78" class="svg-label" fill="#73839c">MEASUREMENTS</text>
+            <text x="34" y="102" class="svg-name" fill="#eef4ff">A row per empire</text>
+            <text x="34" y="124" class="svg-small" fill="#a3b4cc">what it took, for how many points,</text>
+            <text x="34" y="142" class="svg-small" fill="#a3b4cc">seven shares and the start position</text>
+            <text x="34" y="162" class="svg-small" fill="#73839c">games × empires rows</text>
+
+            <rect x="248" y="34" width="232" height="156" rx="3" fill="#0d1424" stroke="#3f7fa8"></rect>
+            <text x="266" y="60" class="svg-label" fill="#73839c">MATRIX</text>
+            <text x="266" y="84" class="svg-name" fill="#eef4ff">Observation columns</text>
+            <text x="266" y="106" class="svg-small" fill="#a3b4cc">• a column per race trait</text>
+            <text x="266" y="124" class="svg-small" fill="#a3b4cc">• a column per combo (up to 40)</text>
+            <text x="266" y="142" class="svg-small" fill="#a3b4cc">• 2 start-position covariates</text>
+            <text x="266" y="160" class="svg-small" fill="#a3b4cc">• an intercept</text>
+            <text x="266" y="180" class="svg-small" fill="#73839c">response — the share centred to zero</text>
+
+            <rect x="516" y="52" width="196" height="120" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="534" y="78" class="svg-label" fill="#73839c">SOLVE</text>
+            <text x="534" y="102" class="svg-name" fill="#eef4ff">Ridge least squares</text>
+            <text x="534" y="124" class="svg-small" fill="#a3b4cc">penalty — 2 % of the number</text>
+            <text x="534" y="142" class="svg-small" fill="#a3b4cc">of observations, not a constant</text>
+            <text x="534" y="162" class="svg-small" fill="#73839c">Gauss–Jordan, no libraries</text>
+
+            <rect x="748" y="52" width="216" height="120" rx="3" fill="#0d1424" stroke="#1e2a44"></rect>
+            <text x="766" y="78" class="svg-label" fill="#73839c">READING</text>
+            <text x="766" y="102" class="svg-name" fill="#eef4ff">Weight ± error</text>
+            <text x="766" y="124" class="svg-small" fill="#a3b4cc">takers ≥ 12, share ≤ ½,</text>
+            <text x="766" y="142" class="svg-small" fill="#a3b4cc">gap against 2 errors</text>
+            <text x="766" y="162" class="svg-small" fill="#73839c">too dear · too cheap · fair</text>
+
+            <line x1="212" y1="112" x2="240" y2="112" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a6)"></line>
+            <line x1="480" y1="112" x2="508" y2="112" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a6)"></line>
+            <line x1="712" y1="112" x2="740" y2="112" stroke="#7fd4ff" stroke-width="1.5" marker-end="url(#a6)"></line>
+
+            <rect x="16" y="222" width="948" height="56" rx="3" fill="#0d1424" stroke="#16203a"></rect>
+            <text x="36" y="246" class="svg-small" fill="#a3b4cc">Degeneracy is built into the rules of the game here: every build costs exactly the budget, so the price-weighted sum of the columns is a constant,</text>
+            <text x="36" y="266" class="svg-small" fill="#a3b4cc">linearly dependent on the intercept. A token ridge formally solved the system, while the weight errors flew off into hundreds of points.</text>
+          </svg>
+        </div>
+        <figcaption>
+          A trait's weight is what it adds <em>on top of</em> everything else in the build. A "takers
+          versus non-takers" comparison cannot do that: traits are not taken one at a time, and a
+          strong one drags along everything that usually sits next to it.
+        </figcaption>
+      </figure>
+
+      <h4>Thresholds the verdict is based on</h4>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Constant</th><th>Value</th><th>What it means</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="code">MIN_TAKERS</td><td class="num">12</td><td>with fewer takers the trait is not measured at all, and its verdict is "not measured", not "fair"</td></tr>
+            <tr><td class="code">MAX_SHARE_OF_TAKERS</td><td class="num">0.5</td><td>a trait taken by more than half of the builds is not measured: the "non-takers" bought its group neighbour instead, and the comparison is not with absence but with a substitute. Free dictatorship sits in 97 % of builds</td></tr>
+            <tr><td class="code">ERRORS_TO_JUDGE</td><td class="num">2.0</td><td>the usual distinguishability threshold. Under two errors it is the spread of games, not a property of the trait</td></tr>
+            <tr><td class="code">RIDGE_SHARE</td><td class="num">0.02</td><td>the ridge as a share of the number of observations: as the sample grows the shrinkage stays proportionate, and prices do not jump just because a run got longer</td></tr>
+            <tr><td class="code">MAX_FAIR_PRICE_BUDGETS</td><td class="num">2.0</td><td>a fair price beyond two budgets is not shown: that is no longer a careful estimate but noise. The verdict stays — it does not depend on the division</td></tr>
+            <tr><td class="code">DAMPING</td><td class="num">0.4</td><td>a price moves <b>part of the way</b> towards the measured one, not to the point: value depends on price, and a jump would swing prices instead of settling them</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <b>The point rate is taken from the measurements themselves</b> — a "price vs. strength"
+        line is fitted over the distinguishable traits, and its slope is the rate. A single rate
+        taken from budgets at stage 1 will not do: it turned out indistinguishable from zero,
+        because strong traits in a random build are cancelled out by weak ones.
+      </p>
+      <p class="note">
+        The price scale and the value scale diverged, and that is the main finding of stage 2: a
+        point is worth about 0.05 p.p. of production share, so the whole fifteen-point budget is
+        three quarters of a point, while "good industry" alone at four points gives two and a half
+        points — more than three full budgets. That is why the <b>advice</b> is clamped to what the
+        table can express, while the fair price shown is not: let it be visible how far the trait
+        goes beyond the expressible.
+      </p>
+
+      <h3>Trait combos — the second measurement</h3>
+      <p>
+        For half the table the honest answer is "worth nothing on its own": cyborgs only eat, but
+        together with industry and a hungry world they are the Meklar. Such traits are not bought
+        one at a time, and measuring them one at a time means measuring the wrong thing — not what
+        the player comes to them for. So the measurement gets a column per combo: a one where both
+        traits are taken together, and its weight is exactly what the combo gives on top of its
+        halves.
+      </p>
+      <ul class="plain">
+        <li><b>It is the second measurement, not the first.</b> Combo columns take weight away from
+        the traits themselves, while the player pays for a trait whatever build it ends up in.
+        Price verdicts stay with the first measurement.</li>
+        <li><b>The forty most frequent pairs are taken</b> with a threshold of twelve takers: fifty
+        traits make more than a thousand pairs, and a column for each would make the matrix wider
+        than the sample — the whole measurement would degenerate, not just the combos.</li>
+        <li><b>The threshold grows with the number of tests.</b> Not one named pair is tested but
+        forty at once, and the most extreme of forty independent measurements drifts from zero by
+        about <span class="mono">√(2·ln 40) ≈ 2.7</span> errors on its own. On the first real run
+        the instrument produced exactly one "find" — a combo that had no reason to exist.</li>
+        <li><b>The background is subtracted by the median.</b> The ridge shrinks trait weights
+        towards zero, and the combo column picks up the model's residue: on synthetic data
+        <em>with no combo at all</em> the instrument counted ±0.44 against its own error of 0.2.
+        The median bonus across all pairs is the background, and a find is whatever sticks out of
+        it threefold.</li>
+        <li><b>A triple is not a whim.</b> It has its own column next to the columns of all three
+        pairs inside it, so its weight answers a precise question: does the triple give anything
+        beyond what its pairs and singles already give.</li>
+        <li><b>Planting is a coin toss per trait</b> — a pair has four quarters, a triple eight
+        eighths. "All or none" would be fatal: the combo column would coincide with the columns of
+        its parts, and none of the weights in such a set would be defined.</li>
+      </ul>
+
+      <h3>The residual — how a round's success is measured</h3>
+      <p>
+        The median gap between a price and what the trait earned, in <b>price points</b>. Not a
+        count of "fair" verdicts: that measures not balance but how blurry a run is. Measured on
+        repeats with the same price table — in one trio of runs the fair verdicts came out at 20,
+        40 and 27, a spread larger than the whole path of the log from the first run to the best —
+        and across 37 runs the link "larger median error → more fair verdicts" gives
+        <span class="mono">r = +0.83</span>. The residual on the same repeats held still: 6.4 / 6.4 / 6.8.
+      </p>
+      <p class="note">
+        The error bar does not enter it at all: what is counted is the difference between price and
+        earnings, not "can one be told from the other". A blurry run has nothing to dress itself up
+        with. The median is used rather than the mean: for saturated traits the honest price goes
+        past twenty points against an anti-pick ceiling of ten, and they would pull the mean
+        entirely to themselves.
+      </p>
+
+      <h3>The build oracle — the breaker</h3>
+      <p>
+        Prices that are fair on average across all builds can still leave one or two combinations
+        in the table that beat everything else. Measuring random builds cannot notice this in
+        principle: the strongest one turns up among them once in a thousand. The oracle hunts for
+        it on purpose.
+      </p>
+
+      <h4>Generations with culling</h4>
+      <p>
+        Builds play games, the worse half is culled, and its place is taken by the <b>offspring of
+        the survivors</b> — the same build with one trait replaced. The offspring is legal by
+        construction: the dropped trait is forbidden, the rest are declared mandatory, and the same
+        generator fills up the budget — the instrument has no second set of legality rules.
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Constant</th><th>Value</th><th>What it means</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="code">EXPLORE_GENERATIONS</td><td class="num">4</td><td>how many generations exploration lasts. After that the search ends and the fight for first place begins: the field halves and is no longer replenished</td></tr>
+            <tr><td class="code">FINAL_TABLES</td><td class="num">2</td><td>how many tables the culling stops at — sixteen finalists. It used to be one table: eight builds for fifty traits, and such a field cannot name a "dead trait"</td></tr>
+            <tr><td class="code">MAX_TURNS</td><td class="num">500</td><td>the game length cap, equal to the length of a measurement game. It used to be 300 — and that turned out to be a cap not on time but on <b>sight</b></td></tr>
+            <tr><td class="code">GAME_WORKERS</td><td class="num">10</td><td>games at once. The old four came from "everything is bound by the database" — a measurement showed one and a quarter cores busy out of twelve</td></tr>
+            <tr><td class="code">TOP</td><td class="num">20</td><td>how many builds count as the top when checking both conditions of the plan</td></tr>
+            <tr><td class="code">GAMES_SHARE_FOR_TOP</td><td class="num">0.25</td><td>what share of the leader's games a build must play to be placed in the top at all</td></tr>
+            <tr><td class="code">COMPETING_BUILDS</td><td class="num">3</td><td>the gap is measured between the first and the <b>third</b> build, not against the middle of the top</td></tr>
+            <tr><td class="code">DOMINATION_GAP</td><td class="num">1.0</td><td>a percentage point of production share: roughly a tenth of what the whole budget gives</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <span class="tag">Lesson</span>
+          <h5>The horizon is an instrument too</h5>
+          <p>With a 300-turn cap the culling was decided on games of 50, 100 and 200 turns, and
+          <em>sprinters</em> survived to the final. In round 5 the leader was a build that had sold
+          off its scientists and fighters — and a measurement at five hundred turns that same
+          evening called "poor scientists" overpriced. It was not the instruments that disagreed,
+          but the horizons.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Lesson</span>
+          <h5>Neighbours are shuffled every generation</h5>
+          <p>Strength is measured as a share, that is, always relative to whoever sits in the same
+          game. Pin the neighbours, and the oracle starts looking not for the strongest build but
+          for a lucky neighbourhood.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Lesson</span>
+          <h5>Three builds level with each other is what balance is</h5>
+          <p>The gap used to be measured against the middle of the top, and that was too strict:
+          requiring the best not to pull away from the twentieth means requiring the choice of race
+          to mean nothing. The real question is different: does the strongest have worthy
+          rivals.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Lesson</span>
+          <h5>A barrier that did nothing</h5>
+          <p>After the culling floor the set of finalists never changes, yet the loop still went
+          generation by generation, two tables at a time with a wait between them: in a two-hundred
+          game run that came to about ninety generations out of a hundred. The remainder is now
+          played as a single batch — the same games with the same neighbours, only no longer waited
+          for two at a time.</p>
+        </div>
+      </div>
+
+      <h4>What the oracle answers</h4>
+      <p>
+        Exactly the two conditions of the plan, and the second one with <b>two lists, not one</b>:
+      </p>
+      <ul class="plain">
+        <li><b>Is there a dominant build</b> — the gap between the first and the third against a
+        tolerance of one point. If the top has fewer than three builds, it counts as dominant:
+        there is no choice there by construction.</li>
+        <li><b>Dead traits</b> — those the search tried but which made it into no build of the top.
+        According to the plan this means "the mechanic does not work", not "the trait is too
+        dear".</li>
+        <li><b>Untried</b> — those the search never put into any build of the ladder. There is
+        nothing to say about them, and lumping them in with the dead would pass a gap in the search
+        off as a verdict on the trait.</li>
+      </ul>
+      <p class="note">
+        The oracle uses the very same measure as the price verdicts — and that is not economy but a
+        requirement: one instrument cannot have two different measures, or the assessor and the
+        breaker would argue not about prices but about what counts as strength.
+      </p>
+
+      <h3>How they close into a loop</h3>
+      <p>
+        The measurement sets prices → prices move part of the way → the oracle looks for what can be
+        squeezed out of the new prices → its finds go into the next measurement as a planted combo
+        → and round again. Both records live in one table of runs, differing only in kind: it is the
+        same run of games, just with a different question. Every price change goes into the log
+        together with what it was measured on — without the log, a month later you can neither roll
+        back nor tell where a price came from.
+      </p>
+      <p class="note">
+        A run caught by a server shutdown is closed at the next start: its thread died with the
+        process, and left "running" it would have locked the console forever.
+      </p>
+    </section>
+
+    <!-- ================================================================== -->
+    <section id="tech">
+      <p class="eyebrow">Section 7</p>
+      <h2>Technical details</h2>
+
+      <h3>What the server is made of</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Package</th><th>Classes</th><th>What is there</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="code">service/</td><td class="num">105</td><td>all of the game logic; <code>service/stub/</code> — extension points without an implementation</td></tr>
+            <tr><td class="code">dto/</td><td class="num">101</td><td>REST contracts; empty fields are not serialised at all</td></tr>
+            <tr><td class="code">domain/enums/</td><td class="num">37</td><td>game rules as tables</td></tr>
+            <tr><td class="code">web/</td><td class="num">29</td><td>controllers by subsystem and error handling</td></tr>
+            <tr><td class="code">repository/</td><td class="num">29</td><td>Spring Data; queries inside a turn with an explicit order</td></tr>
+            <tr><td class="code">domain/entity/</td><td class="num">24</td><td>JPA entities of a game</td></tr>
+            <tr><td class="code">galaxy/</td><td class="num">4</td><td>generation of the galaxy, planets and homeworlds</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Key services</h3>
+      <div class="grid">
+        <div class="card">
+          <span class="tag">Game numbers</span>
+          <h5>PopulationCalculator</h5>
+          <p>All of MoO2's numeric rules in one place: output, growth, money, pollution, the buy-out
+          price of construction. Formulas are changed only here.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Colonies</span>
+          <h5>ColonyService</h5>
+          <p>Colonist jobs, output with buildings, the build queue, selling buildings, buy-out,
+          pollution. The queue is stored as a string in the planet itself.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Turn</span>
+          <h5>TurnService + TurnContext</h5>
+          <p>The galaxy is read once per turn and handed to the phases as a context. A phase that
+          changed the state updates the context too.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Ships</span>
+          <h5>ShipDesignService + ShipDesignRules</h5>
+          <p>The six design slots are never empty; an update goes in as a new row and the old one is
+          marked superseded — a built ship keeps what it was built with.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Combat</span>
+          <h5>TacticalBattleService + BattleRules</h5>
+          <p>A 32×20 field, ships one by one, turn order by each ship's initiative. Hits follow the
+          original's curve; armour that is pierced knocks out a random slot.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Fleet</span>
+          <h5>FleetService + FlightRules</h5>
+          <p>Range from the nearest own base of support, travel time by the slowest ship. A fleet in
+          flight is not anywhere.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Neighbours</span>
+          <h5>AiEmpireService</h5>
+          <p>Construction by payback, colonisation, defence by threat, buy-out for gc, espionage and
+          subjugation by telepaths. A mechanic the AI has no path to is dead for balancing.</p>
+        </div>
+        <div class="card">
+          <span class="tag">Balance</span>
+          <h5>BalanceRunService + BalanceOracleService</h5>
+          <p>The assessor and the breaker. Prices are snapshotted before the first game and sit in
+          the run record itself: prices are edited from the neighbouring screen, and without the
+          snapshot there is no telling what was measured.</p>
+        </div>
+      </div>
+
+      <h3>Fifteen end-of-turn phases</h3>
+      <p>A new phase is a new bean; <code>TurnService</code> picks it up by itself. The order is as in MoO2:</p>
+      <div class="phases">
+        <span class="phase"><b>5</b>Population</span>
+        <span class="phase"><b>6</b>Transports</span>
+        <span class="phase"><b>7</b>Production</span>
+        <span class="phase"><b>8</b>AI empires</span>
+        <span class="phase"><b>9</b>Leaders</span>
+        <span class="phase"><b>10</b>Research</span>
+        <span class="phase"><b>11</b>Assimilation</span>
+        <span class="phase"><b>12</b>Espionage</span>
+        <span class="phase"><b>13</b>Fleet arrivals</span>
+        <span class="phase"><b>14</b>Fleet encounters</span>
+        <span class="phase"><b>15</b>Contacts</span>
+        <span class="phase"><b>16</b>Galactic events</span>
+        <span class="phase"><b>17</b>AI diplomacy</span>
+        <span class="phase"><b>18</b>Empire chronicle</span>
+        <span class="phase"><b>19</b>Victory</span>
+      </div>
+
+      <h3>Game entities</h3>
+      <p class="wide mono note">
+        GameEntity · PlayerEntity · StarSystemEntity · PlanetEntity · PlanetBuildingEntity ·
+        FleetEntity · FleetShipEntity · FleetEncounterEntity · ShipDesignEntity ·
+        ShipDesignComponentEntity · SpaceBattleEntity · BattleShipEntity ·
+        PlayerTechnologyEntity · PlayerLeaderEntity · PlayerExploredSystemEntity ·
+        PlayerEventEntity · DiplomacyRelationEntity · CouncilVoteEntity · SpyEntity ·
+        PopulationTransferEntity · EmpireHistoryEntity · EmpireActivityEntity ·
+        TurnReportEntity · GameSaveEntity
+      </p>
+
+      <h3>Reference data — as data, not code</h3>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>File</th><th>Size</th><th>What it describes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="code">Technologies/tech.json</td><td class="num">75 KB</td><td>a tree of eight fields; each technology has a code, and the same code is stored in the database</td></tr>
+            <tr><td class="code">Ships/ship-components.json</td><td class="num">59 KB</td><td>hulls, components, 14 weapon modifications, defence platforms, monster bodies</td></tr>
+            <tr><td class="code">Races/race-traits.json</td><td class="num">58 KB</td><td>53 race traits in 18 groups, thirteen ready-made races, advanced governments</td></tr>
+            <tr><td class="code">Leaders/leaders.json</td><td class="num">44 KB</td><td>leaders with ranks, skills and the technologies they bring</td></tr>
+            <tr><td class="code">Buildings/buildings.json</td><td class="num">20 KB</td><td>buildings as "effect type — amount" pairs</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">
+        All five are bilingual: a field is either a string or a pair <code>{ "en": …, "ru": … }</code>.
+        The language is chosen on access, not when the file is read: a reference file is parsed
+        once and kept in memory, shared by all requests.
+      </p>
+
+      <h3>The conventions everything rests on</h3>
+      <ul class="plain">
+        <li><b>An API refusal carries a key, not text.</b> A single handler translates it; the
+        substitutions are translated too. A word saved in the database in one language cannot be
+        translated afterwards by anything.</li>
+        <li><b>The turn report is stored as keys and translated on reading.</b> One player ends the
+        turn, but everyone opens the report — each in their own language.</li>
+        <li><b>Text colour is a role, size is a step on the scale.</b> Six roles with measured
+        contrast on the main background; no ad-hoc shades anywhere in the interface.</li>
+        <li><b>Randomness is derived from the game seed everywhere</b> — leaders, battles,
+        research, events. Otherwise paired runs would compare not races but luck.</li>
+      </ul>
+
+      <h4>Six colour roles and their contrast</h4>
+      <div class="roles">
+        <span class="role" style="color:#eef4ff">ink-bright <i>18.2 : 1</i></span>
+        <span class="role" style="color:#ccd8ea">ink <i>14.0 : 1</i></span>
+        <span class="role" style="color:#a3b4cc">ink-soft <i>9.5 : 1</i></span>
+        <span class="role" style="color:#8a9bb4">ink-dim <i>7.1 : 1</i></span>
+        <span class="role" style="color:#73839c">ink-faint <i>5.2 : 1</i></span>
+        <span class="role" style="color:#55637a">ink-off <i>3.3 : 1</i></span>
+      </div>
+      <p class="note">
+        This page is set in the same roles — it is the game's own palette, not one picked anew.
+      </p>
+    </section>
+
+    <footer>
+      Lord of Thessar · a remake of Master of Orion II on Spring Boot and React + Phaser.
+      Screenshots taken from a working build on 25.09.2026.
+    </footer>
+  </main>
+</div>
+
+<script>
+/*
+  Счётчик просмотров. Страница статическая (GitHub Pages), поэтому числа хранит внешний
+  сервис Abacus — без регистрации и ключей, по одному счётчику на имя:
+    views     — все открытия страницы;
+    uniq      — первые открытия в браузере (отметка в localStorage, так что очистка
+                данных сайта или другой браузер — это новый уникальный);
+    d-ГГГГММДД — открытия за сутки по Москве.
+  Считаются только открытия с github.io: копия demo.html, открытая с диска, числа
+  читает, но не накручивает. На странице счётчика не видно: его показывает клавиша V
+  на 10 секунд, а итог ещё дописывается комментарием в самый конец документа —
+  смотреть в инструментах разработчика (F12, вкладка Elements, последняя строка перед
+  </body>). В «Просмотре кода» (Ctrl+U) его нет: там исходник файла, а числа приходят
+  уже после загрузки. Сервис ограничивает
+  30 запросов за 10 секунд с адреса — на загрузку уходит 16, и сбой любого из них
+  оставляет прочерк.
+*/
+(function () {
+  var API = 'https://abacus.jasoncameron.dev';
+  var NS = 'stellar-dominion-showcase';
+  var DAYS = 14;
+  var counting = /\.github\.io$/.test(location.hostname);
+
+  function call(op, key) {
+    return fetch(API + '/' + op + '/' + NS + '/' + key)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { return j && typeof j.value === 'number' && j.value >= 0 ? j.value : null; })
+      .catch(function () { return null; });
+  }
+
+  // Сутки берутся по Москве у всех посетителей, иначе один день разъезжался бы по поясам.
+  var dayFmt = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' });
+  function dayKey(offset) {
+    return dayFmt.format(new Date(Date.now() - offset * 864e5)).replace(/-/g, '');
+  }
+
+  var firstVisit = false;
+  if (counting) {
+    try {
+      firstVisit = !localStorage.getItem('sd-showcase-seen');
+      if (firstVisit) localStorage.setItem('sd-showcase-seen', '1');
+    } catch (e) { /* хранилище закрыто — не считаем уникальным, чтобы не накручивать */ }
+  }
+
+  var days = [];
+  for (var i = DAYS - 1; i >= 0; i--) days.push(dayKey(i));
+
+  Promise.all([
+    call(counting ? 'hit' : 'get', 'views'),
+    call(firstVisit ? 'hit' : 'get', 'uniq'),
+    Promise.all(days.map(function (d, i) {
+      return call(counting && i === DAYS - 1 ? 'hit' : 'get', 'd-' + d);
+    }))
+  ]).then(function (res) {
+    var total = res[0], uniq = res[1], perDay = res[2];
+    var fmt = function (n) { return n === null ? '—' : String(n); };
+    // Несуществующий счётчик дня Abacus отдаёт как 404 — это день без просмотров, а не сбой.
+    var byDay = days.map(function (d, i) {
+      return '      ' + d.slice(6, 8) + '.' + d.slice(4, 6) + '.' + d.slice(0, 4) + '  ' + (perDay[i] || 0);
+    });
+    // Двойной дефис внутри комментария HTML запрещён — в числах и датах его нет.
+    document.body.appendChild(document.createComment([
+      ' page views',
+      '    total       ' + fmt(total),
+      '    unique      ' + fmt(uniq),
+      '    today       ' + (perDay[DAYS - 1] || 0),
+      '    by day, Moscow time:'
+    ].concat(byDay).join('\n') + '\n'));
+    stats = { total: total, uniq: uniq, perDay: perDay };
+    if (panel) fill();
+  });
+
+  // Клавиша V (на русской раскладке — М: проверяется физическая клавиша) показывает
+  // числа на 10 секунд; повторное нажатие продлевает, Esc или щелчок прячут сразу.
+  var stats = null, panel = null, timer = 0;
+
+  function fill() {
+    if (!stats) { panel.textContent = 'views: loading…'; return; }
+    var p = stats.perDay, max = Math.max.apply(null, p.map(function (v) { return v || 0; })) || 1;
+    var dm = function (d) { return d.slice(6, 8) + '.' + d.slice(4, 6); };
+    var bars = days.map(function (d, i) {
+      var v = p[i] || 0;
+      return '<span title="' + dm(d) + ': ' + v + '" style="flex:1;min-height:2px;border-radius:1px;height:' +
+        Math.max(4, Math.round(v / max * 100)) + '%;background:var(' +
+        (i === DAYS - 1 ? '--accent' : v ? '--accent-dim' : '--edge') + ')"></span>';
+    }).join('');
+    var n = function (v) { return '<b style="color:var(--ink-bright);font-weight:500">' + (v === null ? '—' : v.toLocaleString('en-US')) + '</b>'; };
+    panel.innerHTML =
+      '<div style="display:flex;gap:18px">' +
+        '<span>total ' + n(stats.total) + '</span><span>unique ' + n(stats.uniq) + '</span>' +
+        '<span>today ' + n(p[DAYS - 1] || 0) + '</span></div>' +
+      '<div style="display:flex;align-items:flex-end;gap:3px;height:44px;margin-top:10px">' + bars + '</div>' +
+      '<div style="display:flex;justify-content:space-between;margin-top:4px;color:var(--ink-faint)">' +
+        '<span>' + dm(days[0]) + '</span><span>by day, Moscow time</span><span>today</span></div>';
+  }
+
+  function hide() { clearTimeout(timer); if (panel) panel.style.display = 'none'; }
+
+  function show() {
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.setAttribute('role', 'status');
+      panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:1000;width:300px;' +
+        'max-width:calc(100vw - 32px);box-sizing:border-box;padding:12px 14px;' +
+        'background:var(--panel);border:1px solid var(--edge);border-radius:8px;' +
+        'box-shadow:0 8px 30px rgba(0,0,0,.5);color:var(--ink-soft);font:12px/1.5 var(--mono);cursor:pointer';
+      panel.addEventListener('click', hide);
+      document.body.appendChild(panel);
+    }
+    fill();
+    panel.style.display = 'block';
+    clearTimeout(timer);
+    timer = setTimeout(hide, 10000);
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.code === 'Escape') return hide();
+    if (e.code !== 'KeyV' || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+    var t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    show();
+  });
+})();
+</script>

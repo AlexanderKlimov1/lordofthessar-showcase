@@ -1,4 +1,6 @@
+<html lang="ru">
 <title>Lord of Thessar</title>
+<link rel="alternate" hreflang="en" href="demo.en.html">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
@@ -87,9 +89,35 @@
   /* --- шапка ------------------------------------------------------------ */
 
   header.hero {
+    position: relative;
     padding-block: 40px 28px;
     border-bottom: 1px solid var(--edge-soft);
   }
+
+  /* Переключатель языка: страница на каждом языке своя (demo.html и demo.en.html), а не
+     перевод скриптом на лету — так её читают поисковики и читалки без JavaScript. Нынешний
+     язык не ссылка и выделен рамкой, а не только цветом. */
+  .lang {
+    position: absolute;
+    top: 10px;
+    right: 0;
+    display: flex;
+    gap: 4px;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+  }
+
+  .lang a, .lang span {
+    padding: 3px 8px;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    text-decoration: none;
+  }
+
+  .lang a { color: var(--ink-soft); }
+  .lang a:hover, .lang a:focus-visible { color: var(--ink-bright); border-color: var(--accent-dim); }
+  .lang span { color: var(--ink-bright); border-color: var(--edge); background: var(--panel); }
 
   .eyebrow {
     font-family: var(--mono);
@@ -333,6 +361,10 @@
 
 <div class="shell">
   <header class="hero">
+    <nav class="lang" aria-label="Язык страницы">
+      <span aria-current="page" title="Русский">RU</span>
+      <a href="demo.en.html" hreflang="en" lang="en" title="English">EN</a>
+    </nav>
     <p class="eyebrow">Пошаговая стратегия · перенос Master of Orion II</p>
     <h1>Lord of Thessar</h1>
     <p class="lede">
