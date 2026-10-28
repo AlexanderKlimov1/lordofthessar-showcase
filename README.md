@@ -3,7 +3,7 @@
 Пошаговая стратегия в духе Master of Orion II: сервер на Spring Boot, клиент на
 React + Phaser, а рядом — мастерская приборов, которыми игра меряется и настраивается.
 
-Наглядный разбор проекта: **https://alexanderklimov1.github.io/stellar-dominion-showcase/**
+Наглядный разбор проекта: **https://alexanderklimov1.github.io/lordofthessar-showcase/**
 (он же лежит здесь файлами `demo.en.html` — на английском, его сайт открывает по умолчанию, —
 и `demo.html` — на русском; оба самодостаточны, сервер не нужен).
 
